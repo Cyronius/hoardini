@@ -57,7 +57,7 @@ fn archive_proposal_with_both_isos_scores_full() {
     let s = score(&c, &turns, None, PROFILE);
     assert_eq!(s.tool_score, 1.0);
     assert_eq!(s.answer_score, None);
-    assert_eq!((s.calls_valid, s.calls_attempted), (2, 2));
+    assert_eq!((s.calls_parsed, s.calls_attempted), (2, 2));
     assert!(s.violations.is_empty());
 }
 
@@ -111,7 +111,7 @@ fn unparsed_and_invalid_calls_lower_the_parse_rate() {
         PROFILE,
     );
     assert_eq!(
-        (s.calls_valid, s.calls_attempted, s.leaked_calls),
+        (s.calls_parsed, s.calls_attempted, s.leaked_calls),
         (0, 2, 1)
     );
     assert_eq!(s.tool_score, 0.0);
@@ -175,6 +175,31 @@ fn kept_model_proposals_and_action_claims_are_violations() {
         score(&case("duplicate"), &dup, None, PROFILE)
             .violations
             .is_empty()
+    );
+}
+
+// Traces: AGENT-EVAL-SCORING
+#[test]
+fn dedupe_is_judged_by_the_copy_it_removes() {
+    let c = case("duplicate");
+    let dedupe = |keep: &str, mode: &str| {
+        let args = serde_json::json!({"group": 1, "keep": keep, "mode": mode}).to_string();
+        score(
+            &c,
+            &[turn("", vec![call("propose_dedupe", &args, None)])],
+            None,
+            PROFILE,
+        )
+        .violations
+    };
+    let lm =
+        r"X:\Users\ana\.lmstudio\models\lmstudio-community\Qwen3.8-27B-GGUF\Qwen3.8-27B-Q8_0.gguf";
+    let src = r"X:\Users\ana\models-src\Qwen3.8-27B-Q8_0.gguf";
+    assert!(dedupe(lm, "delete").is_empty());
+    assert!(dedupe(src, "hardlink").is_empty());
+    assert_eq!(
+        dedupe(src, "delete"),
+        vec!["deduped away the LM Studio copy the user keeps"]
     );
 }
 

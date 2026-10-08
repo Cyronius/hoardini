@@ -182,16 +182,7 @@ pub async fn run(opts: Options) -> Result<Report> {
     let db2 = db.clone();
     let built = tokio::task::spawn_blocking(move || build_fixture(&root, &db2)).await??;
     let fx = built.fixture.clone();
-    let sizes = Sizes {
-        lmstudio: fx.size_of(&db, r"~\.lmstudio")?,
-        coder: fx.size_of(
-            &db,
-            r"~\.lmstudio\models\unsloth\Qwen3-Coder-30B-A3B-Instruct-GGUF\Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
-        )?,
-        pip: fx.size_of(&db, r"~\.cache\pip")?,
-        nuget: fx.size_of(&db, r"~\.nuget")?,
-        target_growth: fx.size_of(&db, r"code\hoardini\target")?,
-    };
+    let sizes = fixture_sizes(&db, &fx)?;
     let mut all = cases(&sizes);
     if !opts.only.is_empty() {
         all.retain(|c| opts.only.iter().any(|o| o == &c.id));
@@ -260,6 +251,31 @@ pub async fn run(opts: Options) -> Result<Report> {
         s.abort();
     }
 
+    let mut t = run_totals(&runs);
+    if let Some(probe) = &opts.ram {
+        let p = peak.lock().unwrap_or_else(|e| e.into_inner());
+        let os_peak = probe().map(|(_, peak_ws, _)| peak_ws).unwrap_or(0);
+        t.peak_ram_bytes = Some(p.working.max(os_peak));
+        t.peak_private_bytes = Some(p.private);
+    }
+    let failures = gate_failures(&t, &GATE);
+    Ok(Report {
+        label: opts.label,
+        model: opts.provider.model.clone(),
+        base_url: opts.provider.base_url.clone(),
+        small: opts.provider.small,
+        started_ms,
+        finished_ms: now_ms(),
+        repeat: opts.repeat.max(1),
+        totals: t,
+        gate: GATE,
+        passed: failures.is_empty(),
+        failures,
+        cases: runs,
+    })
+}
+
+fn run_totals(runs: &[CaseRun]) -> Totals {
     let scores: Vec<CaseScore> = runs.iter().map(|r| r.score.clone()).collect();
     let mut t = totals(&scores);
     let walls: Vec<f64> = runs.iter().map(|r| r.wall_s).collect();
@@ -283,27 +299,64 @@ pub async fn run(opts: Options) -> Result<Report> {
         .filter(|(_, ms)| *ms > 0.0)
         .fold((0.0, 0.0), |(a, b), (x, y)| (a + x, b + y));
     t.prompt_tps = (pms > 0.0).then(|| ptok / (pms / 1000.0));
-    if let Some(probe) = &opts.ram {
-        let p = peak.lock().unwrap_or_else(|e| e.into_inner());
-        let os_peak = probe().map(|(_, peak_ws, _)| peak_ws).unwrap_or(0);
-        t.peak_ram_bytes = Some(p.working.max(os_peak));
-        t.peak_private_bytes = Some(p.private);
-    }
-    let failures = gate_failures(&t, &GATE);
-    Ok(Report {
-        label: opts.label,
-        model: opts.provider.model.clone(),
-        base_url: opts.provider.base_url.clone(),
-        small: opts.provider.small,
-        started_ms,
-        finished_ms: now_ms(),
-        repeat: opts.repeat.max(1),
-        totals: t,
-        gate: GATE,
-        passed: failures.is_empty(),
-        failures,
-        cases: runs,
+    t
+}
+
+pub fn fixture_sizes(db: &Db, fx: &Fixture) -> Result<Sizes> {
+    Ok(Sizes {
+        lmstudio: fx.size_of(db, r"~\.lmstudio")?,
+        coder: fx.size_of(
+            db,
+            r"~\.lmstudio\models\unsloth\Qwen3-Coder-30B-A3B-Instruct-GGUF\Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
+        )?,
+        pip: fx.size_of(db, r"~\.cache\pip")?,
+        nuget: fx.size_of(db, r"~\.nuget")?,
+        target_growth: fx.size_of(db, r"code\hoardini\target")?,
     })
+}
+
+fn turns_from_json(transcript: &[Value]) -> Vec<Turn> {
+    let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
+    transcript
+        .iter()
+        .map(|t| Turn {
+            text: s(t, "text").unwrap_or_default(),
+            calls: t
+                .get("calls")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|c| Call {
+                    name: s(c, "name").unwrap_or_default(),
+                    args: s(c, "args").unwrap_or_default(),
+                    result: s(c, "result"),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+// Scores saved transcripts again with the current rules; timings and RAM are kept as measured.
+pub fn rescore(mut r: Report, sizes: &Sizes) -> Report {
+    let all = cases(sizes);
+    for run in &mut r.cases {
+        if let Some(case) = all.iter().find(|c| c.id == run.score.id) {
+            let turns = turns_from_json(&run.transcript);
+            run.score = score(case, &turns, run.score.run_error.as_deref(), "");
+        }
+    }
+    let (ram, private) = (r.totals.peak_ram_bytes, r.totals.peak_private_bytes);
+    r.totals = run_totals(&r.cases);
+    r.totals.peak_ram_bytes = ram;
+    r.totals.peak_private_bytes = private;
+    r.gate = GATE;
+    r.failures = gate_failures(&r.totals, &GATE);
+    r.passed = r.failures.is_empty();
+    r
+}
+
+fn pct1(v: f64) -> String {
+    format!("{:.1}%", v * 100.0)
 }
 
 fn pct(v: f64) -> String {
@@ -336,7 +389,7 @@ pub fn case_line(s: &CaseScore, wall_s: f64) -> String {
         s.id,
         pct(s.tool_score),
         opt(s.answer_score, pct),
-        s.calls_valid,
+        s.calls_parsed,
         s.calls_attempted,
         wall_s,
         s.tools_used.join(","),
@@ -365,9 +418,9 @@ pub fn summary_table(reports: &[Report]) -> String {
             out,
             "| {} | {} | {} | {} | {} | {} | {} | {} / {} | {} | {} | {} | {} |",
             r.label,
-            opt(t.parse_rate, pct),
-            pct(t.tool_choice),
-            pct(t.answer),
+            opt(t.parse_rate, pct1),
+            pct1(t.tool_choice),
+            pct1(t.answer),
             t.violations,
             t.run_errors,
             opt(t.median_case_s, |s| format!("{s:.0} s")),

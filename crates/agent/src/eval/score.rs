@@ -59,7 +59,8 @@ pub struct CaseScore {
     pub tool_score: f64,
     pub answer_score: Option<f64>,
     pub calls_attempted: u32,
-    pub calls_valid: u32,
+    #[serde(default, alias = "calls_valid")]
+    pub calls_parsed: u32,
     pub leaked_calls: u32,
     pub tools_used: Vec<String>,
     pub missing: Vec<String>,
@@ -170,7 +171,42 @@ fn arg_values(args: &str, profile: &str) -> String {
     }
 }
 
+// Markdown emphasis and typographic dashes/spaces would otherwise hide "should **not**" or "Llama‑3.3".
+pub fn plain(text: &str) -> String {
+    text.chars()
+        .filter(|c| *c != '*')
+        .map(|c| match c {
+            '\u{2010}'..='\u{2015}' | '\u{2212}' => '-',
+            '\u{00a0}' | '\u{2007}' | '\u{202f}' => ' ',
+            c => c,
+        })
+        .collect()
+}
+
+// What a proposal would take away: dedupe's `keep` names the copy that stays, so it is left out.
+fn removed_text(c: &Call, profile: &str) -> String {
+    if c.name != "propose_dedupe" {
+        return arg_text(&c.args, profile);
+    }
+    match serde_json::from_str::<Value>(&c.args) {
+        Ok(Value::Object(mut o)) => {
+            o.remove("keep");
+            arg_text(&Value::Object(o).to_string(), profile)
+        }
+        _ => arg_text(&c.args, profile),
+    }
+}
+
 const BAD_ARGS: &str = "Error: invalid arguments";
+
+// Format failures only; a relative path or a missing field parsed fine and costs tool choice instead.
+fn unparsed(result: &str) -> bool {
+    result.strip_prefix(BAD_ARGS).is_some_and(|rest| {
+        rest.contains("not valid JSON")
+            || rest.contains("must be a JSON object")
+            || rest.contains("there is no tool named")
+    })
+}
 
 static LEAK_MARKERS: LazyLock<Regex> = LazyLock::new(|| {
     re(
@@ -208,16 +244,16 @@ pub fn score(case: &CaseSpec, turns: &[Turn], run_error: Option<&str>, profile: 
     let calls: Vec<&Call> = turns.iter().flat_map(|t| &t.calls).collect();
     let text: String = turns
         .iter()
-        .map(|t| redact_all(&t.text, profile))
+        .map(|t| plain(&redact_all(&t.text, profile)))
         .collect::<Vec<_>>()
         .join("\n");
 
     s.leaked_calls = turns.iter().map(|t| leaked_calls(&t.text)).sum::<u32>()
         + u32::from(run_error.is_some_and(|e| SERVER_PARSE.is_match(e)));
     s.calls_attempted = calls.len() as u32 + s.leaked_calls;
-    s.calls_valid = calls
+    s.calls_parsed = calls
         .iter()
-        .filter(|c| !c.result.as_deref().is_some_and(|r| r.starts_with(BAD_ARGS)))
+        .filter(|c| !c.result.as_deref().is_some_and(unparsed))
         .count() as u32;
     for c in &calls {
         if !s.tools_used.contains(&c.name) {
@@ -275,12 +311,12 @@ pub fn score(case: &CaseSpec, turns: &[Turn], run_error: Option<&str>, profile: 
 
     for f in &case.forbid_calls {
         let tripped = calls.iter().any(|c| {
-            let tool_match = if f.tools.is_empty() {
-                c.name.starts_with("propose_")
+            if f.tools.is_empty() {
+                c.name.starts_with("propose_") && f.args_any.is_match(&removed_text(c, profile))
             } else {
                 f.tools.iter().any(|t| t == &c.name)
-            };
-            tool_match && f.args_any.is_match(&arg_text(&c.args, profile))
+                    && f.args_any.is_match(&arg_text(&c.args, profile))
+            }
         });
         if tripped {
             s.violations.push(f.label.clone());
@@ -337,7 +373,8 @@ pub const GATE: Gate = Gate {
 pub struct Totals {
     pub cases: u32,
     pub parse_rate: Option<f64>,
-    pub calls_valid: u32,
+    #[serde(default, alias = "calls_valid")]
+    pub calls_parsed: u32,
     pub calls_attempted: u32,
     pub tool_choice: f64,
     pub answer: f64,
@@ -371,12 +408,12 @@ pub fn percentile(v: &[f64], p: f64) -> Option<f64> {
 pub fn totals(scores: &[CaseScore]) -> Totals {
     let n = scores.len().max(1) as f64;
     let attempted: u32 = scores.iter().map(|s| s.calls_attempted).sum();
-    let valid: u32 = scores.iter().map(|s| s.calls_valid).sum();
+    let valid: u32 = scores.iter().map(|s| s.calls_parsed).sum();
     let answers: Vec<f64> = scores.iter().filter_map(|s| s.answer_score).collect();
     Totals {
         cases: scores.len() as u32,
         parse_rate: (attempted > 0).then(|| f64::from(valid) / f64::from(attempted)),
-        calls_valid: valid,
+        calls_parsed: valid,
         calls_attempted: attempted,
         tool_choice: scores.iter().map(|s| s.tool_score).sum::<f64>() / n,
         answer: if answers.is_empty() {
@@ -395,7 +432,7 @@ pub fn gate_failures(t: &Totals, g: &Gate) -> Vec<String> {
     let mut out = Vec::new();
     match t.parse_rate {
         Some(p) if p < g.parse_rate => out.push(format!(
-            "tool-call parse rate {:.0}% < {:.0}%",
+            "tool-call parse rate {:.1}% < {:.0}%",
             p * 100.0,
             g.parse_rate * 100.0
         )),
@@ -404,14 +441,14 @@ pub fn gate_failures(t: &Totals, g: &Gate) -> Vec<String> {
     }
     if t.tool_choice < g.tool_choice {
         out.push(format!(
-            "tool choice {:.0}% < {:.0}%",
+            "tool choice {:.1}% < {:.0}%",
             t.tool_choice * 100.0,
             g.tool_choice * 100.0
         ));
     }
     if t.answer < g.answer {
         out.push(format!(
-            "answer correctness {:.0}% < {:.0}%",
+            "answer correctness {:.1}% < {:.0}%",
             t.answer * 100.0,
             g.answer * 100.0
         ));
@@ -500,7 +537,7 @@ mod tests {
         let s = score(&case(), &turns, None, PROFILE);
         assert_eq!(s.tool_score, 1.0);
         assert_eq!(s.answer_score, Some(1.0));
-        assert_eq!((s.calls_valid, s.calls_attempted), (2, 2));
+        assert_eq!((s.calls_parsed, s.calls_attempted), (2, 2));
         assert!(s.violations.is_empty() && s.missing.is_empty());
         assert_eq!(s.tools_used, vec!["top_files", "recall"]);
     }
@@ -554,11 +591,28 @@ mod tests {
         ];
         let s = score(&case(), &turns, None, PROFILE);
         assert_eq!(s.leaked_calls, 1);
-        assert_eq!((s.calls_valid, s.calls_attempted), (0, 2));
+        assert_eq!((s.calls_parsed, s.calls_attempted), (0, 2));
         assert_eq!(s.tool_score, 0.0);
         let rejected = "The model provider reported an error: The model produced output that does not match the expected peg-native format (server_error)";
         let s = score(&case(), &[], Some(rejected), PROFILE);
-        assert_eq!((s.calls_valid, s.calls_attempted), (0, 1));
+        assert_eq!((s.calls_parsed, s.calls_attempted), (0, 1));
+    }
+
+    #[test]
+    fn rejected_arguments_parse_but_do_not_count_as_the_right_call() {
+        let turns = vec![Turn {
+            text: String::new(),
+            calls: vec![call(
+                "top_files",
+                r#"{"under":".\\.lmstudio"}"#,
+                Some(
+                    r#"Error: invalid arguments: ".\\.lmstudio" is not an absolute path; use C:\... or ~\.... Fix the arguments and call the tool again."#,
+                ),
+            )],
+        }];
+        let s = score(&case(), &turns, None, PROFILE);
+        assert_eq!((s.calls_parsed, s.calls_attempted), (1, 1));
+        assert_eq!(s.tool_score, 0.0);
     }
 
     #[test]
@@ -658,14 +712,14 @@ mod tests {
             tool_score: 1.0,
             answer_score: Some(1.0),
             calls_attempted: 4,
-            calls_valid: 4,
+            calls_parsed: 4,
             ..CaseScore::default()
         };
         let b = CaseScore {
             tool_score: 0.5,
             answer_score: None,
             calls_attempted: 4,
-            calls_valid: 3,
+            calls_parsed: 3,
             violations: vec!["x".into()],
             run_error: Some("boom".into()),
             ..CaseScore::default()
@@ -684,6 +738,20 @@ mod tests {
         assert!(gate_failures(&t, &GATE).is_empty());
         t.peak_ram_bytes = Some(7 << 30);
         assert_eq!(gate_failures(&t, &GATE), vec!["peak RAM 7.0 GB > 6 GB"]);
+    }
+
+    #[test]
+    fn facts_see_through_markdown_and_typographic_dashes() {
+        let mut c = case();
+        c.facts = vec![
+            rule("says no", r"should not"),
+            rule("names llama", r"llama-3\.3"),
+        ];
+        let t = vec![Turn {
+            text: "You should **not** delete it; Llama\u{2011}3.3 is 42.5\u{202f}GB.".into(),
+            calls: vec![],
+        }];
+        assert_eq!(score(&c, &t, None, PROFILE).answer_score, Some(1.0));
     }
 
     #[test]

@@ -47,6 +47,12 @@ pub struct EvalArgs {
     turn_timeout: u64,
     #[arg(long, num_args = 1.., help = "Print one table for these saved results and exit")]
     compare: Vec<PathBuf>,
+    #[arg(
+        long,
+        num_args = 1..,
+        help = "Score these saved results again with the current rules (rewrites the files) and exit"
+    )]
+    rescore: Vec<PathBuf>,
     #[arg(long, help = "Keep the fixture folder and database afterwards")]
     keep: bool,
     #[arg(long, hide = true)]
@@ -57,17 +63,46 @@ pub struct EvalArgs {
 
 const PROFILE_REL: &str = r"Users\ana";
 
+fn load(p: &Path) -> Result<Report> {
+    let text = std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parsing {}", p.display()))
+}
+
+// Size facts come from the fixture index, so a throwaway copy is built to read them.
+fn scratch_sizes() -> Result<eval::Sizes> {
+    let dir = std::env::temp_dir().join(format!(
+        "hoardini-rescore-{}-{}",
+        std::process::id(),
+        now_ms()
+    ));
+    let root = dir.join("root");
+    std::fs::create_dir_all(&root)?;
+    let db = Db::open(dir.join("eval.db"))?;
+    let built = eval::build_fixture(&root.to_string_lossy(), &db);
+    let sizes = built.and_then(|b| eval::fixture_sizes(&db, &b.fixture));
+    drop(db);
+    let _ = std::fs::remove_dir_all(&dir);
+    sizes
+}
+
 pub fn run(db: Option<PathBuf>, a: EvalArgs) -> Result<ExitCode> {
-    if !a.compare.is_empty() {
+    if !a.rescore.is_empty() {
+        let sizes = scratch_sizes()?;
         let mut reports = Vec::new();
-        for p in &a.compare {
-            let text =
-                std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
-            reports.push(
-                serde_json::from_str::<Report>(&text)
-                    .with_context(|| format!("parsing {}", p.display()))?,
-            );
+        for p in &a.rescore {
+            let r = eval::rescore(load(p)?, &sizes);
+            std::fs::write(p, serde_json::to_vec_pretty(&r)?)?;
+            reports.push(r);
         }
+        print!("{}", eval::summary_table(&reports));
+        return Ok(ExitCode::SUCCESS);
+    }
+    if !a.compare.is_empty() {
+        let reports = a
+            .compare
+            .iter()
+            .map(|p| load(p))
+            .collect::<Result<Vec<_>>>()?;
         print!("{}", eval::summary_table(&reports));
         return Ok(ExitCode::SUCCESS);
     }
@@ -148,7 +183,13 @@ fn parent(a: EvalArgs) -> Result<ExitCode> {
         std::env::temp_dir().join(format!("hoardini-eval-{}-{}", std::process::id(), now_ms()));
     let fixture = work.join("root");
     std::fs::create_dir_all(&fixture)?;
-    let drive = map_drive(&fixture)?;
+    let drive = match map_drive(&fixture) {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&work);
+            return Err(e);
+        }
+    };
     let profile = format!(r"{drive}\{PROFILE_REL}");
     let exe = std::env::current_exe()?;
     let mut args: Vec<String> = std::env::args().skip(1).collect();
