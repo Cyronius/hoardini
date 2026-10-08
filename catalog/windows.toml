@@ -1,0 +1,325 @@
+[[entry]]
+id = "wu-download"
+name = "Windows Update download cache"
+app = "Windows Update"
+category = "windows-leftover"
+patterns = ['%SystemRoot%\SoftwareDistribution\Download']
+regenerable = true
+verdict_hint = "safe"
+notes = "Downloaded update payloads. Safe to clear once updates are installed (stop the wuauserv service first); Windows re-downloads anything still pending."
+
+[[entry]]
+id = "wu-datastore"
+name = "Windows Update data store"
+app = "Windows Update"
+category = "system"
+patterns = ['%SystemRoot%\SoftwareDistribution', '%ProgramData%\USOShared', '%ProgramData%\USOPrivate']
+regenerable = true
+verdict_hint = "review"
+cap = "review"
+notes = "Update history database and state. Resetting it is a troubleshooting step but loses update history; leave it unless updates are broken."
+
+[[entry]]
+id = "delivery-optimization"
+name = "Delivery Optimization cache"
+app = "Windows Update"
+category = "windows-leftover"
+patterns = ['%SystemRoot%\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache', '%SystemRoot%\SoftwareDistribution\DeliveryOptimization']
+regenerable = true
+verdict_hint = "safe"
+notes = "Update files cached to share with other PCs. Windows re-downloads on demand; requires admin to delete."
+
+[[entry]]
+id = "windows-old"
+name = "Windows.old"
+app = "Windows Setup"
+category = "windows-leftover"
+patterns = ['%SystemDrive%\Windows.old']
+regenerable = false
+verdict_hint = "review"
+cap = "review"
+notes = "Previous Windows installation kept after an upgrade so you can roll back. Windows deletes it automatically after about 10 days. Removing it makes rollback impossible; use Disk Cleanup (admin) because normal delete fails on protected files."
+
+[[entry]]
+id = "windows-setup-bt"
+name = "Windows upgrade staging ($WINDOWS.~BT)"
+app = "Windows Setup"
+category = "windows-leftover"
+patterns = ['%SystemDrive%\$WINDOWS.~BT', '%SystemDrive%\$Windows.~WS']
+regenerable = true
+verdict_hint = "review"
+cap = "review"
+notes = "Staging files of a feature update or in-place upgrade. Safe to remove when no upgrade is pending or being rolled back; if still present long after an upgrade it is leftover. Needs admin/Disk Cleanup."
+
+[[entry]]
+id = "windows-esd"
+name = "Windows ESD folder"
+app = "Windows Setup"
+category = "windows-leftover"
+patterns = ['%SystemDrive%\ESD']
+regenerable = true
+verdict_hint = "review"
+notes = "Downloaded Windows install image (install.esd) from the Media Creation Tool or an upgrade. Re-downloadable; not needed by the running system."
+
+[[entry]]
+id = "win-re-agent"
+name = "WinRE agent staging"
+app = "Windows"
+category = "windows-leftover"
+patterns = ['%SystemDrive%\$WinREAgent']
+regenerable = true
+verdict_hint = "review"
+notes = "Recovery-environment update staging. Usually small; Windows removes it after the update finishes."
+
+[[entry]]
+id = "windows-installer"
+name = "Windows Installer cache"
+app = "Windows Installer"
+category = "system"
+patterns = ['%SystemRoot%\Installer']
+regenerable = false
+verdict_hint = "keep"
+cap = "keep"
+notes = "Cached .msi/.msp files for every MSI-installed program. Not regenerable: removing them breaks uninstall, repair and patching of those programs."
+
+[[entry]]
+id = "winsxs"
+name = "WinSxS component store"
+app = "Windows"
+category = "system"
+patterns = ['%SystemRoot%\WinSxS']
+regenerable = false
+verdict_hint = "keep"
+cap = "keep"
+notes = "Component store; mostly hardlinks, so its apparent size overstates real use. Never delete by hand; shrink with `DISM /Online /Cleanup-Image /StartComponentCleanup`."
+
+[[entry]]
+id = "windows-driverstore"
+name = "Driver store"
+app = "Windows"
+category = "system"
+patterns = ['%SystemRoot%\System32\DriverStore']
+regenerable = false
+verdict_hint = "keep"
+cap = "keep"
+notes = "Staged driver packages. Remove old ones with `pnputil /delete-driver`, never by deleting files."
+
+[[entry]]
+id = "windows-dir"
+name = "Windows directory"
+app = "Windows"
+category = "system"
+patterns = ['%SystemRoot%']
+regenerable = false
+verdict_hint = "keep"
+cap = "keep"
+notes = "Operating system files. Nothing here is a cleanup target except the specific caches listed in more specific catalog entries."
+
+[[entry]]
+id = "windows-apps"
+name = "WindowsApps"
+app = "Microsoft Store"
+category = "system"
+patterns = ['%ProgramFiles%\WindowsApps']
+regenerable = false
+verdict_hint = "keep"
+cap = "keep"
+notes = "Installed Store/MSIX app packages, ACL-protected. Uninstall apps from Settings instead."
+
+[[entry]]
+id = "system-volume-information"
+name = "System Volume Information"
+app = "Windows"
+category = "system"
+patterns = ['?:\System Volume Information']
+regenerable = false
+verdict_hint = "keep"
+cap = "keep"
+notes = "Restore points / shadow copies and indexing data. Shrink via System Protection settings (`vssadmin`), not file deletion."
+
+[[entry]]
+id = "recovery-dir"
+name = "Recovery folder"
+app = "Windows"
+category = "system"
+patterns = ['%SystemDrive%\Recovery']
+regenerable = false
+verdict_hint = "keep"
+cap = "keep"
+notes = "Windows recovery image and OEM reset data. Removing it can disable Reset this PC."
+
+[[entry]]
+id = "hiberfil"
+name = "Hibernation file"
+app = "Windows"
+category = "system"
+patterns = ['%SystemDrive%\hiberfil.sys']
+regenerable = true
+verdict_hint = "keep"
+cap = "keep"
+notes = "Hibernate and Fast Startup image, typically 40-75% of RAM. Cannot be deleted as a file; `powercfg /h off` removes it (and disables hibernate and Fast Startup)."
+
+[[entry]]
+id = "pagefile"
+name = "Page file"
+app = "Windows"
+category = "system"
+patterns = ['%SystemDrive%\pagefile.sys', '%SystemDrive%\swapfile.sys']
+regenerable = true
+verdict_hint = "keep"
+cap = "keep"
+notes = "Virtual-memory backing files, in use by the OS. Resize or move them in System Properties > Performance > Advanced > Virtual memory."
+
+[[entry]]
+id = "recycle-bin"
+name = "Recycle Bin"
+app = "Windows"
+category = "system"
+patterns = ['?:\$Recycle.Bin']
+regenerable = false
+verdict_hint = "review"
+notes = "Files the user deleted earlier but not yet emptied; they still occupy space. Emptying is permanent."
+
+[[entry]]
+id = "program-files"
+name = "Program Files"
+app = "Installed programs"
+category = "system"
+patterns = ['%ProgramFiles%', '%ProgramFiles(x86)%']
+regenerable = false
+verdict_hint = "review"
+notes = "Installed applications. Uninstall through Settings > Apps so registry entries and shared components are removed; deleting folders leaves broken entries."
+
+[[entry]]
+id = "program-data"
+name = "ProgramData"
+app = "Installed programs"
+category = "app-data"
+patterns = ['%ProgramData%']
+regenerable = false
+verdict_hint = "review"
+notes = "Machine-wide application data and caches. Contents depend on the owning app; check which program owns the folder first."
+
+[[entry]]
+id = "windows-search-index"
+name = "Windows Search index"
+app = "Windows Search"
+category = "cache"
+patterns = ['%ProgramData%\Microsoft\Search\Data']
+regenerable = true
+verdict_hint = "review"
+notes = "Windows.edb search index; can be rebuilt from Indexing Options, which takes hours of background I/O. Do not delete while the WSearch service runs."
+
+[[entry]]
+id = "appdata-local-microsoft"
+name = "Microsoft per-user app data"
+app = "Microsoft"
+category = "app-data"
+patterns = ['%LOCALAPPDATA%\Microsoft']
+regenerable = false
+verdict_hint = "review"
+notes = "Per-user data for Windows and Microsoft apps (Office, Edge, OneDrive, Teams, Windows). Only specific known caches inside are safe."
+
+[[entry]]
+id = "appdata-local"
+name = "Local AppData"
+app = "Installed programs"
+category = "app-data"
+patterns = ['%LOCALAPPDATA%']
+regenerable = false
+verdict_hint = "review"
+notes = "Per-user, non-roaming app data. Folder name usually identifies the app; contents are mixed caches and user data, so check the owner before deleting."
+
+[[entry]]
+id = "appdata-roaming"
+name = "Roaming AppData"
+app = "Installed programs"
+category = "app-data"
+patterns = ['%APPDATA%']
+regenerable = false
+verdict_hint = "review"
+notes = "Per-user app settings and data (roams with the profile). Typically holds configuration and user content rather than caches."
+
+[[entry]]
+id = "downloads-installers"
+name = "Downloaded installers and ISOs"
+app = "user"
+category = "downloads"
+patterns = ['~\Downloads\*.exe', '~\Downloads\*.msi', '~\Downloads\*.msix', '~\Downloads\*.iso', '~\Downloads\*.img']
+regenerable = false
+verdict_hint = "redownload"
+notes = "Installers and disk images in Downloads. Usually re-downloadable from the vendor; an installer for software that is no longer sold, or a custom ISO, may not be."
+
+[[entry]]
+id = "downloads-archives"
+name = "Downloaded archives"
+app = "user"
+category = "downloads"
+patterns = ['~\Downloads\*.zip', '~\Downloads\*.7z', '~\Downloads\*.rar', '~\Downloads\*.tar.gz', '~\Downloads\*.tgz']
+regenerable = false
+verdict_hint = "review"
+notes = "Archives in Downloads. If an extracted copy exists next to it the archive is redundant; otherwise check contents before removing. Already compressed; recompressing gains nothing."
+
+[[entry]]
+id = "downloads"
+name = "Downloads folder"
+app = "user"
+category = "downloads"
+patterns = ['~\Downloads']
+regenerable = false
+verdict_hint = "review"
+notes = "Everything the user downloaded. Mix of re-downloadable installers and unique personal files; judge per file by type and age."
+
+[[entry]]
+id = "onedrive-sync"
+name = "OneDrive sync folder"
+app = "OneDrive"
+category = "user-data"
+patterns = ['~\OneDrive', '~\OneDrive - *']
+regenerable = false
+verdict_hint = "review"
+cap = "review"
+notes = "Synced with the cloud. Cloud-only placeholders use no disk space. Deleting a file here deletes it from OneDrive on every device (recoverable from the OneDrive recycle bin for a limited time); use Free up space to evict local copies instead."
+
+[[entry]]
+id = "dropbox-sync"
+name = "Dropbox sync folder"
+app = "Dropbox"
+category = "user-data"
+patterns = ['~\Dropbox', '~\Dropbox (*)']
+regenerable = false
+verdict_hint = "review"
+cap = "review"
+notes = "Synced with the cloud. Deleting files here deletes them from Dropbox everywhere (recoverable for a limited time); use Smart Sync online-only to free local space."
+
+[[entry]]
+id = "user-credentials"
+name = "Credentials and keys"
+app = "user"
+category = "user-data"
+patterns = ['~\.ssh', '~\.aws', '~\.azure', '~\.gnupg', '~\.kube', '~\.config\gh']
+regenerable = false
+verdict_hint = "keep"
+cap = "keep"
+notes = "SSH keys, cloud CLI credentials and tokens. Not regenerable and sensitive; never delete or move them."
+
+[[entry]]
+id = "claude-code-home"
+name = "Claude Code data"
+app = "Claude Code"
+category = "app-data"
+patterns = ['~\.claude']
+regenerable = false
+verdict_hint = "review"
+notes = "Claude Code settings, memory, skills and conversation transcripts (projects\\). Transcripts can be large and are only useful for resuming sessions; settings and skills are not regenerable."
+
+[[entry]]
+id = "user-documents"
+name = "Personal folders"
+app = "user"
+category = "user-data"
+patterns = ['~\Documents', '~\Desktop', '~\Pictures', '~\Videos', '~\Music']
+regenerable = false
+verdict_hint = "review"
+cap = "review"
+notes = "Personal files. Not regenerable; nothing should be suggested for deletion without the user naming it."

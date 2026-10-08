@@ -1,0 +1,242 @@
+[[entry]]
+id = "lmstudio-models"
+name = "LM Studio models"
+app = "LM Studio"
+category = "model-store"
+patterns = ['~\.lmstudio\models', '~\.cache\lm-studio\models']
+regenerable = false
+verdict_hint = "redownload"
+safe_unit = "a whole model folder (publisher\\model)"
+notes = "Downloaded GGUF/MLX model files, laid out publisher\\model\\file.gguf. Re-downloadable from Hugging Face. Delete a whole model folder, not single files; LM Studio lists the model as missing afterwards. Models imported from elsewhere may have no remote copy."
+
+[[entry]]
+id = "lmstudio-runtimes"
+name = "LM Studio inference backends"
+app = "LM Studio"
+category = "cache"
+patterns = ['~\.lmstudio\extensions\backends']
+regenerable = true
+verdict_hint = "redownload"
+safe_unit = "one backend folder"
+notes = "llama.cpp/CUDA/Vulkan/ROCm runtime builds LM Studio downloads. Old versions pile up after updates; LM Studio re-downloads the one it needs."
+
+[[entry]]
+id = "lmstudio-home"
+name = "LM Studio data"
+app = "LM Studio"
+category = "app-data"
+patterns = ['~\.lmstudio', '~\.cache\lm-studio']
+regenerable = false
+verdict_hint = "review"
+notes = "LM Studio settings, chats (conversations), presets and server logs. Chats and presets are user data and cannot be regenerated."
+
+[[entry]]
+id = "hf-hub-blobs"
+name = "Hugging Face hub blobs"
+app = "Hugging Face"
+category = "model-store"
+patterns = ['~\.cache\huggingface\hub\*\blobs', '%HF_HOME%\hub\*\blobs', '%HUGGINGFACE_HUB_CACHE%\*\blobs']
+regenerable = false
+verdict_hint = "redownload"
+cap = "review"
+shared_blobs = true
+safe_unit = "a whole models--org--name folder"
+notes = "Content-addressed files; snapshots\\<rev>\\ entries are symlinks to them. One blob can serve several revisions, and with the newer Xet storage chunks are shared across files. Deleting a single blob breaks every snapshot that points at it. Delete the whole models--org--name folder instead."
+
+[[entry]]
+id = "hf-hub-cache"
+name = "Hugging Face hub cache"
+app = "Hugging Face"
+category = "model-store"
+patterns = ['~\.cache\huggingface\hub', '%HF_HOME%\hub', '%HUGGINGFACE_HUB_CACHE%']
+regenerable = false
+verdict_hint = "redownload"
+shared_blobs = true
+safe_unit = "a whole models--org--name (or datasets--) folder"
+notes = "Models and datasets downloaded by transformers, diffusers, huggingface-cli. Re-downloadable. Without Windows Developer Mode the cache copies files instead of symlinking them, so the same weights are often stored twice (blobs and snapshots); duplicates here are expected. Remove whole models--org--name folders."
+
+[[entry]]
+id = "hf-xet-cache"
+name = "Hugging Face Xet chunk cache"
+app = "Hugging Face"
+category = "cache"
+patterns = ['~\.cache\huggingface\xet', '%HF_HOME%\xet']
+regenerable = true
+verdict_hint = "safe"
+notes = "Chunk cache used by the Xet downloader to speed up and dedupe downloads. Deleting it only makes later downloads slower."
+
+[[entry]]
+id = "hf-datasets-cache"
+name = "Hugging Face datasets cache"
+app = "Hugging Face"
+category = "cache"
+patterns = ['~\.cache\huggingface\datasets', '~\.cache\huggingface\assets', '~\.cache\huggingface\modules']
+regenerable = true
+verdict_hint = "redownload"
+notes = "Arrow files and processed copies built by the datasets library. Rebuilt from the source dataset on next use; may need re-download."
+
+[[entry]]
+id = "hf-home"
+name = "Hugging Face home"
+app = "Hugging Face"
+category = "app-data"
+patterns = ['~\.cache\huggingface']
+regenerable = false
+verdict_hint = "review"
+notes = "Hugging Face cache root; also holds the login token file (token) which is a credential."
+
+[[entry]]
+id = "ollama-blobs"
+name = "Ollama model blobs"
+app = "Ollama"
+category = "model-store"
+patterns = ['~\.ollama\models\blobs', '%OLLAMA_MODELS%\blobs']
+regenerable = false
+verdict_hint = "redownload"
+cap = "review"
+shared_blobs = true
+safe_unit = "a whole model (remove with `ollama rm`)"
+notes = "sha256-named layers. Several models can share one blob (same base weights or template), so deleting a single blob can corrupt other models. Remove models with `ollama rm <name>`, which only frees blobs no manifest still uses."
+
+[[entry]]
+id = "ollama-models"
+name = "Ollama model store"
+app = "Ollama"
+category = "model-store"
+patterns = ['~\.ollama\models', '%OLLAMA_MODELS%']
+regenerable = false
+verdict_hint = "redownload"
+shared_blobs = true
+safe_unit = "a whole model (remove with `ollama rm`)"
+notes = "manifests\\ holds one small file per model tag, blobs\\ holds the weights. Models pulled from the Ollama library re-download; locally created models (Modelfile) may not."
+
+[[entry]]
+id = "ollama-home"
+name = "Ollama user data"
+app = "Ollama"
+category = "app-data"
+patterns = ['~\.ollama']
+regenerable = false
+verdict_hint = "review"
+notes = "Contains id_ed25519 (the key identifying this machine to ollama.com) next to the models folder. Do not delete the key files."
+
+[[entry]]
+id = "ollama-app"
+name = "Ollama application data"
+app = "Ollama"
+category = "app-data"
+patterns = ['%LOCALAPPDATA%\Ollama', '%LOCALAPPDATA%\Programs\Ollama']
+regenerable = true
+verdict_hint = "review"
+notes = "Ollama app files, rotated logs (app-N.log, server-N.log), a chat db.sqlite and downloaded updates. Logs and updates are safe to remove; db.sqlite holds chat history."
+
+[[entry]]
+id = "unsloth-home"
+name = "Unsloth tools"
+app = "Unsloth"
+category = "dev-tool"
+patterns = ['~\.unsloth', '%LOCALAPPDATA%\Unsloth Studio', '%LOCALAPPDATA%\Unsloth Studio (Desktop)', '%LOCALAPPDATA%\ai.unsloth.studio']
+regenerable = true
+verdict_hint = "redownload"
+notes = "Unsloth Studio installs and the llama.cpp/whisper.cpp builds it uses. Reinstalling restores them; trained outputs live elsewhere."
+
+[[entry]]
+id = "unsloth-compiled-cache"
+name = "Unsloth compiled cache"
+app = "Unsloth"
+category = "cache"
+patterns = ['**\unsloth_compiled_cache']
+regenerable = true
+verdict_hint = "safe"
+notes = "Python modules Unsloth generates next to a training script. Recreated on the next import."
+
+[[entry]]
+id = "models-src"
+name = "Model sources"
+app = "user"
+category = "model-store"
+patterns = ['~\models-src', '**\models-src']
+regenerable = false
+verdict_hint = "review"
+notes = "User-kept model source files (original checkpoints for conversion/quantization). Often the only copy of fine-tunes; re-download only possible for public models."
+
+[[entry]]
+id = "models-root"
+name = "Models folder"
+app = "user"
+category = "model-store"
+patterns = ['?:\models']
+regenerable = false
+verdict_hint = "review"
+notes = "Top-level folder where the user keeps model files. Check identity (GGUF/safetensors metadata) to see if each file is a public model that can be re-downloaded."
+
+[[entry]]
+id = "torch-hub-cache"
+name = "PyTorch hub cache"
+app = "PyTorch"
+category = "model-store"
+patterns = ['~\.cache\torch\hub', '~\.cache\torch\sentence_transformers']
+regenerable = true
+verdict_hint = "redownload"
+notes = "Pretrained checkpoints downloaded by torch.hub and sentence-transformers. Re-downloaded on next use."
+
+[[entry]]
+id = "torch-cache"
+name = "PyTorch cache"
+app = "PyTorch"
+category = "cache"
+patterns = ['~\.cache\torch', '%TEMP%\torchinductor_*']
+regenerable = true
+verdict_hint = "safe"
+notes = "Inductor compiled kernels and other PyTorch caches. Rebuilt on demand; first run afterwards is slower."
+
+[[entry]]
+id = "triton-cache"
+name = "Triton kernel cache"
+app = "Triton"
+category = "cache"
+patterns = ['~\.triton\cache', '~\.triton']
+regenerable = true
+verdict_hint = "safe"
+notes = "Compiled GPU kernels from Triton (used by PyTorch compile, ROCm builds). Recompiled on demand."
+
+[[entry]]
+id = "miopen-cache"
+name = "MIOpen kernel cache"
+app = "AMD ROCm"
+category = "cache"
+patterns = ['~\.miopen\cache', '~\.miopen']
+regenerable = true
+verdict_hint = "safe"
+notes = "MIOpen (AMD ROCm) compiled kernels and tuning db. Rebuilt on demand; first run of each op shape is slower."
+
+[[entry]]
+id = "keras-cache"
+name = "Keras downloads"
+app = "Keras"
+category = "model-store"
+patterns = ['~\.keras']
+regenerable = true
+verdict_hint = "redownload"
+notes = "Pretrained weights and datasets downloaded by Keras. Re-downloaded on next use."
+
+[[entry]]
+id = "lemonade-cache"
+name = "Lemonade cache"
+app = "Lemonade"
+category = "model-store"
+patterns = ['~\.cache\lemonade', '%LOCALAPPDATA%\com.lemonade.app']
+regenerable = true
+verdict_hint = "redownload"
+notes = "Models and runtime files for the Lemonade local LLM server. Re-downloaded when needed."
+
+[[entry]]
+id = "gpt4all-models"
+name = "GPT4All models"
+app = "GPT4All"
+category = "model-store"
+patterns = ['%LOCALAPPDATA%\nomic.ai\GPT4All']
+regenerable = false
+verdict_hint = "redownload"
+safe_unit = "one model file"
+notes = "Downloaded GGUF models for GPT4All. Re-downloadable from the GPT4All catalog."
