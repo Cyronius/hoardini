@@ -109,7 +109,7 @@ export function SettingsTab() {
     <div className="space-y-5">
       <Section title="Index">
         <div className="grid grid-cols-[1fr_auto] items-end gap-3">
-          <Field label="Index files at or above" hint="Smaller files roll up into their folder's totals.">
+          <Field label="Index files at or above" hint="Smaller files roll up into their folder's totals. A change applies at the next full refresh.">
             <div className="flex gap-2">
               <input className={field} type="number" min={0} step="any" value={thr.value} onChange={(e) => { setThr({ ...thr, value: e.target.value }); setSaved(false); }} />
               <select className={`${field} !w-20`} value={thr.unit} onChange={(e) => { setThr({ ...thr, unit: Number(e.target.value) }); setSaved(false); }}>

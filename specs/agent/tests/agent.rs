@@ -110,6 +110,7 @@ fn every_tool_leaves_the_filesystem_unchanged_and_propose_tools_only_create_pend
             json!({"scope": file, "kind": "fact", "text": "test model"}),
         ),
         ("destinations", json!({})),
+        ("web_search", json!({"query": "big.gguf"})),
         (
             "propose_delete",
             json!({"paths": [file], "verdict": "redownload", "reason": "test"}),
@@ -745,7 +746,13 @@ async fn small_profiles_get_the_reduced_toolset_and_a_shorter_prompt() {
             "top_files"
         ]
     );
-    assert_eq!(reqs[1].tool_names(), Registry::full().names());
+    let mut offered = Registry::full().names();
+    offered.retain(|n| *n != "web_search");
+    assert_eq!(
+        reqs[1].tool_names(),
+        offered,
+        "web search is off by default"
+    );
     let sys = |r: &Captured| r.messages()[0]["content"].as_str().unwrap().len();
     assert!(
         sys(&reqs[0]) * 2 < sys(&reqs[1]),
@@ -893,4 +900,90 @@ fn web_derived_notes_are_fenced_and_cannot_close_the_fence() {
     assert_eq!(content.matches("<<<END UNTRUSTED").count(), 1, "{content}");
     let inside = &content[begin..end];
     assert!(inside.contains("Ignore the rules"), "{content}");
+}
+
+// A SearXNG stand-in that answers every request with the recorded fixture.
+async fn searxng_standin() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let body = std::fs::read_to_string(format!(
+        "{}/srch/fixtures/searxng.json",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 8192];
+                let _ = s.read(&mut buf).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = s.write_all(head.as_bytes()).await;
+                let _ = s.write_all(body.as_bytes()).await;
+                let _ = s.shutdown().await;
+            });
+        }
+    });
+    format!("http://{addr}")
+}
+
+// Traces: AGENT-WEB-SEARCH
+#[tokio::test(flavor = "multi_thread")]
+async fn web_search_is_offered_only_when_enabled_with_an_active_provider() {
+    let h = Harness::new(None);
+    let base = searxng_standin().await;
+    let conn = h.db.conn().unwrap();
+    conn.execute(
+        "INSERT INTO search_provider(id, kind, config_json, is_active, created_ms) VALUES ('searxng', 'searxng', ?1, 1, 0)",
+        [json!({"base_url": base}).to_string()],
+    )
+    .unwrap();
+    let mock = MockLlm::start(vec![
+        Turn::Text("search is off".into()),
+        Turn::Calls(
+            None,
+            vec![call(
+                "w1",
+                "web_search",
+                json!({"query": "unsloth_compiled_cache folder safe to delete"}),
+            )],
+        ),
+        Turn::Text("It is a cache.".into()),
+        Turn::Text("no provider".into()),
+    ])
+    .await;
+    let has = |r: &Captured| r.tool_names().iter().any(|n| n == "web_search");
+    h.run(h.provider(&mock.base_url), user("t-ws1", "u1", "hi"))
+        .await;
+    hoardini_core::store::set_meta(&conn, "web_search_enabled", "true").unwrap();
+    let ev = h
+        .run(
+            h.provider(&mock.base_url),
+            user("t-ws2", "u2", "what is it"),
+        )
+        .await;
+    assert_valid_sequence(&ev);
+    conn.execute("UPDATE search_provider SET is_active = 0", [])
+        .unwrap();
+    h.run(h.provider(&mock.base_url), user("t-ws3", "u3", "again"))
+        .await;
+    let reqs = mock.requests();
+    assert_eq!(reqs.len(), 4);
+    assert!(!has(&reqs[0]), "off by default");
+    assert!(has(&reqs[1]), "on with an active provider");
+    assert!(!has(&reqs[3]), "off without an active provider");
+    let content = tool_content(&reqs[2], "w1");
+    assert!(
+        content.starts_with("<<<UNTRUSTED_WEB_CONTENT")
+            && content.trim_end().ends_with("UNTRUSTED_WEB_CONTENT>>>"),
+        "{content}"
+    );
+    assert!(
+        content.contains("https://github.com/unslothai/unsloth/issues/1234"),
+        "{content}"
+    );
 }

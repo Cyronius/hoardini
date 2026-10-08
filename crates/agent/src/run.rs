@@ -210,7 +210,7 @@ pub async fn run_agent(
         return Ok(());
     }
     let mut run = Run {
-        registry: Registry::for_profile(provider.small),
+        registry: Registry::for_profile(provider.small).available(&env.db),
         profile: env.profile(),
         env,
         provider,

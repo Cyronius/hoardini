@@ -88,4 +88,6 @@ press, or releasing early shall not approve. Archive cards approve with one clic
 5. With keyboard focus on the button, press and release Space quickly. Same result.
 6. Press and hold until the bar fills (about 1.2 s). The card switches to approved, a job appears, and the file is gone.
 7. Uncheck every item on another delete card: the hold button is disabled.
-8. Ask for an archive proposal to a registered destination: its approve button works with a single click.
+8. Ask for an archive proposal to a registered destination: its approve button works with a single click. The card shows the job's progress bar and item count, then "Done. Freed …", and the header's "made to vanish" grows.
+9. Settings → Destinations → Archived items lists the archived folder; Restore puts it back (the row turns "restored") and the folder reappears in the index.
+(2026-10-08, sandbox folder, scripted mock model: 1–6 and 8–9 as described; 7 seen on a card whose only item was blocked, which disables the button the same way.)

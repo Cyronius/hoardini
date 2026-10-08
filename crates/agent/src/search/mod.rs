@@ -4,8 +4,10 @@ mod sanitize;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use hoardini_core::store::{Db, now_ms};
+use hoardini_core::store::{Db, get_meta, now_ms};
+use hoardini_core::vault::SecretStore;
 use rusqlite::{Connection, OptionalExtension, params};
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 
 pub use providers::{Brave, Exa, HttpReq, Method, SearchProvider, SearxNg, Serper, Tavily};
@@ -219,6 +221,62 @@ pub async fn search(
     query: &str,
 ) -> Result<Vec<SearchResult>> {
     search_with(db, cfg, key, query, &Ctx::system()).await
+}
+
+// The search_provider row for `kind`, or the active one, with its key read from the vault.
+pub fn configured(
+    conn: &Connection,
+    secrets: &dyn SecretStore,
+    kind: Option<Kind>,
+) -> Result<Option<(ProviderCfg, Option<String>)>> {
+    let read = |r: &rusqlite::Row| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?));
+    let row = match kind {
+        Some(k) => conn
+            .query_row(
+                "SELECT kind, config_json FROM search_provider WHERE id = ?1",
+                [k.as_str()],
+                read,
+            )
+            .optional()?
+            .or_else(|| Some((k.as_str().to_string(), "{}".to_string()))),
+        None => conn
+            .query_row(
+                "SELECT kind, config_json FROM search_provider WHERE is_active = 1 ORDER BY id LIMIT 1",
+                [],
+                read,
+            )
+            .optional()?,
+    };
+    let Some((kind, config_json)) = row else {
+        return Ok(None);
+    };
+    let kind: Kind = serde_json::from_value(serde_json::Value::String(kind))?;
+    let key_ref = serde_json::from_str::<serde_json::Value>(&config_json)
+        .ok()
+        .and_then(|v| v.get("api_key")?.as_str().map(str::to_string))
+        .filter(|r| !r.trim().is_empty());
+    let key = match key_ref {
+        Some(r) => secrets.get(&r)?.map(|s| s.expose_secret().to_string()),
+        None => None,
+    };
+    Ok(Some((
+        ProviderCfg::from_config_json(kind, &config_json),
+        key,
+    )))
+}
+
+pub fn enabled(conn: &Connection) -> bool {
+    let on = get_meta(conn, "web_search_enabled")
+        .ok()
+        .flatten()
+        .is_some_and(|v| matches!(v.trim(), "true" | "1"));
+    on && conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM search_provider WHERE is_active = 1)",
+            [],
+            |r| r.get::<_, bool>(0),
+        )
+        .unwrap_or(false)
 }
 
 pub async fn test(cfg: &ProviderCfg, key: Option<&str>) -> SearchTest {
