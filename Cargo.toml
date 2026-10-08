@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["crates/win", "crates/core", "crates/agent", "crates/server", "crates/cli", "specs"]
+default-members = ["crates/win", "crates/core", "crates/agent", "crates/server", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.92"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

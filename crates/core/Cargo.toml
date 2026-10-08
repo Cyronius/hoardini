@@ -1,0 +1,24 @@
+[package]
+name = "hoardini-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+blake3 = "1.8.7"
+crossbeam-channel = "0.5.17"
+globset = "0.4.20"
+hoardini-win = { version = "0.1.0", path = "../win" }
+infer = "0.22.0"
+parking_lot = "0.12.5"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+secrecy = { version = "0.10.3", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.21"
+toml = "1.1.7"
+tracing = "0.1.44"
+uuid = { version = "1.27.0", features = ["v7", "serde"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

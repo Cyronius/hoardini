@@ -1,0 +1,66 @@
+[package]
+name = "hoardini-specs"
+version.workspace = true
+edition.workspace = true
+publish = false
+autotests = false
+
+[lib]
+path = "lib.rs"
+
+[[test]]
+name = "index"
+path = "index/tests/index.rs"
+
+[[test]]
+name = "hist"
+path = "hist/tests/hist.rs"
+
+[[test]]
+name = "evid"
+path = "evid/tests/evid.rs"
+
+[[test]]
+name = "agent"
+path = "agent/tests/agent.rs"
+
+[[test]]
+name = "srv"
+path = "srv/tests/srv.rs"
+
+[[test]]
+name = "policy"
+path = "policy/tests/policy.rs"
+
+[[test]]
+name = "act"
+path = "act/tests/act.rs"
+
+[[test]]
+name = "mem"
+path = "mem/tests/mem.rs"
+
+[[test]]
+name = "prov"
+path = "prov/tests/prov.rs"
+
+[[test]]
+name = "runtime"
+path = "runtime/tests/runtime.rs"
+
+[[test]]
+name = "vault"
+path = "vault/tests/vault.rs"
+
+[[test]]
+name = "srch"
+path = "srch/tests/srch.rs"
+
+[dev-dependencies]
+hoardini-agent = { path = "../crates/agent" }
+hoardini-core = { path = "../crates/core" }
+hoardini-server = { path = "../crates/server" }
+hoardini-win = { path = "../crates/win" }
+serde_json = "1.0.151"
+tempfile = "3.27.0"
+tokio = { version = "1.53.2", features = ["full"] }

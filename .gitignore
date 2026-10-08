@@ -1,0 +1,8 @@
+/target
+.claude/plans/
+.claude/worktrees/
+node_modules/
+ui/dist/
+*.db
+*.db-wal
+*.db-shm
