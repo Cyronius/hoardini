@@ -1,4 +1,18 @@
+mod deny;
+mod env;
+mod gate;
+
+use std::path::Path;
+
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+
+pub use deny::{deny_reason, is_volume_root};
+pub use env::PolicyEnv;
+pub use gate::{
+    Action, Examined, FsState, IN_USE_FILE_CAP, ItemKind, examine, fs_state, in_use_reason,
+    resolve, revalidate,
+};
 
 // Ordered least to most protective; a cap is the minimum protection a verdict may show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -38,16 +52,36 @@ impl Verdict {
     }
 }
 
-// SEAM (wave 2): filled by the policy owner; evidence calls it to show the cap next to the facts.
+// Evidence shows this next to the facts; proposals store it per item.
 pub fn cap_for(
-    _conn: &rusqlite::Connection,
-    _path: &std::path::Path,
+    conn: &Connection,
+    path: &Path,
     catalog_cap: Option<Verdict>,
     in_use: bool,
 ) -> anyhow::Result<Option<Verdict>> {
-    Ok(if in_use {
-        Some(Verdict::Keep)
-    } else {
-        catalog_cap
-    })
+    cap_for_with(conn, &PolicyEnv::system(), path, catalog_cap, in_use)
+}
+
+pub fn cap_for_with(
+    conn: &Connection,
+    env: &PolicyEnv,
+    path: &Path,
+    catalog_cap: Option<Verdict>,
+    in_use: bool,
+) -> anyhow::Result<Option<Verdict>> {
+    let p = crate::index::normalize_path(&path.to_string_lossy());
+    if in_use || deny_reason(conn, env, &p)?.is_some() {
+        return Ok(Some(Verdict::Keep));
+    }
+    let found = env.catalog().lookup_match(&p);
+    let mut cap = catalog_cap.max(found.as_ref().and_then(|m| m.cap));
+    let review = match &found {
+        None => true,
+        // One blob can back several models; only the whole model folder is a safe unit.
+        Some(m) => m.shared_blobs && !std::fs::symlink_metadata(&p).is_ok_and(|md| md.is_dir()),
+    };
+    if review {
+        cap = cap.max(Some(Verdict::Review));
+    }
+    Ok(cap)
 }
