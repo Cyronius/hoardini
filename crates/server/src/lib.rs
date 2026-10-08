@@ -16,6 +16,8 @@ pub struct ServerOptions {
     pub ui_dir: Option<PathBuf>,
     pub dialogs: Option<Arc<dyn DialogProvider>>,
     pub refresh_on_start: bool,
+    // None = current_exe(); tests and the Tauri shell may point elsewhere.
+    pub indexer_exe: Option<PathBuf>,
 }
 
 pub struct ServerHandle {

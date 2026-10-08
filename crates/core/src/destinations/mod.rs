@@ -44,3 +44,11 @@ pub fn update(_conn: &Connection, _id: &str, _new: NewDestination) -> anyhow::Re
 pub fn delete(_conn: &Connection, _id: &str) -> anyhow::Result<bool> {
     anyhow::bail!("destinations::delete not implemented yet")
 }
+
+pub fn test(_dest: &Destination, _secrets: &dyn crate::vault::SecretStore) -> DestinationTest {
+    DestinationTest {
+        ok: false,
+        free_bytes: None,
+        error: Some("destination test not implemented yet".into()),
+    }
+}
