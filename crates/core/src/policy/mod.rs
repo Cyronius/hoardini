@@ -37,3 +37,17 @@ impl Verdict {
         }
     }
 }
+
+// SEAM (wave 2): filled by the policy owner; evidence calls it to show the cap next to the facts.
+pub fn cap_for(
+    _conn: &rusqlite::Connection,
+    _path: &std::path::Path,
+    catalog_cap: Option<Verdict>,
+    in_use: bool,
+) -> anyhow::Result<Option<Verdict>> {
+    Ok(if in_use {
+        Some(Verdict::Keep)
+    } else {
+        catalog_cap
+    })
+}

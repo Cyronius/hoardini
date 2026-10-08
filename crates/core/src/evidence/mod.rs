@@ -1,5 +1,6 @@
 pub mod gguf;
 pub mod identify;
+pub mod inspect;
 pub mod pe;
 pub mod safetensors;
 
@@ -7,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 pub use gguf::GgufInfo;
 pub use identify::identify;
+pub use inspect::inspect;
 pub use pe::PeInfo;
 pub use safetensors::SafetensorsInfo;
 
