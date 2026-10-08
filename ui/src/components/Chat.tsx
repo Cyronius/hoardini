@@ -1,0 +1,373 @@
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AgentProvider, useAgent, useAgentContext } from "@itkennel/lm-ag-ui";
+import type { Message } from "@ag-ui/client";
+import { getToken, routes } from "../api/client";
+import type { ProviderView } from "../api/types";
+import { resolveMaxSteps, resolveStallMs, WATCHDOG_BACKSTOP_MS } from "../agent/aiTimeouts";
+import { useActivity } from "../agent/activityStore";
+import { currentRunId, requestHandler } from "../agent/events";
+import { proposalTools } from "../agent/proposalTools";
+import { classifySettledTurn, describeRunError, isAbortError } from "../agent/runError";
+import { isProposeTool } from "../agent/toolDefs";
+import { friendlyToolName, humanElapsed } from "../format";
+import { useStore } from "../store";
+import { Greeting } from "./Greeting";
+import { SendIcon, SpinnerIcon, StopIcon } from "./icons";
+import { IconButton } from "./IconButton";
+import { Markdown } from "./Markdown";
+import { ToolChip } from "./ToolChip";
+
+const sentToolIds = new Set<string>();
+
+// Server tool results ("tool_result_*") and restored history are already on the server; only frontend-tool answers go out.
+function pruneOutbound(messages: Message[]): Message[] {
+  return messages.filter((m) => {
+    if (m.role !== "tool") return true;
+    if (!m.id.startsWith("tool_") || m.id.startsWith("tool_result_") || sentToolIds.has(m.id)) return false;
+    sentToolIds.add(m.id);
+    return true;
+  });
+}
+
+type ToolCallLike = { id: string; function?: { name?: string; arguments?: string } };
+
+function LiveActivity() {
+  const steps = useActivity((s) => s.steps);
+  const { currentMessage } = useAgentContext();
+  const visible = currentMessage && steps.length && steps[steps.length - 1]!.kind === "thinking" ? steps.slice(0, -1) : steps;
+  if (visible.length === 0) {
+    if (currentMessage) return null;
+    return (
+      <div className="fade-up flex items-center gap-2 text-[length:var(--fs-sm)]">
+        <SpinnerIcon />
+        <span className="font-semibold text-muted pulse-soft">Working...</span>
+      </div>
+    );
+  }
+  return (
+    <div className="fade-up space-y-1">
+      {visible.map((st, i) => {
+        const active = i === visible.length - 1;
+        return (
+          <div key={st.id} className="flex items-center gap-2 text-[length:var(--fs-sm)]">
+            {active ? <SpinnerIcon /> : <span className="shrink-0 text-ok">✓</span>}
+            <span className="font-semibold text-muted">{st.kind === "tool" ? friendlyToolName(st.label) : st.label}</span>
+            {active && <span className="text-faint pulse-soft">...</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Prompt({ children, actions }: { children: ReactNode; actions: ReactNode }) {
+  return (
+    <div className="fade-up rounded-xl border border-brass/30 bg-brass/10 px-3 py-2 text-[length:var(--fs-sm)]">
+      <div className="text-paper-dim">{children}</div>
+      <div className="mt-2 flex gap-2">{actions}</div>
+    </div>
+  );
+}
+
+const btnAccent = "rounded-lg border border-brass/40 px-2.5 py-1 font-bold text-brass hover:bg-brass/10";
+const btnQuiet = "rounded-lg border border-line px-2.5 py-1 font-semibold text-muted hover:text-paper";
+
+function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
+  const { messages, currentMessage, isStreaming, addMessage, agentClient, agentSubscriber, tools: toolDefs, getForwardedProps, getToolNameFromCallId, terminateRun } =
+    useAgentContext();
+  const [input, setInput] = useState("");
+  const [lastTurnMs, setLastTurnMs] = useState<number | null>(null);
+  const sendingRef = useRef(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const stuckRef = useRef(true);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const activitySteps = useActivity((s) => s.steps);
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const ro = new ResizeObserver(() => {
+      const el = scrollRef.current;
+      if (stuckRef.current && el) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, []);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) stuckRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
+
+  const sendText = async (text: string) => {
+    if (isStreaming || sendingRef.current) return;
+    sendingRef.current = true;
+    setLastTurnMs(null);
+    const startedAt = performance.now();
+    try {
+      const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: text };
+      stuckRef.current = true;
+      addMessage(userMsg);
+      useActivity.getState().clear();
+      agentClient.startNewRun();
+      await agentClient.runAgent(
+        [...messages, userMsg],
+        Object.values(toolDefs).map((t) => t.definition),
+        agentSubscriber,
+        getForwardedProps(),
+      );
+      setLastTurnMs(performance.now() - startedAt);
+    } catch (err) {
+      // A run that dies before the stream opens rejects instead of emitting RUN_ERROR.
+      if (!isAbortError(err)) {
+        addMessage({ id: `error_${Date.now()}`, role: "assistant", content: `Error: ${describeRunError(err)}` });
+      }
+    } finally {
+      sendingRef.current = false;
+    }
+  };
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || isStreaming || sendingRef.current) return;
+    setInput("");
+    await sendText(text);
+  };
+
+  const stop = () => {
+    const id = currentRunId();
+    terminateRun();
+    if (id) void routes.cancelRun(id).catch(() => {});
+  };
+
+  const [stalled, setStalled] = useState(false);
+  const [stallExtensions, setStallExtensions] = useState(0);
+  useEffect(() => {
+    setStalled(false);
+    if (!isStreaming) return;
+    const t = setTimeout(() => setStalled(true), limits.stallMs);
+    return () => clearTimeout(t);
+  }, [isStreaming, messages, currentMessage, activitySteps, limits.stallMs, stallExtensions]);
+  const stallLabel = limits.stallMs >= 120_000 ? `${Math.round(limits.stallMs / 60_000)} minutes` : `${Math.round(limits.stallMs / 1000)} seconds`;
+
+  const lastNonTool = [...messages].reverse().find((m) => m.role !== "tool");
+  const lastCalls = (lastNonTool as unknown as { toolCalls?: ToolCallLike[] } | undefined)?.toolCalls;
+  const waitingOnCard = !!lastCalls?.some((tc) => isProposeTool(tc.function?.name ?? getToolNameFromCallId(tc.id)));
+  const turnEnd = classifySettledTurn(messages);
+  const endedOnToolCalls = !isStreaming && turnEnd === "tool-calls" && !waitingOnCard;
+  const producedNothing = !isStreaming && lastTurnMs != null && turnEnd === "no-output";
+  const [dismissedId, setDismissedId] = useState<string | null>(null);
+  const showContinue = (endedOnToolCalls || producedNothing) && dismissedId !== lastNonTool?.id;
+  const lastUserText = lastNonTool?.role === "user" && typeof lastNonTool.content === "string" ? lastNonTool.content : null;
+
+  // Server ids are unique, but a restored or replayed thread must not crash React on a repeat.
+  const rendered = useMemo(() => {
+    const seen = new Map<string, number>();
+    return messages.map((m) => {
+      const n = (seen.get(m.id) ?? 0) + 1;
+      seen.set(m.id, n);
+      return { m, key: n === 1 ? m.id : `${m.id}#${n}` };
+    });
+  }, [messages]);
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+        <div ref={contentRef} className="mx-auto w-full max-w-3xl space-y-3 px-4 py-4">
+          {messages.length === 0 && !isStreaming && <Greeting onAsk={(t) => void sendText(t)} />}
+          {rendered.map(({ m, key }) => {
+            const toolCalls = (m as unknown as { toolCalls?: ToolCallLike[] }).toolCalls;
+            if (m.role === "assistant" && toolCalls?.length) {
+              return (
+                <div key={key} className="fade-up">
+                  {typeof m.content === "string" && m.content && (
+                    <div className="break-words leading-relaxed">
+                      <Markdown text={m.content} />
+                    </div>
+                  )}
+                  {toolCalls.map((tc) => {
+                    const name = tc.function?.name ?? getToolNameFromCallId(tc.id);
+                    const tool = name ? toolDefs[name] : undefined;
+                    let args: Record<string, unknown> = {};
+                    try {
+                      args = JSON.parse(tc.function?.arguments || "{}");
+                    } catch {
+                      // partial args while streaming
+                    }
+                    const resultMsg = messages.find((x) => x.role === "tool" && (x as unknown as { toolCallId?: string }).toolCallId === tc.id);
+                    const result = typeof resultMsg?.content === "string" ? resultMsg.content : "";
+                    return (
+                      <div key={tc.id}>
+                        {tool?.renderer
+                          ? ((tool.renderer(args, result, () => {}, () => undefined, tool.configJson) as unknown as ReactNode) ?? null)
+                          : name && <ToolChip id={tc.id} name={name} args={args} result={result} />}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            }
+            if (m.role === "tool") return null;
+            if (m.role === "user") {
+              return (
+                <div key={key} className="text-right">
+                  <span className="inline-block max-w-[85%] break-words rounded-2xl rounded-br-md bg-brass/15 px-3 py-1.5 text-left text-paper">
+                    {typeof m.content === "string" ? m.content : "[attachment]"}
+                  </span>
+                </div>
+              );
+            }
+            const content = typeof m.content === "string" ? m.content : "";
+            if (m.role === "assistant" && m.id.startsWith("error_")) {
+              return (
+                <div key={key} className="fade-up break-words rounded-xl border border-err/30 bg-err/10 px-3 py-2 text-[length:var(--fs-sm)] text-err">
+                  {content}
+                </div>
+              );
+            }
+            return (
+              <div key={key} className="fade-up break-words leading-relaxed">
+                <Markdown text={content} />
+              </div>
+            );
+          })}
+          {isStreaming && <LiveActivity />}
+          {isStreaming && currentMessage && (
+            <div className="break-words leading-relaxed">
+              <Markdown text={currentMessage} streaming />
+            </div>
+          )}
+          {isStreaming && stalled && (
+            <Prompt
+              actions={
+                <>
+                  <button className={btnAccent} onClick={() => setStallExtensions((n) => n + 1)}>
+                    Keep waiting
+                  </button>
+                  <button className={btnQuiet} onClick={stop}>
+                    Stop
+                  </button>
+                </>
+              }
+            >
+              No response from the model for {stallLabel}.
+            </Prompt>
+          )}
+          {!isStreaming && lastTurnMs != null && messages.length > 0 && <div className="text-[length:var(--fs-sm)] text-faint">{humanElapsed(lastTurnMs)}</div>}
+          {showContinue && (
+            <Prompt
+              actions={
+                <>
+                  <button className={btnAccent} onClick={() => void sendText(producedNothing ? (lastUserText ?? "Continue.") : "Continue.")}>
+                    {producedNothing ? "Try again" : "Keep going"}
+                  </button>
+                  <button className={btnQuiet} onClick={() => setDismissedId(lastNonTool?.id ?? null)}>
+                    Dismiss
+                  </button>
+                </>
+              }
+            >
+              {producedNothing
+                ? "The model replied with no content. Check the provider's base URL and that its server is reachable (Settings, Providers)."
+                : `Hoardini stopped without a final answer. It may have hit the tool call limit (${limits.maxSteps}).`}
+            </Prompt>
+          )}
+        </div>
+      </div>
+      <div className="border-t border-line-soft bg-ink-900 px-4 py-3">
+        <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
+          <textarea
+            ref={inputRef}
+            className="max-h-40 min-h-[44px] flex-1 resize-none rounded-2xl border border-line bg-ink-850 px-3.5 py-2.5 text-paper placeholder:text-faint focus:border-brass focus:outline-none"
+            rows={1}
+            placeholder="Ask what is taking up space..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          {isStreaming ? (
+            <IconButton title="Stop" aria-label="Stop the run" className="!h-11 !w-11 !rounded-full bg-err/15 text-err hover:!bg-err/25" onClick={stop}>
+              <StopIcon />
+            </IconButton>
+          ) : (
+            <IconButton
+              title="Send"
+              aria-label="Send message"
+              className="!h-11 !w-11 !rounded-full bg-brass text-ink-950 hover:!bg-brass hover:opacity-90"
+              onClick={() => void send()}
+              disabled={!input.trim()}
+            >
+              <SendIcon />
+            </IconButton>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ChatSession({ threadId, seed }: { threadId: string; seed: Message[] | null }) {
+  const setChatBusy = useStore((s) => s.setChatBusy);
+  const [err, setErr] = useState<string | null>(null);
+  const [limits, setLimits] = useState({ stallMs: resolveStallMs(null), maxSteps: resolveMaxSteps(null) });
+  const drawer = useStore((s) => s.drawer);
+  const tools = useMemo(() => proposalTools(), []);
+
+  const agent = useAgent({
+    baseUrl: "/api",
+    agentId: "run",
+    tools,
+    tokenProvider: async () => getToken(),
+    requestHandler,
+    sendFullHistory: false,
+    initialThreadId: threadId,
+    idleTimeoutMs: WATCHDOG_BACKSTOP_MS,
+    safetyTimeoutMs: WATCHDOG_BACKSTOP_MS,
+    pruneOutboundMessages: pruneOutbound,
+    onError: (e) => setErr(e.message),
+    onLifecycleEvent: (e) => useActivity.getState().onLifecycle(e),
+  });
+
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (!seeded.current && seed?.length) agent.setMessages(seed);
+    seeded.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only; the component is keyed by thread
+  }, []);
+
+  useEffect(() => {
+    setChatBusy(agent.isStreaming);
+  }, [agent.isStreaming, setChatBusy]);
+  useEffect(() => () => setChatBusy(false), [setChatBusy]);
+
+  useEffect(() => {
+    if (drawer !== null) return;
+    routes
+      .providers()
+      .then((ps: ProviderView[]) => {
+        const p = ps.find((x) => x.is_active);
+        setLimits({ stallMs: resolveStallMs(p?.timeout_s), maxSteps: resolveMaxSteps(p?.max_tool_steps) });
+      })
+      .catch(() => {});
+  }, [drawer]);
+
+  return (
+    <AgentProvider value={agent}>
+      {err && (
+        <div className="flex items-start gap-2 border-b border-err/30 bg-err/10 px-4 py-2 text-[length:var(--fs-sm)] text-err">
+          <span className="flex-1 break-words font-mono">{err}</span>
+          <IconButton size="sm" title="Dismiss" aria-label="Dismiss error" className="text-muted hover:text-paper" onClick={() => setErr(null)}>
+            ✕
+          </IconButton>
+        </div>
+      )}
+      <Chat limits={limits} />
+    </AgentProvider>
+  );
+}
