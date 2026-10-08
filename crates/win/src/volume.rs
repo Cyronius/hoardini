@@ -21,8 +21,9 @@ fn with_trailing_slash(root: &Path) -> PathBuf {
     }
 }
 
-pub fn volume_info(root: &Path) -> io::Result<VolumeInfo> {
-    let root = with_trailing_slash(root);
+pub fn volume_info(path: &Path) -> io::Result<VolumeInfo> {
+    // GetVolumeInformationW accepts only a volume root; a folder reports the volume that holds it.
+    let root = volume_root_of(path).unwrap_or_else(|_| with_trailing_slash(path));
     let w = wide(root.as_os_str())?;
     let mut label = [0u16; 261];
     let mut fs_name = [0u16; 261];

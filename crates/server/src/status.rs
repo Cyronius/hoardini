@@ -8,13 +8,17 @@ use crate::state::{ApiResult, AppState};
 use crate::supervisor::indexed_volumes;
 
 fn build_sync(s: &AppState) -> Value {
-    let volumes: Vec<Value> = indexed_volumes(&s.db)
-        .iter()
-        .filter_map(|root| {
-            let v = hoardini_win::volume_info(Path::new(root)).ok()?;
-            Some(json!({"root": root, "total_bytes": v.total_bytes, "free_bytes": v.free_bytes}))
-        })
-        .collect();
+    let mut volumes: Vec<Value> = Vec::new();
+    for root in indexed_volumes(&s.db) {
+        let Ok(v) = hoardini_win::volume_info(Path::new(&root)) else {
+            continue;
+        };
+        if !volumes.iter().any(|x| x["root"] == v.root.as_str()) {
+            volumes.push(
+                json!({"root": v.root, "total_bytes": v.total_bytes, "free_bytes": v.free_bytes}),
+            );
+        }
+    }
     let active =
         s.db.conn()
             .ok()
