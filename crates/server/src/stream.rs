@@ -18,7 +18,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::providers;
 use crate::state::{ApiError, ApiResult, AppState, RunSlot, blocking, parse};
-use crate::status::build_status;
+use crate::status::{build_status, display_job};
 
 const STATUS_MIN_GAP: Duration = Duration::from_millis(500);
 const JOB_FLUSH: Duration = Duration::from_millis(200);
@@ -46,7 +46,7 @@ fn status_frame(mut v: Value) -> Bytes {
 }
 
 fn job_frame(job: &Job) -> Bytes {
-    let mut v = serde_json::to_value(job).unwrap_or(Value::Null);
+    let mut v = serde_json::to_value(display_job(job.clone())).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
         o.insert("type".into(), json!("job"));
     }
@@ -214,10 +214,59 @@ pub async fn agent_run(State(s): State<AppState>, body: Bytes) -> ApiResult<Resp
     Ok(event_response(ReceiverStream::new(rx), Some(guard)))
 }
 
+// A cancelled run is aborted mid-message; the terminal event must not find anything still open.
+#[derive(Default)]
+struct OpenParts {
+    text: Option<String>,
+    thinking_text: bool,
+    thinking: bool,
+    calls: Vec<String>,
+}
+
+impl OpenParts {
+    fn closers_before(&mut self, ev: &Event) -> Vec<Event> {
+        match ev {
+            Event::TextMessageStart { message_id, .. } => self.text = Some(message_id.clone()),
+            Event::TextMessageEnd { .. } => self.text = None,
+            Event::ThinkingTextMessageStart {} => self.thinking_text = true,
+            Event::ThinkingTextMessageEnd {} => self.thinking_text = false,
+            Event::ThinkingStart {} => self.thinking = true,
+            Event::ThinkingEnd {} => self.thinking = false,
+            Event::ToolCallStart { tool_call_id, .. } => self.calls.push(tool_call_id.clone()),
+            Event::ToolCallEnd { tool_call_id } => self.calls.retain(|c| c != tool_call_id),
+            Event::RunFinished { .. } | Event::RunError { .. } => {
+                let mut out = Vec::new();
+                if let Some(message_id) = self.text.take() {
+                    out.push(Event::TextMessageEnd { message_id });
+                }
+                if std::mem::take(&mut self.thinking_text) {
+                    out.push(Event::ThinkingTextMessageEnd {});
+                }
+                if std::mem::take(&mut self.thinking) {
+                    out.push(Event::ThinkingEnd {});
+                }
+                for tool_call_id in self.calls.drain(..) {
+                    out.push(Event::ToolCallEnd { tool_call_id });
+                }
+                return out;
+            }
+            _ => {}
+        }
+        Vec::new()
+    }
+}
+
 fn event_response(rx: ReceiverStream<Event>, guard: Option<RunGuard>) -> Response {
-    let stream = rx.map(move |ev| {
+    let mut open = OpenParts::default();
+    let stream = rx.flat_map(move |ev| {
         let _keep = &guard;
-        Ok::<_, Infallible>(Bytes::from(ev.to_sse()))
+        let mut frames: Vec<Result<Bytes, Infallible>> = open
+            .closers_before(&ev)
+            .iter()
+            .map(|e| Ok(Bytes::from(e.to_sse())))
+            .collect();
+        frames.push(Ok(Bytes::from(ev.to_sse())));
+        futures::stream::iter(frames)
     });
     sse_headers(Body::from_stream(stream).into_response())
 }

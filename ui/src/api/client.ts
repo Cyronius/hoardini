@@ -106,6 +106,8 @@ export const routes = {
   installRclone: () => api<T.Job>("/api/runtime/rclone/install", { body: {} }),
   authorizeRclone: (b: T.RcloneAuthorizeInput) => api<{ token_ref: string }>("/api/destinations/rclone/authorize", { body: b }),
   pickFolder: () => api<{ path: string | null }>("/api/dialog/pick-folder", { body: {} }),
+  archive: (q?: string) => api<T.ArchiveEntry[]>(`/api/archive${q ? `?q=${enc(q)}` : ""}`),
+  restoreArchive: (id: number) => api<{ job_id: string }>(`/api/archive/${id}/restore`, { body: {} }),
 
   searchProviders: () => api<T.SearchProviderView[]>("/api/search/providers"),
   putSearchProvider: (kind: T.SearchKind, p: T.SearchProviderInput) => put<{ ok: true }>(`/api/search/providers/${kind}`, p),

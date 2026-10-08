@@ -59,3 +59,17 @@ describe("UI-MD-NO-HTML", () => {
     expect(el.textContent).not.toContain("**");
   });
 });
+
+// Traces: UI-MD-KEEP-TEXT
+describe("UI-MD-KEEP-TEXT", () => {
+  it("keeps the text after a bare < in a finished message", async () => {
+    const el = await render("Files <100 MB stay and a<b and c");
+    expect(el.textContent).toBe("Files <100 MB stay and a<b and c");
+  });
+
+  it("keeps fenced web results quoted by the model", async () => {
+    const t = "Search result: <<<UNTRUSTED_WEB_CONTENT: data [1] Unsloth https://x.example/a Safe to delete";
+    const el = await render(t);
+    expect(el.textContent).toContain("https://x.example/a Safe to delete");
+  });
+});

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use hoardini_agent::run::IndexControl;
 use hoardini_core::index;
@@ -11,11 +12,25 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{Notify, watch};
 
+const JOURNAL_EVERY_S: u64 = 180;
+// A timer-driven journal refresh shows in the header only once it runs longer than this.
+const QUIET_FOR: Duration = Duration::from_secs(4);
+const NEEDS_FULL_EXIT: i32 = 3;
+
 #[derive(Default)]
 struct State {
     refreshing: bool,
     mode: Option<&'static str>,
     progress: Option<Value>,
+    quiet_since: Option<Instant>,
+    // A user refresh asked for during a quiet run; it starts when that run ends.
+    queued: Option<&'static str>,
+}
+
+impl State {
+    fn visible(&self) -> bool {
+        self.refreshing && self.quiet_since.is_none_or(|t| t.elapsed() >= QUIET_FOR)
+    }
 }
 
 pub struct Supervisor {
@@ -27,12 +42,16 @@ pub struct Supervisor {
     change: Arc<watch::Sender<u64>>,
     rt: tokio::runtime::Handle,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    timer: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    // Children join this job so a hard-killed server cannot orphan an indexer.
+    job: Option<hoardini_win::KillOnCloseJob>,
     me: Weak<Supervisor>,
 }
 
 enum ChildEnd {
     Finished,
     SwitchedToFast,
+    NeedsFull(String),
 }
 
 fn norm_mode(mode: &str) -> Option<&'static str> {
@@ -63,6 +82,13 @@ impl Supervisor {
         change: Arc<watch::Sender<u64>>,
         rt: tokio::runtime::Handle,
     ) -> Arc<Supervisor> {
+        let job = match hoardini_win::KillOnCloseJob::new() {
+            Ok(j) => Some(j),
+            Err(e) => {
+                tracing::warn!(error = %e, "no job object; an indexer could outlive a crashed server");
+                None
+            }
+        };
         Arc::new_cyclic(|me| Supervisor {
             db,
             exe,
@@ -72,6 +98,8 @@ impl Supervisor {
             change,
             rt,
             task: Mutex::new(None),
+            timer: Mutex::new(None),
+            job,
             me: me.clone(),
         })
     }
@@ -82,8 +110,8 @@ impl Supervisor {
 
     pub fn snapshot(&self) -> Value {
         let (refreshing, mode, progress) = match self.state.lock() {
-            Ok(s) => (s.refreshing, s.mode, s.progress.clone()),
-            Err(_) => (false, None, None),
+            Ok(s) if s.visible() => (true, s.mode, s.progress.clone()),
+            _ => (false, None, None),
         };
         let (last, generation) = self
             .db
@@ -101,6 +129,18 @@ impl Supervisor {
         })
     }
 
+    fn spawn_run(&self, mode: &'static str, kind: &'static str) -> anyhow::Result<()> {
+        self.want_fast.store(false, Ordering::SeqCst);
+        let Some(me) = self.me.upgrade() else {
+            anyhow::bail!("supervisor is shutting down");
+        };
+        let handle = self.rt.spawn(async move { me.run(mode, kind).await });
+        if let Ok(mut t) = self.task.lock() {
+            *t = Some(handle);
+        }
+        Ok(())
+    }
+
     pub fn start_refresh(&self, mode: &str) -> anyhow::Result<bool> {
         let Some(mode) = norm_mode(mode) else {
             anyhow::bail!("mode must be \"background\" or \"fast\"");
@@ -109,18 +149,25 @@ impl Supervisor {
             anyhow::bail!("indexer state unavailable");
         };
         if !st.refreshing {
-            st.refreshing = true;
-            st.mode = Some(mode);
-            st.progress = None;
-            drop(st);
-            self.want_fast.store(false, Ordering::SeqCst);
-            let Some(me) = self.me.upgrade() else {
-                anyhow::bail!("supervisor is shutting down");
+            *st = State {
+                refreshing: true,
+                mode: Some(mode),
+                ..State::default()
             };
-            let handle = self.rt.spawn(async move { me.run(mode).await });
-            if let Ok(mut t) = self.task.lock() {
-                *t = Some(handle);
+            drop(st);
+            self.spawn_run(mode, "auto")?;
+            self.bump();
+            return Ok(true);
+        }
+        // Killing a journal refresh would force the next one to be full, so the request waits for it.
+        if st.quiet_since.is_some() || st.queued.is_some() {
+            if st.queued == Some(mode) || st.queued == Some("fast") {
+                return Ok(false);
             }
+            st.queued = Some(mode);
+            st.quiet_since = None;
+            st.mode = Some(mode);
+            drop(st);
             self.bump();
             return Ok(true);
         }
@@ -135,40 +182,111 @@ impl Supervisor {
         Ok(false)
     }
 
+    fn start_quiet_journal(&self) {
+        let Ok(mut st) = self.state.lock() else {
+            return;
+        };
+        if st.refreshing {
+            return;
+        }
+        *st = State {
+            refreshing: true,
+            mode: Some("background"),
+            quiet_since: Some(Instant::now()),
+            ..State::default()
+        };
+        drop(st);
+        if let Err(e) = self.spawn_run("background", "journal") {
+            tracing::warn!(error = %e, "journal refresh did not start");
+        }
+    }
+
+    // While the app is open the change journal keeps the index current between full refreshes.
+    pub fn start_journal_timer(&self) {
+        let me = self.me.clone();
+        let db = self.db.clone();
+        let handle = self.rt.spawn(async move {
+            loop {
+                let every = db
+                    .conn()
+                    .ok()
+                    .and_then(|c| get_meta(&c, "journal_every_s").ok().flatten())
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .filter(|s| *s > 0)
+                    .unwrap_or(JOURNAL_EVERY_S);
+                tokio::time::sleep(Duration::from_secs(every)).await;
+                let Some(sup) = me.upgrade() else {
+                    break;
+                };
+                sup.start_quiet_journal();
+            }
+        });
+        if let Ok(mut t) = self.timer.lock() {
+            *t = Some(handle);
+        }
+    }
+
     // Aborting the task drops the child handle, and kill_on_drop ends the process.
     pub fn shutdown(&self) {
-        if let Ok(mut t) = self.task.lock()
-            && let Some(h) = t.take()
-        {
-            h.abort();
-        }
-    }
-
-    async fn run(self: Arc<Self>, first_mode: &'static str) {
-        let mut mode = first_mode;
-        for volume in indexed_volumes(&self.db) {
-            loop {
-                if self.want_fast.swap(false, Ordering::SeqCst) {
-                    mode = "fast";
-                }
-                match self.run_child(&volume, mode).await {
-                    Ok(ChildEnd::SwitchedToFast) => continue,
-                    Ok(ChildEnd::Finished) => {}
-                    Err(e) => tracing::warn!(volume, error = %e, "indexer child failed"),
-                }
-                break;
+        for slot in [&self.timer, &self.task] {
+            if let Ok(mut t) = slot.lock()
+                && let Some(h) = t.take()
+            {
+                h.abort();
             }
         }
-        if let Ok(mut st) = self.state.lock() {
-            st.refreshing = false;
-            st.mode = None;
-            st.progress = None;
-        }
-        self.bump();
     }
 
-    async fn run_child(&self, volume: &str, mode: &str) -> anyhow::Result<ChildEnd> {
+    async fn run(self: Arc<Self>, first_mode: &'static str, first_kind: &'static str) {
+        let (mut mode, mut kind) = (first_mode, first_kind);
+        loop {
+            for volume in indexed_volumes(&self.db) {
+                let mut k = kind;
+                loop {
+                    if self.want_fast.swap(false, Ordering::SeqCst) {
+                        mode = "fast";
+                    }
+                    match self.run_child(&volume, mode, k).await {
+                        Ok(ChildEnd::SwitchedToFast) => continue,
+                        Ok(ChildEnd::NeedsFull(reason)) if k != "full" => {
+                            tracing::info!(
+                                volume,
+                                reason,
+                                "journal refresh not possible; running a full refresh"
+                            );
+                            k = "full";
+                            continue;
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!(volume, error = %e, "indexer child failed"),
+                    }
+                    break;
+                }
+            }
+            let next = match self.state.lock() {
+                Ok(mut st) => match st.queued.take() {
+                    Some(m) => {
+                        st.progress = None;
+                        Some(m)
+                    }
+                    None => {
+                        *st = State::default();
+                        None
+                    }
+                },
+                Err(_) => None,
+            };
+            self.bump();
+            match next {
+                Some(m) => (mode, kind) = (m, "auto"),
+                None => break,
+            }
+        }
+    }
+
+    async fn run_child(&self, volume: &str, mode: &str, kind: &str) -> anyhow::Result<ChildEnd> {
         let mut cmd = Command::new(&self.exe);
+        // --mode stays the 7th argument; the SRV-ONE-REFRESH fake indexer reads it positionally.
         cmd.arg("index")
             .arg("--db")
             .arg(self.db.path())
@@ -176,6 +294,8 @@ impl Supervisor {
             .arg(volume)
             .arg("--mode")
             .arg(mode)
+            .arg("--kind")
+            .arg(kind)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -183,14 +303,24 @@ impl Supervisor {
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000);
         let mut child = cmd.spawn()?;
+        if let (Some(job), Some(h)) = (&self.job, child.raw_handle())
+            && let Err(e) = job.assign(h)
+        {
+            tracing::warn!(error = %e, "indexer not in the kill-on-close job");
+        }
         let Some(stdout) = child.stdout.take() else {
             anyhow::bail!("indexer stdout unavailable");
         };
         let mut lines = BufReader::new(stdout).lines();
+        let mut needs_full = None;
         loop {
             tokio::select! {
                 line = lines.next_line() => match line {
-                    Ok(Some(l)) => self.on_line(&l),
+                    Ok(Some(l)) => {
+                        if let Some(reason) = self.on_line(&l) {
+                            needs_full = Some(reason);
+                        }
+                    }
                     Ok(None) | Err(_) => break,
                 },
                 _ = self.switch.notified() => {
@@ -202,21 +332,26 @@ impl Supervisor {
             }
         }
         let status = child.wait().await?;
+        if needs_full.is_some() || status.code() == Some(NEEDS_FULL_EXIT) {
+            return Ok(ChildEnd::NeedsFull(needs_full.unwrap_or_default()));
+        }
         if !status.success() {
             tracing::warn!(volume, code = ?status.code(), "indexer exited with failure");
         }
         Ok(ChildEnd::Finished)
     }
 
-    fn on_line(&self, line: &str) {
+    // Returns the reason when the child reports that only a full refresh can run.
+    fn on_line(&self, line: &str) -> Option<String> {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
-            return;
+            return None;
         };
+        let text = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         match v.get("type").and_then(Value::as_str) {
             Some("progress") => {
                 let num = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
                 let p = json!({
-                    "phase": v.get("phase").and_then(Value::as_str).unwrap_or(""),
+                    "phase": text("phase"),
                     "dirs": num("dirs"),
                     "files": num("files"),
                     "bytes": num("bytes"),
@@ -227,13 +362,22 @@ impl Supervisor {
                 }
                 self.bump();
             }
-            Some("start") | Some("done") => self.bump(),
-            Some("error") => {
-                let msg = v.get("message").and_then(Value::as_str).unwrap_or("");
-                tracing::warn!(message = msg, "indexer reported an error");
+            Some("start") => self.bump(),
+            Some("done") => {
+                tracing::info!(
+                    kind = text("kind"),
+                    fallback = ?v.get("fallback"),
+                    duration_ms = ?v.get("duration_ms"),
+                    dirty_dirs = ?v.get("dirty_dirs"),
+                    "index refresh done"
+                );
+                self.bump();
             }
+            Some("needs_full") => return Some(text("reason")),
+            Some("error") => tracing::warn!(message = text("message"), "indexer reported an error"),
             _ => {}
         }
+        None
     }
 }
 

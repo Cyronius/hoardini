@@ -281,21 +281,27 @@ fn serve(db: Option<PathBuf>, a: ServeArgs) -> Result<()> {
     })
 }
 
+fn stderr_logging() {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_max_level(tracing::Level::INFO)
+        .with_target(false)
+        .with_ansi(std::io::stderr().is_terminal())
+        .init();
+}
+
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
-    if argv.get(1).is_none_or(|a| a != "serve") {
-        tracing_subscriber::fmt()
-            .with_writer(std::io::stderr)
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .with_ansi(std::io::stderr().is_terminal())
-            .init();
-    }
     // The app spawns `<exe> index ...`; keep that path free of clap's global-flag parsing.
     if argv.get(1).is_some_and(|a| a == "index") {
+        stderr_logging();
         return ExitCode::from(index::run_child(&argv[2..]).clamp(0, 255) as u8);
     }
     let cli = Cli::parse();
+    // `serve` installs the file logger itself, also when a global flag precedes it (`--db x serve`).
+    if !matches!(cli.cmd, Cmd::Serve(_)) {
+        stderr_logging();
+    }
     let r = match cli.cmd {
         Cmd::Index { mut args } => {
             if let Some(db) = cli.db {

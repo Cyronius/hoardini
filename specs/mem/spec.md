@@ -38,6 +38,9 @@ source is `web:<url>` shall show that URL.
 1. Ask the agent to remember a fact about a folder ("remember that D:\scratch is disposable"). A chip appears in the chat with an undo.
 2. Open the Memory drawer. The row appears with scope `path`, key `D:\scratch`, source `agent`.
 3. Edit its text and kind to `protect`, save, reload the app. The edited row persists.
-4. Ask the agent to propose deleting a file under `D:\scratch`. The proposal item is blocked with the protect note.
-5. Delete the row in the drawer. It disappears and the same proposal is no longer blocked.
+4. Ask the agent to propose deleting a file under `D:\scratch`. No card appears: policy refuses the path (POLICY-PROTECT), and the model gets an `Error: ... refused by policy` result that it explains.
+5. Delete the row in the drawer. It disappears, and the same request now produces a card.
 6. For a row created from a web search, confirm the drawer shows its source URL.
+7. Ask the agent to remember a preference: the chat shows a "noted" chip; Undo turns it into "forgotten" and the row is gone from the drawer.
+8. In the drawer's search box, a word from the note finds it; an unrelated word shows "No notes match."
+(2026-10-08, scripted mock model, sandbox folder: 1–5, 7, 8 as described; 6 not run, no web-sourced row.)

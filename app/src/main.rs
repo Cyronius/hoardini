@@ -36,11 +36,10 @@ fn main() {
     if args.get(1).map(String::as_str) == Some("index") {
         std::process::exit(hoardini_core::index::run_child(&args[2..]));
     }
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    // Release builds have no console (windows_subsystem), so stderr only helps in debug runs.
+    let _log =
+        hoardini_server::init_logging(&hoardini_server::default_log_dir(), cfg!(debug_assertions))
+            .ok();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

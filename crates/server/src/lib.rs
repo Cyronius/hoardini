@@ -274,10 +274,12 @@ pub async fn start_with(
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state.clone());
 
-    if opts.refresh_on_start
-        && let Err(e) = supervisor.start_refresh("background")
-    {
-        tracing::warn!(error = %e, "refresh on start failed");
+    // --no-refresh also keeps the periodic journal refresh off: the index is left alone.
+    if opts.refresh_on_start {
+        if let Err(e) = supervisor.start_refresh("background") {
+            tracing::warn!(error = %e, "refresh on start failed");
+        }
+        supervisor.start_journal_timer();
     }
 
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();

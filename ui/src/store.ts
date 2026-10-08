@@ -28,10 +28,14 @@ interface State {
   seedMessages: Message[] | null;
   chatBusy: boolean;
   runStats: Record<string, { elapsed_ms: number; steps: number }>;
+  // The last run ended at the tool-step cap (run_stats.limit_reached), so "keep going" is offered.
+  limitHit: boolean;
 
   proposals: Record<string, Proposal>;
   noted: Record<string, NotedMemory>;
   toolTimes: Record<string, { start: number; end?: number }>;
+  // lm-ag-ui folds a text-less tool round into the next text message; these calls came before that text.
+  callsBefore: Record<string, string[]>;
 
   applyStatusEvent(e: StatusEvent): void;
   setConnected(c: boolean): void;
@@ -44,6 +48,7 @@ interface State {
   noteMemory(toolCallId: string, n: NotedMemory): void;
   markToolStart(id: string): void;
   markToolEnd(id: string): void;
+  markCallsBefore(messageId: string, callIds: string[]): void;
   newThread(): void;
   openThread(id: string): Promise<void>;
 }
@@ -65,10 +70,12 @@ export const useStore = create<State>((set, get) => ({
   seedMessages: null,
   chatBusy: false,
   runStats: {},
+  limitHit: false,
 
   proposals: {},
   noted: {},
   toolTimes: {},
+  callsBefore: {},
 
   applyStatusEvent(e) {
     if (e.type === "status") {
@@ -117,12 +124,14 @@ export const useStore = create<State>((set, get) => ({
       const t = s.toolTimes[id];
       return t && !t.end ? { toolTimes: { ...s.toolTimes, [id]: { ...t, end: Date.now() } } } : s;
     }),
-  newThread: () => set((s) => ({ threadId: newThreadId(), threadNonce: s.threadNonce + 1, seedMessages: null })),
+  markCallsBefore: (messageId, callIds) => set((s) => ({ callsBefore: { ...s.callsBefore, [messageId]: callIds } })),
+  newThread: () => set((s) => ({ threadId: newThreadId(), threadNonce: s.threadNonce + 1, seedMessages: null, limitHit: false })),
   async openThread(id) {
     const detail = await routes.thread(id);
     set((s) => ({
       threadId: detail.id,
       threadNonce: s.threadNonce + 1,
+      limitHit: false,
       seedMessages: detail.messages as Message[],
       proposals: { ...s.proposals, ...detail.proposals },
     }));

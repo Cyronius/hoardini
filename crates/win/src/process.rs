@@ -1,14 +1,14 @@
 use std::io;
 use std::mem::size_of;
-use std::os::windows::io::OwnedHandle;
+use std::os::windows::io::{OwnedHandle, RawHandle};
 
 use windows::Win32::Foundation::{
-    ERROR_PROCESS_MODE_ALREADY_BACKGROUND, ERROR_PROCESS_MODE_NOT_BACKGROUND, WIN32_ERROR,
+    ERROR_PROCESS_MODE_ALREADY_BACKGROUND, ERROR_PROCESS_MODE_NOT_BACKGROUND, HANDLE, WIN32_ERROR,
 };
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject,
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
 use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows::Win32::System::Threading::{
@@ -87,6 +87,33 @@ pub fn cap_process_memory(bytes: u64) -> io::Result<JobGuard> {
     .map_err(werr)?;
     unsafe { AssignProcessToJobObject(raw(&job), GetCurrentProcess()) }.map_err(werr)?;
     Ok(JobGuard { _job: job })
+}
+
+// Processes assigned here die when the last job handle closes, also when the owner is hard-killed.
+pub struct KillOnCloseJob {
+    job: OwnedHandle,
+}
+
+impl KillOnCloseJob {
+    pub fn new() -> io::Result<KillOnCloseJob> {
+        let job = owned(unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(werr)?);
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        unsafe {
+            SetInformationJobObject(
+                raw(&job),
+                JobObjectExtendedLimitInformation,
+                (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        }
+        .map_err(werr)?;
+        Ok(KillOnCloseJob { job })
+    }
+
+    pub fn assign(&self, process: RawHandle) -> io::Result<()> {
+        unsafe { AssignProcessToJobObject(raw(&self.job), HANDLE(process)) }.map_err(werr)
+    }
 }
 
 pub fn current_working_set() -> io::Result<u64> {

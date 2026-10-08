@@ -121,13 +121,14 @@ function Report({ report, onPickModel }: { report: TestReport; onPickModel: (m: 
   return (
     <div className={`space-y-1.5 rounded-xl border p-2.5 text-[length:var(--fs-sm)] ${report.ok ? "border-ok/30 bg-ok/10" : "border-err/30 bg-err/10"}`}>
       <div className={`font-bold ${report.ok ? "text-ok" : "text-err"}`}>
-        {report.ok ? "Connected" : "Could not connect"}
+        {report.ok ? "Connected" : report.model_found === false ? "Connected, but the model is wrong" : "Could not connect"}
         {report.latency_ms != null && <span className="font-normal text-muted"> · {report.latency_ms} ms</span>}
       </div>
-      {report.error && <div className="text-err">{report.error}</div>}
+      {/* For an unknown model the line below says the same with clickable suggestions. */}
+      {report.error && report.model_found !== false && <div className="text-err">{report.error}</div>}
       {report.model_found === false && (
         <div className="text-brass">
-          That model is not on the server.
+          That model is not on the server; servers like LM Studio would quietly answer with a different one.
           {report.suggestions.length > 0 && (
             <>
               {" "}

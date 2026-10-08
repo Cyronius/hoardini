@@ -246,6 +246,8 @@ fn volume_queries_on_c() {
         volume_root_of(dir.path()).unwrap(),
         Path::new("C:\\").to_path_buf()
     );
+    let inner = volume_info(dir.path()).unwrap();
+    assert_eq!((inner.root.as_str(), inner.serial), ("C:\\", v.serial));
     assert!(
         fixed_volumes()
             .unwrap()

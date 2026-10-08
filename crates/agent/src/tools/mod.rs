@@ -26,6 +26,10 @@ pub trait Tool: Send + Sync {
     fn small(&self) -> bool {
         false
     }
+    // Checked once per run; a tool whose setup is missing (e.g. web search off) is not offered.
+    fn available(&self, _conn: &rusqlite::Connection) -> bool {
+        true
+    }
     fn run(&self, ctx: &ToolCtx, args: Value) -> Result<Outcome, ToolError>;
 }
 
@@ -99,6 +103,7 @@ registry! {
     destinations => [Destinations],
     duplicates => [Duplicates],
     estimate_compression => [EstimateCompression],
+    web_search => [WebSearch],
     propose => [ProposeDelete, ProposeArchive, ProposeCompress, ProposeDedupe],
 }
 
@@ -125,6 +130,19 @@ impl Registry {
             Registry::small()
         } else {
             Registry::full()
+        }
+    }
+
+    pub fn available(self, db: &Db) -> Registry {
+        let Ok(conn) = db.conn() else {
+            return self;
+        };
+        Registry {
+            tools: self
+                .tools
+                .into_iter()
+                .filter(|t| t.available(&conn))
+                .collect(),
         }
     }
 

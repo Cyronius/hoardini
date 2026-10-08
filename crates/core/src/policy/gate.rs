@@ -10,6 +10,8 @@ use crate::catalog::Category;
 use crate::index::{self, TopFilesQuery, normalize_path};
 
 pub const IN_USE_FILE_CAP: usize = 500;
+// Restart Manager cost grows with file count (500 cold files took up to 76 s); execution re-checks with the full cap.
+pub const PROPOSE_IN_USE_FILE_CAP: usize = 64;
 const SCAN_BUDGET: usize = 250_000;
 const NAME_SURROGATE: u32 = 0x2000_0000;
 
@@ -235,20 +237,20 @@ fn scan_tree(root: &Path) -> TreeScan {
     out
 }
 
-fn largest_files(conn: &Connection, dir: &str) -> Vec<PathBuf> {
+fn largest_files(conn: &Connection, dir: &str, cap: usize) -> Vec<PathBuf> {
     let q = TopFilesQuery {
         under: Some(dir.to_string()),
         min_size: 0,
         ext: None,
         not_used_for_days: None,
-        limit: IN_USE_FILE_CAP,
+        limit: cap,
     };
     match index::top_files(conn, &q) {
         Ok(r) => r.items.into_iter().map(|f| PathBuf::from(f.path)).collect(),
         Err(_) => {
             let mut files = scan_tree(Path::new(dir)).files;
             files.sort_by(|a, b| b.0.cmp(&a.0));
-            files.truncate(IN_USE_FILE_CAP);
+            files.truncate(cap);
             files.into_iter().map(|(_, p)| p).collect()
         }
     }
@@ -305,16 +307,25 @@ fn processes_using_files(files: &[PathBuf]) -> Option<String> {
 }
 
 pub fn in_use_reason(conn: &Connection, path: &str, kind: ItemKind) -> Option<String> {
+    in_use_reason_capped(conn, path, kind, IN_USE_FILE_CAP)
+}
+
+pub fn in_use_reason_capped(
+    conn: &Connection,
+    path: &str,
+    kind: ItemKind,
+    cap: usize,
+) -> Option<String> {
     match kind {
         ItemKind::File => processes_using_files(&[PathBuf::from(path)]),
-        ItemKind::Dir => processes_using_files(&largest_files(conn, path)),
+        ItemKind::Dir => processes_using_files(&largest_files(conn, path, cap)),
         ItemKind::Link => None,
     }
 }
 
 fn dir_has_placeholder(conn: &Connection, node_id: i64) -> anyhow::Result<bool> {
     Ok(conn.query_row(
-        "WITH RECURSIVE d(id) AS (SELECT ?1 UNION ALL SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE n.kind = 0) \
+        "WITH RECURSIVE d(id) AS (SELECT ?1 UNION ALL SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE +n.kind = 0) \
          SELECT EXISTS(SELECT 1 FROM node f WHERE f.parent_id IN (SELECT id FROM d) AND (f.flags & ?2) != 0)",
         rusqlite::params![node_id, index::FLAG_PLACEHOLDER],
         |r| r.get(0),
@@ -386,7 +397,7 @@ pub fn examine(
         ItemKind::Link => {}
     }
     ex.node_id = node.map(|n| n.id);
-    let in_use = in_use_reason(conn, path, state.kind);
+    let in_use = in_use_reason_capped(conn, path, state.kind, PROPOSE_IN_USE_FILE_CAP);
     ex.block = if let Some(r) = &in_use {
         Some(r.clone())
     } else if action.reads_data() && placeholder {

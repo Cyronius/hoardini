@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { routes } from "../api/client";
-import type { Destination, DestinationInput, DestinationTest } from "../api/types";
-import { humanBytes } from "../format";
+import { ApiError, routes } from "../api/client";
+import type { ArchiveEntry, Destination, DestinationInput, DestinationTest } from "../api/types";
+import { fileName, humanBytes } from "../format";
 import { EditIcon, FolderIcon, PlusIcon, TrashIcon } from "../components/icons";
 import { IconButton } from "../components/IconButton";
 import { blankRc, RcloneFields, rcFromConfig, rcloneConfig, rcValid, type RcDraft } from "./RcloneForm";
-import { btnDanger, btnPrimary, btnSecondary, ErrorLine, errMsg, field, Field } from "./ui";
+import { useStore } from "../store";
+import { btnDanger, btnPrimary, btnSecondary, ErrorLine, errMsg, field, Field, Section } from "./ui";
 
 type Draft = {
   id?: string;
@@ -15,6 +16,7 @@ type Draft = {
   unc: string;
   user: string;
   password: string;
+  passwordRef?: string;
   remote: string;
   remotePath: string;
   rc: RcDraft;
@@ -22,18 +24,20 @@ type Draft = {
 
 const blank = (): Draft => ({ name: "", kind: "local", path: "", unc: "", user: "", password: "", remote: "", remotePath: "", rc: blankRc() });
 
+// Core reads smb as config.path (UNC), config.username, and config.password (a secret:// ref).
 function toDraft(d: Destination): Draft {
   const c = d.config as Record<string, string | undefined>;
   return {
     id: d.id,
     name: d.name,
     kind: d.kind,
-    path: c.path ?? "",
-    unc: c.unc ?? "",
-    user: c.user ?? "",
+    path: d.kind === "local" ? (c.path ?? "") : "",
+    unc: d.kind === "smb" ? (c.path ?? "") : "",
+    user: c.username ?? "",
     password: "",
+    passwordRef: c.password,
     remote: c.remote ?? "",
-    remotePath: c.path ?? "",
+    remotePath: d.kind === "rclone" ? (c.path ?? "") : "",
     rc: d.kind === "rclone" ? rcFromConfig(d.config) : blankRc(),
   };
 }
@@ -48,7 +52,7 @@ function DestForm({ draft, setDraft, onSave, onCancel, error }: { draft: Draft; 
       if (r.path) setDraft({ ...draft, path: r.path });
       setPickErr(null);
     } catch (e) {
-      setPickErr(errMsg(e).includes("501") || /not implemented/i.test(errMsg(e)) ? "No folder dialog in headless mode; type the path." : errMsg(e));
+      setPickErr(e instanceof ApiError && e.status === 501 ? "No folder dialog in headless mode; type the path." : errMsg(e));
     }
   };
   const valid = draft.name.trim() && (draft.kind === "local" ? draft.path.trim() : draft.kind === "smb" ? draft.unc.trim().startsWith("\\\\") : draft.remote.trim() && rcValid(draft.rc));
@@ -135,12 +139,12 @@ export function DestinationsTab() {
         draft.kind === "local"
           ? { path: draft.path.trim() }
           : draft.kind === "smb"
-            ? { unc: draft.unc.trim(), user: draft.user.trim() || undefined }
+            ? { path: draft.unc.trim(), username: draft.user.trim() || undefined, password: draft.passwordRef }
             : await rcloneConfig(draft.rc, slug(draft.remote || draft.name), draft.remotePath.trim(), slug(draft.remote || draft.name));
       if (draft.kind === "smb" && draft.password) {
-        const ref = `secret://destination/${slug(draft.name)}/password`;
+        const ref = draft.passwordRef ?? `secret://destination/${slug(draft.name)}/password`;
         await routes.putSecret(ref, draft.password);
-        config.password_ref = ref;
+        config.password = ref;
       }
       const body: DestinationInput = { name: draft.name.trim(), kind: draft.kind, config };
       if (draft.id) await routes.updateDestination(draft.id, body);
@@ -184,7 +188,7 @@ export function DestinationsTab() {
             );
           }
           const t = tests[d.id];
-          const where = (d.kind === "rclone" ? `${d.config.remote}:${d.config.path ?? ""}` : (d.config.path ?? d.config.unc ?? d.config.remote ?? "")) as string;
+          const where = (d.kind === "rclone" ? `${d.config.remote ?? ""}:${d.config.path ?? ""}` : (d.config.path ?? "")) as string;
           return (
             <li key={d.id} className="rounded-xl border border-line-soft bg-ink-850 p-2.5">
               <div className="flex items-center gap-2">
@@ -237,6 +241,74 @@ export function DestinationsTab() {
           );
         })}
       </ul>
+      <ArchivedList destinations={rows ?? []} />
     </div>
+  );
+}
+
+function ArchivedList({ destinations }: { destinations: Destination[] }) {
+  const [q, setQ] = useState("");
+  const [rows, setRows] = useState<ArchiveEntry[] | null>(null);
+  const [jobsById, setJobsById] = useState<Record<number, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  const jobs = useStore((s) => s.jobs);
+
+  const load = useCallback(() => {
+    routes
+      .archive(q.trim() || undefined)
+      .then(setRows)
+      .catch((e) => setError(errMsg(e)));
+  }, [q]);
+  useEffect(() => {
+    const t = setTimeout(load, 200);
+    return () => clearTimeout(t);
+  }, [load]);
+  const finished = Object.values(jobsById).filter((id) => ["done", "failed"].includes(jobs[id]?.status ?? "")).length;
+  useEffect(() => {
+    if (finished) load();
+  }, [finished, load]);
+
+  const restore = async (id: number) => {
+    setError(null);
+    try {
+      const r = await routes.restoreArchive(id);
+      setJobsById((m) => ({ ...m, [id]: r.job_id }));
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
+
+  return (
+    <Section title="Archived items">
+      <input className={field} value={q} placeholder="Search original paths" onChange={(e) => setQ(e.target.value)} />
+      <ErrorLine error={error} />
+      {rows?.length === 0 && <div className="text-muted">{q.trim() ? "Nothing archived matches." : "Nothing archived yet."}</div>}
+      <ul className="space-y-1.5">
+        {rows?.map((a) => {
+          const job = jobsById[a.id] ? jobs[jobsById[a.id]!] : undefined;
+          const dest = destinations.find((d) => d.id === a.destination_id)?.name ?? "removed destination";
+          return (
+            <li key={a.id} className="flex items-center gap-2 rounded-xl border border-line-soft bg-ink-850 px-2.5 py-1.5">
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-semibold" title={a.original_path}>
+                  {fileName(a.original_path)}
+                </div>
+                <div className="truncate text-[length:var(--fs-xs)] text-faint" title={a.dest_uri}>
+                  {humanBytes(a.size)} · {dest} · {new Date(a.archived_ms).toLocaleDateString()}
+                </div>
+                {job?.status === "failed" && <div className="text-[length:var(--fs-xs)] text-err">{job.error ?? "Restore failed."}</div>}
+              </div>
+              {a.restored_ms ? (
+                <span className="shrink-0 text-[length:var(--fs-sm)] text-ok">restored</span>
+              ) : (
+                <button className={btnSecondary} disabled={!!job && job.status !== "failed"} onClick={() => void restore(a.id)}>
+                  {job && job.status !== "failed" ? "Restoring..." : "Restore"}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </Section>
   );
 }

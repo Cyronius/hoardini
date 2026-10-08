@@ -2,6 +2,7 @@ use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use hoardini_agent::provider::{Caps, Client, ProviderConfig, ProviderView, presets};
+use hoardini_agent::search;
 use hoardini_core::store::{get_meta, now_ms, set_meta};
 use hoardini_core::vault::{SecretStore, is_ref};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -413,9 +414,28 @@ pub async fn search_activate(State(s): State<AppState>, Path(kind): Path<String>
     Ok(Json(json!({"ok": true})))
 }
 
-pub async fn search_test(Path(kind): Path<String>) -> ApiResult {
+pub async fn search_test(State(s): State<AppState>, Path(kind): Path<String>) -> ApiResult {
     check_kind(&kind)?;
-    Err(ApiError::unimplemented(
-        "web search testing is not available yet",
-    ))
+    let kind: search::Kind = serde_json::from_value(Value::String(kind))?;
+    let st = s.clone();
+    let found = blocking(move || {
+        Ok(search::configured(
+            &st.db.conn()?,
+            st.secrets.as_ref(),
+            Some(kind),
+        )?)
+    })
+    .await?;
+    let Some((cfg, key)) = found else {
+        return Err(ApiError::not_found("search provider"));
+    };
+    let mut report = search::test(&cfg, key.as_deref()).await;
+    // The provider's error text could quote the key back.
+    if let (Some(k), Some(e)) = (
+        key.as_deref().filter(|k| k.len() >= 4),
+        report.error.as_mut(),
+    ) {
+        *e = e.replace(k, "[key]");
+    }
+    Ok(Json(json!(report)))
 }

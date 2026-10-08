@@ -25,9 +25,14 @@ export function Greeting({ onAsk }: { onAsk: (text: string) => void }) {
         {refreshing && pct != null ? ` · refresh ${Math.round(pct * 100)}%` : ""}
       </div>
       <div className="mt-1.5 space-y-1 text-paper-dim">
-        {vol && (
+        {vol && (delta !== 0 || summary.movers.length > 0) && (
           <p>
             Since then, {vol.root.replace(/\\$/, "")} {delta < 0 ? "lost" : "gained"} {humanBytes(Math.abs(delta))} ({humanBytes(vol.free_bytes)} free).
+          </p>
+        )}
+        {vol && delta === 0 && summary.movers.length === 0 && (
+          <p>
+            {vol.root.replace(/\\$/, "")} has {humanBytes(vol.free_bytes)} free.
           </p>
         )}
         {summary.movers.length > 0 && (

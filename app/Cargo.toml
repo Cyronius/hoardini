@@ -19,4 +19,3 @@ hoardini-server = { path = "../crates/server" }
 tauri = { version = "2", default-features = false, features = ["wry", "compression"] }
 tauri-plugin-dialog = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }

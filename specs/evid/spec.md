@@ -53,7 +53,14 @@ skips the read and reports identity "unknown (no access)".
 **Verification:** test
 
 `inspect` shall list the processes that hold a file open (Restart Manager). For a directory it shall check the files inside,
-largest first, up to a cap (default 500).
+largest first, up to a cap of 64 (`evidence::inuse::DIR_FILE_CAP`). Evidence is advisory; the policy gate checks up to 500
+files of a folder at proposal and execution time (POLICY-IN-USE).
+
+Measured 2026-10-08 on this PC (heavily loaded, debug build, C: index of 936k dirs, 5.9M files): one Restart Manager
+session over the 500 largest files of a cold folder took 10–76 s, over 64 files 1–8 s, warm 0.1–0.4 s. Asking the kernel
+per file (`FileProcessIdsUsingFileInformation`) was slower still (≈ 0.18 s per file), so the cap is the lever. With the cap
+and the subtree-query fix, `inspect` of `~\.lmstudio` took 0.7–1.9 s per call (Restart Manager ≈ 1.3 s of it; one 12 s
+outlier under load), against 11.4 s before. Folders of 6k+ files elsewhere on C: inspected in 0.6–1.4 s.
 
 **Acceptance criteria:**
 - A file held open is reported with the holder's process name and pid; once the handle is closed it is not.

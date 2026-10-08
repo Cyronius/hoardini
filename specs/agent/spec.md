@@ -137,11 +137,21 @@ Provider failures shall end the run with `RUN_ERROR` carrying a readable message
 **Applies to:** hoardini
 **Verification:** test
 
-Profiles flagged `small` shall get only `top_dirs`, `top_files`, `changes`, `inspect`, `recall`, `remember` and the four `propose_*` tools, and a shorter system prompt. Other profiles get every registered tool.
+Profiles flagged `small` shall get only `top_dirs`, `top_files`, `changes`, `inspect`, `recall`, `remember` and the four `propose_*` tools, and a shorter system prompt. Other profiles get every registered tool that is available (AGENT-WEB-SEARCH).
 
 **Acceptance criteria:**
-- The small request's `tools` are exactly those ten names; the full request's are `Registry::full().names()` in order.
+- The small request's `tools` are exactly those ten names; the full request's are `Registry::full().names()` in order, without `web_search` (off by default).
 - The small system prompt is less than half the length of the full one.
+
+### AGENT-WEB-SEARCH: Web search is a tool only when the user turned it on
+**Applies to:** hoardini
+**Verification:** test
+
+`web_search(query)` shall be offered to the model only while `meta.web_search_enabled` is true and a `search_provider` row is active. It searches with that provider (its key read from the vault, the query sanitized and cached per SRCH-QUERY-HYGIENE and SRCH-CACHE) and returns `search::format_for_llm` output, so results reach the model only inside the `<<<UNTRUSTED_WEB_CONTENT` delimiters. Called while search is off, it answers with an `Error:` that points at Settings. It is not part of the small toolset.
+
+**Acceptance criteria:**
+- With an active SearXNG stand-in provider and the setting off, the request's tools lack `web_search`; with the setting on they include it; with the setting on and no active provider they lack it again.
+- A `web_search` call is answered with text that starts with `<<<UNTRUSTED_WEB_CONTENT`, ends with `UNTRUSTED_WEB_CONTENT>>>`, and contains the stand-in's first result URL.
 
 ### AGENT-PROMPT-CONTEXT: What the system prompt carries
 **Applies to:** hoardini

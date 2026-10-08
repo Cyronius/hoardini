@@ -130,12 +130,9 @@ function ItemRow({
           <span className="block truncate text-[length:var(--fs-xs)] text-faint" title={item.path}>
             {item.path}
           </span>
-          {item.cap && (
-            <span className="block text-[length:var(--fs-xs)] text-brass">
-              Capped to "{VERDICT_LABEL[item.cap]}" by a rule{item.reason ? `: ${item.reason}` : ""}
-            </span>
-          )}
-          {!item.cap && item.reason && <span className="block text-[length:var(--fs-xs)] text-muted">{item.reason}</span>}
+          {item.reason && <span className="block text-[length:var(--fs-xs)] text-muted">{item.reason}</span>}
+          {/* `reason` is the model's; the cap comes from policy code, so they are never joined into one sentence. */}
+          {item.cap && !blocked && <span className="block text-[length:var(--fs-xs)] text-brass">Capped to "{VERDICT_LABEL[item.cap]}" by a safety rule</span>}
           {item.block_reason && <span className="block text-[length:var(--fs-xs)] font-semibold text-err">Blocked: {item.block_reason}</span>}
           {item.status === "failed" && item.detail && <span className="block text-[length:var(--fs-xs)] text-err">{item.detail}</span>}
           {(item.status === "done" || item.status === "skipped") && (

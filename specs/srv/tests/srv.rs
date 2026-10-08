@@ -367,7 +367,8 @@ async fn first_agent_run_seeds_an_active_lm_studio_profile() {
             .unwrap()
             .starts_with("text/event-stream")
     );
-    let _ = resp.text().await;
+    // Seeding happens before streaming; dropping the stream cancels the run so no real model is called.
+    drop(resp);
     let (_, after) = f.call("GET", "/api/providers", None).await;
     assert_eq!(after[0]["name"], "LM Studio");
     assert_eq!(after[0]["is_active"], true);
@@ -492,4 +493,155 @@ async fn status_stream_sends_an_initial_status_frame() {
     assert_eq!(v["running_runs"], 0);
     drop(resp);
     let _ = f.h.shutdown.send(());
+}
+
+// An OpenAI-compatible stream that sends one text chunk and then hangs.
+async fn stalled_llm() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 65536];
+                let _ = s.read(&mut buf).await;
+                let chunk =
+                    json!({"choices": [{"index": 0, "delta": {"content": "Thinking about"}}]});
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+                let _ = s
+                    .write_all(format!("{head}data: {chunk}\n\n").as_bytes())
+                    .await;
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            });
+        }
+    });
+    format!("http://{addr}/v1")
+}
+
+// Traces: SRV-RUN-CANCEL
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_closes_the_open_message_and_ends_with_run_finished() {
+    let f = Fixture::new().await;
+    let base = stalled_llm().await;
+    let (_, p) = f
+        .call(
+            "POST",
+            "/api/providers",
+            Some(json!({"name": "stall", "base_url": base, "model": "m"})),
+        )
+        .await;
+    let id = p["id"].as_str().unwrap();
+    f.call("POST", &format!("/api/providers/{id}/activate"), None)
+        .await;
+    let mut resp = f
+        .authed("POST", "/api/agent/run")
+        .json(&json!({"threadId": "t-cancel", "runId": "r-cancel", "messages": [{"id": "u1", "role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    let mut text = String::new();
+    let mut cancelled = false;
+    while let Ok(Some(chunk)) = tokio::time::timeout(Duration::from_secs(10), resp.chunk())
+        .await
+        .unwrap()
+    {
+        text.push_str(&String::from_utf8_lossy(&chunk));
+        if !cancelled && text.contains("TEXT_MESSAGE_CONTENT") {
+            let (_, st) = f.call("GET", "/api/status", None).await;
+            assert_eq!(st["running_runs"], 1);
+            f.call("POST", "/api/agent/runs/r-cancel/cancel", None)
+                .await;
+            cancelled = true;
+        }
+    }
+    let types: Vec<String> = text
+        .split("\n\n")
+        .filter_map(|f| f.strip_prefix("data: "))
+        .map(|d| {
+            serde_json::from_str::<Value>(d).unwrap()["type"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert!(cancelled);
+    assert_eq!(
+        types[types.len() - 2..],
+        ["TEXT_MESSAGE_END", "RUN_FINISHED"],
+        "{types:?}"
+    );
+    let (_, st) = f.call("GET", "/api/status", None).await;
+    assert_eq!(st["running_runs"], 0);
+    let _ = f.h.shutdown.send(());
+}
+
+fn journal_fake_indexer(dir: &Path) -> PathBuf {
+    let log = dir.join("kinds.txt");
+    let script = dir.join("journal-indexer.cmd");
+    let body = format!(
+        "@echo off\r\necho %7 %9>>\"{log}\"\r\nif \"%9\"==\"journal\" goto needs\r\necho {{\"type\":\"start\",\"volume\":\"C:\\\\\",\"mode\":\"%7\",\"gen\":1,\"kind\":\"full\"}}\r\necho {{\"type\":\"done\",\"kind\":\"full\",\"scan_id\":1,\"duration_ms\":5}}\r\nexit /b 0\r\n:needs\r\necho {{\"type\":\"needs_full\",\"reason\":\"no_position\"}}\r\nexit /b 3\r\n",
+        log = log.display(),
+    );
+    std::fs::write(&script, body).unwrap();
+    script
+}
+
+// Traces: SRV-JOURNAL-REFRESH
+#[tokio::test(flavor = "multi_thread")]
+async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("h.db");
+    let db = hoardini_core::store::Db::open(&db_path).unwrap();
+    hoardini_core::store::set_meta(&db.conn().unwrap(), "journal_every_s", "1").unwrap();
+    let h = start_with(
+        ServerOptions {
+            port: 0,
+            token: Some(TOKEN.into()),
+            db_path,
+            ui_dir: None,
+            dialogs: None,
+            refresh_on_start: true,
+            indexer_exe: Some(journal_fake_indexer(dir.path())),
+        },
+        Some(Arc::new(MemStore::default())),
+    )
+    .await
+    .unwrap();
+    let http = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/api/status", h.port);
+    let log = dir.path().join("kinds.txt");
+    let mut kinds: Vec<String> = Vec::new();
+    let mut loud_after_launch = false;
+    for _ in 0..200 {
+        kinds = std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| l.trim().to_string())
+            .collect();
+        if kinds.len() >= 3 {
+            break;
+        }
+        if kinds.len() >= 2 {
+            let s: Value = http
+                .get(&url)
+                .bearer_auth(TOKEN)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            loud_after_launch |= s["index"]["state"] == "refreshing";
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        kinds[..3],
+        ["background auto", "background journal", "background full"]
+    );
+    assert!(
+        !loud_after_launch,
+        "a short timer-driven refresh must not show as refreshing"
+    );
+    let _ = h.shutdown.send(());
 }
