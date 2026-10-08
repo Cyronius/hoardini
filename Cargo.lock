@@ -645,6 +645,8 @@ dependencies = [
  "futures",
  "hoardini-core",
  "reqwest",
+ "rusqlite",
+ "secrecy",
  "serde",
  "serde_json",
  "thiserror",
@@ -698,10 +700,12 @@ dependencies = [
 name = "hoardini-specs"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "hoardini-agent",
  "hoardini-core",
  "hoardini-server",
  "hoardini-win",
+ "secrecy",
  "serde_json",
  "tempfile",
  "tokio",

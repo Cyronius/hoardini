@@ -57,10 +57,12 @@ name = "srch"
 path = "srch/tests/srch.rs"
 
 [dev-dependencies]
+anyhow = "1.0.104"
 hoardini-agent = { path = "../crates/agent" }
 hoardini-core = { path = "../crates/core" }
 hoardini-server = { path = "../crates/server" }
 hoardini-win = { path = "../crates/win" }
+secrecy = "0.10.3"
 serde_json = "1.0.151"
 tempfile = "3.27.0"
 tokio = { version = "1.53.2", features = ["full"] }
