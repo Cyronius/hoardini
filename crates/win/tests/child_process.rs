@@ -92,11 +92,57 @@ fn child_memcap() {
     println!("capped at {CAP}, working set {ws}, 256 MB reserve refused");
 }
 
+// The indexer caps itself in its own job, so the supervisor's kill-on-close job must still reach it.
+fn child_capped_sleeper() {
+    let _job = cap_process_memory(CAP).unwrap();
+    println!("capped");
+    std::thread::sleep(std::time::Duration::from_secs(60));
+}
+
+fn kill_on_close() -> bool {
+    use std::io::{BufRead, BufReader};
+    use std::os::windows::io::AsRawHandle;
+    use std::time::{Duration, Instant};
+
+    let job = KillOnCloseJob::new().unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .env(ROLE, "capped_sleeper")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    job.assign(child.as_raw_handle()).unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert_eq!(line.trim(), "capped");
+    assert!(child.try_wait().unwrap().is_none(), "sleeper is running");
+    drop(job);
+    let end = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < end {
+        if child.try_wait().unwrap().is_some() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    false
+}
+
 fn main() -> ExitCode {
     match std::env::var(ROLE).as_deref() {
         Ok("background") => child_background(),
         Ok("memcap") => child_memcap(),
+        Ok("capped_sleeper") => child_capped_sleeper(),
         _ => {
+            let killed = kill_on_close();
+            println!(
+                "kill-on-close job: {}",
+                if killed { "ok" } else { "FAILED" }
+            );
+            if !killed {
+                return ExitCode::FAILURE;
+            }
             let mut failed = 0;
             for role in ["background", "memcap"] {
                 let (ok, out) = spawn(role);

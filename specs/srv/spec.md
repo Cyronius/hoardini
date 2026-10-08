@@ -42,15 +42,31 @@ Non-`/api` paths shall serve the UI (from `--ui-dir`, else the embedded build, e
 **Applies to:** hoardini-server
 **Verification:** test
 
-The server shall run at most one indexer child at a time. `POST /api/index/refresh` answers `{started:false}` while a refresh runs, except that `fast` during a `background` refresh stops the child and restarts the same volume in fast mode (`{started:true}`). Progress lines from the child appear in `Status.index.progress`. The child is killed on shutdown.
+The server shall run at most one indexer child at a time. `POST /api/index/refresh` answers `{started:false}` while a refresh runs, except that `fast` during a `background` refresh stops the child and restarts the same volume in fast mode (`{started:true}`). Progress lines from the child appear in `Status.index.progress`. The child is killed on shutdown, and it joins a kill-on-close Job Object so it also dies when the server process is killed outright.
 
 **Acceptance criteria:**
 - With a fake indexer: `background` → started; a second `background` → not started; status shows `refreshing` with the child's progress.
 - `fast` during that refresh → started; the indexer was spawned exactly twice, in modes `background` then `fast`; a second `fast` → not started.
 
 **Verification (manual, shutdown):**
-1. `hoardini serve --port 7043 --token dev` and POST a `background` refresh.
+1. `hoardini --db %TEMP%\h-kill.db serve --port 7044 --token dev` (it indexes C: in background mode at launch).
 2. Press Ctrl+C; in Task Manager confirm no `hoardini.exe index` child remains.
+3. Start it again; while the refresh runs, end the server process outright (Task Manager → End task on the `serve` process, or `taskkill /F /PID <pid>`). Within a second the `hoardini.exe index` child is gone too. (2026-10-08: child gone 2 s after a hard kill.)
+4. Delete `%TEMP%\h-kill.db*`.
+
+### SRV-JOURNAL-REFRESH: The index stays current while the app is open
+**Applies to:** hoardini-server
+**Verification:** test
+
+Launch (`refresh_on_start`) and every user refresh shall spawn the indexer with `--kind auto`. While the server runs with `refresh_on_start` and no refresh is running, it shall spawn `--kind journal` in background mode every `meta.journal_every_s` seconds (default 180). When that child reports `needs_full` (or exits 3), the server runs `--kind full` in background mode for the same volume; this is not an error. A timer-driven run shows as `idle` in `Status.index` unless it has run for more than 4 s; a user refresh asked for during one waits for it and starts next (`{started:true}`).
+
+**Acceptance criteria:**
+- With `journal_every_s = 1` and a fake indexer that answers `--kind journal` with `needs_full` and exit code 3: the spawns are `background auto`, `background journal`, `background full`, and `/api/status` never reports `refreshing` after the launch refresh has finished.
+
+**Verification (manual, live journal):**
+1. Point meta `indexed_volumes` at a test folder, set meta `journal_every_s` to 15, and start `hoardini serve`.
+2. Add a 3 MB file to the folder. Within 15 s the log shows `index refresh done kind="journal" ... dirty_dirs=Some(2)` and `hoardini top --files --under <folder>` lists the file; the header never leaves "Index just now".
+3. Clear `volume.usn_journal_id`/`usn_next` in the database: the next timer run logs `journal refresh not possible; running a full refresh ... reason="no_position"`, then a `kind="full"` done line, and the run after that is a journal one again.
 
 ### SRV-SETTINGS: Settings round trip
 **Applies to:** hoardini-server

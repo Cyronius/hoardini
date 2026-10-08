@@ -493,3 +493,74 @@ async fn status_stream_sends_an_initial_status_frame() {
     drop(resp);
     let _ = f.h.shutdown.send(());
 }
+
+fn journal_fake_indexer(dir: &Path) -> PathBuf {
+    let log = dir.join("kinds.txt");
+    let script = dir.join("journal-indexer.cmd");
+    let body = format!(
+        "@echo off\r\necho %7 %9>>\"{log}\"\r\nif \"%9\"==\"journal\" goto needs\r\necho {{\"type\":\"start\",\"volume\":\"C:\\\\\",\"mode\":\"%7\",\"gen\":1,\"kind\":\"full\"}}\r\necho {{\"type\":\"done\",\"kind\":\"full\",\"scan_id\":1,\"duration_ms\":5}}\r\nexit /b 0\r\n:needs\r\necho {{\"type\":\"needs_full\",\"reason\":\"no_position\"}}\r\nexit /b 3\r\n",
+        log = log.display(),
+    );
+    std::fs::write(&script, body).unwrap();
+    script
+}
+
+// Traces: SRV-JOURNAL-REFRESH
+#[tokio::test(flavor = "multi_thread")]
+async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("h.db");
+    let db = hoardini_core::store::Db::open(&db_path).unwrap();
+    hoardini_core::store::set_meta(&db.conn().unwrap(), "journal_every_s", "1").unwrap();
+    let h = start_with(
+        ServerOptions {
+            port: 0,
+            token: Some(TOKEN.into()),
+            db_path,
+            ui_dir: None,
+            dialogs: None,
+            refresh_on_start: true,
+            indexer_exe: Some(journal_fake_indexer(dir.path())),
+        },
+        Some(Arc::new(MemStore::default())),
+    )
+    .await
+    .unwrap();
+    let http = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/api/status", h.port);
+    let log = dir.path().join("kinds.txt");
+    let mut kinds: Vec<String> = Vec::new();
+    let mut loud_after_launch = false;
+    for _ in 0..200 {
+        kinds = std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| l.trim().to_string())
+            .collect();
+        if kinds.len() >= 3 {
+            break;
+        }
+        if kinds.len() >= 2 {
+            let s: Value = http
+                .get(&url)
+                .bearer_auth(TOKEN)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            loud_after_launch |= s["index"]["state"] == "refreshing";
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        kinds[..3],
+        ["background auto", "background journal", "background full"]
+    );
+    assert!(
+        !loud_after_launch,
+        "a short timer-driven refresh must not show as refreshing"
+    );
+    let _ = h.shutdown.send(());
+}
