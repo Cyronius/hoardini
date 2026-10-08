@@ -1,0 +1,17 @@
+: hand-written; mirrors OpenAI chat.completions streaming with two indexed tool calls and a trailing usage chunk
+data: {"id":"chatcmpl-A1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_aaa","type":"function","function":{"name":"get_free_space","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-A1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"dri"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-A1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ve\":\"C\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-A1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_bbb","type":"function","function":{"name":"get_free_space","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-A1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"drive\":\"D\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-A1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"chatcmpl-A1","object":"chat.completion.chunk","created":1,"model":"gpt-4o-mini","choices":[],"usage":{"prompt_tokens":71,"completion_tokens":38,"total_tokens":109}}
+
+data: [DONE]
+

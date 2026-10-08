@@ -1,0 +1,11 @@
+: hand-written; mirrors DeepSeek/Cerebras reasoning_content followed by content, usage on the final choice chunk
+data: {"id":"ds-1","object":"chat.completion.chunk","created":1,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":""},"finish_reason":null}]}
+
+data: {"id":"ds-1","object":"chat.completion.chunk","created":1,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"content":null,"reasoning_content":"Check sizes first."},"finish_reason":null}]}
+
+data: {"id":"ds-1","object":"chat.completion.chunk","created":1,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"content":"Delete the temp folder.","reasoning_content":null},"finish_reason":null}]}
+
+data: {"id":"ds-1","object":"chat.completion.chunk","created":1,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"content":"","reasoning_content":null},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":15,"total_tokens":35}}
+
+data: [DONE]
+

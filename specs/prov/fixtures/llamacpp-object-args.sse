@@ -1,0 +1,7 @@
+: hand-written; mirrors a server that sends tool-call arguments as a JSON object instead of a string
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_obj1","type":"function","function":{"name":"get_free_space","arguments":{"drive":"C"}}}]}}],"id":"chatcmpl-lc2","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":"tool_calls","index":0,"delta":{}}],"id":"chatcmpl-lc2","object":"chat.completion.chunk"}
+
+data: [DONE]
+

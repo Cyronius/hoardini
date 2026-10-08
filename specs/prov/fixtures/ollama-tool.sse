@@ -1,0 +1,7 @@
+: hand-written; mirrors Ollama /v1 sending a whole tool call in one chunk with finish_reason stop
+data: {"id":"chatcmpl-381","object":"chat.completion.chunk","created":1,"model":"llama3.2:3b","system_fingerprint":"fp_ollama","choices":[{"index":0,"delta":{"role":"assistant","content":"","tool_calls":[{"id":"call_k1x9m2ab","index":0,"type":"function","function":{"name":"get_free_space","arguments":"{\"drive\":\"C\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-381","object":"chat.completion.chunk","created":1,"model":"llama3.2:3b","system_fingerprint":"fp_ollama","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop"}]}
+
+data: [DONE]
+

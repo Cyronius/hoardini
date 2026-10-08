@@ -1,0 +1,3 @@
+: hand-written; mirrors HTTP 200 whose SSE data carries an error object
+data: {"error":{"message":"The model `gpt-9` does not exist or you do not have access to it.","type":"invalid_request_error","code":"model_not_found"}}
+

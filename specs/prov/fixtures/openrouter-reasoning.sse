@@ -1,0 +1,21 @@
+: hand-written; mirrors OpenRouter keep-alive comments and the `reasoning` delta field
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1","provider":"Example","model":"deepseek/deepseek-r1","object":"chat.completion.chunk","created":1,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":"Let me think"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1","provider":"Example","model":"deepseek/deepseek-r1","object":"chat.completion.chunk","created":1,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":" about it."},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1","provider":"Example","model":"deepseek/deepseek-r1","object":"chat.completion.chunk","created":1,"choices":[{"index":0,"delta":{"role":"assistant","content":"Your "},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1","provider":"Example","model":"deepseek/deepseek-r1","object":"chat.completion.chunk","created":1,"choices":[{"index":0,"delta":{"role":"assistant","content":"disk is fine."},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1","provider":"Example","model":"deepseek/deepseek-r1","object":"chat.completion.chunk","created":1,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop","native_finish_reason":"stop"}]}
+
+data: {"id":"gen-1","provider":"Example","model":"deepseek/deepseek-r1","object":"chat.completion.chunk","created":1,"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":9,"total_tokens":21,"cost":0.00001}}
+
+data: [DONE]
+
