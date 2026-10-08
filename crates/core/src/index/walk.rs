@@ -16,14 +16,14 @@ use super::dedupe::SeenSet;
 use super::journal::JournalSource;
 use super::lister::{DirLister, list_fixed};
 use super::writer::{Chain, Dedupe, Work, Writer, load_chain};
-use super::{KIND_DIR, normalize_path, threshold_setting, to_i64, to_u64};
+use super::{KIND_DIR, bulk_indexes, normalize_path, threshold_setting, to_i64, to_u64};
 use crate::history::{self, ScanRecord};
 use crate::store::now_ms;
 
 const HOTSPOT_DIRS: usize = 16;
 const COMMIT_EVERY: Duration = Duration::from_secs(1);
-const IDLE_COMMIT_AFTER: Duration = Duration::from_millis(50);
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+const CHECKPOINT_EVERY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -196,7 +196,10 @@ fn worker_loop(q: &WorkQueue, lister: &dyn DirLister, tx: Sender<Listed>, cancel
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        let entries = list_fixed(lister, &work.path);
+        let entries = {
+            let _s = super::prof::span(super::prof::Phase::List);
+            list_fixed(lister, &work.path)
+        };
         if tx.send(Listed { work, entries }).is_err() {
             break;
         }
@@ -241,10 +244,6 @@ fn begin_generation(conn: &Connection, root: &str, vinfo: Option<&VolumeInfo>) -
                 conn.last_insert_rowid()
             }
         };
-        conn.execute(
-            "UPDATE node SET seen_gen = ?1 WHERE id = ?2",
-            params![generation, root_id],
-        )?;
         // An unfinished walk leaves stale rows for its end to delete, so no journal may resume from it.
         conn.execute(
             "UPDATE volume SET gen = ?1, root_node_id = ?2, serial = COALESCE(?3, serial), \
@@ -326,11 +325,13 @@ fn writer_loop(w: &mut Writer, rx: Receiver<Listed>, ctx: &LoopCtx) -> Result<bo
         let listed = match rx.try_recv() {
             Ok(l) => l,
             Err(TryRecvError::Empty) => {
-                // Release the write lock while idle so the app's patches are not starved.
-                if w.in_tx() && last_commit.elapsed() >= IDLE_COMMIT_AFTER {
+                // Idle: let the app's patches in, at most once a second (commits are slow at low I/O priority).
+                if w.in_tx() && last_commit.elapsed() >= COMMIT_EVERY {
+                    let _s = super::prof::span(super::prof::Phase::Commit);
                     w.commit()?;
                     last_commit = Instant::now();
                 }
+                let _s = super::prof::span(super::prof::Phase::Wait);
                 match rx.recv_timeout(Duration::from_millis(100)) {
                     Ok(l) => l,
                     Err(RecvTimeoutError::Timeout) => continue,
@@ -346,8 +347,13 @@ fn writer_loop(w: &mut Writer, rx: Receiver<Listed>, ctx: &LoopCtx) -> Result<bo
         {
             bail!("cannot list {}: {e}", listed.work.path);
         }
-        w.apply_listing(&listed.work, listed.entries, &mut subdirs)?;
-        if listed.work.node_id == ctx.root_id {
+        let is_root = listed.work.node_id == ctx.root_id;
+        let mut work = listed.work;
+        {
+            let _s = super::prof::span(super::prof::Phase::Apply);
+            w.apply_listing(&mut work, listed.entries, &mut subdirs)?;
+        }
+        if is_root {
             root_done = true;
         }
         for s in subdirs.drain(..) {
@@ -355,6 +361,7 @@ fn writer_loop(w: &mut Writer, rx: Receiver<Listed>, ctx: &LoopCtx) -> Result<bo
         }
         ctx.q.done_one();
         if w.writes >= ctx.opts.batch_rows || last_commit.elapsed() >= COMMIT_EVERY {
+            let _s = super::prof::span(super::prof::Phase::Commit);
             w.commit()?;
             last_commit = Instant::now();
         }
@@ -376,6 +383,58 @@ pub fn refresh(
     root: &str,
     opts: &RefreshOptions,
 ) -> Result<RefreshOutcome> {
+    let ckpt = Checkpointer::start(conn);
+    let out = walk_volume(conn, lister, root, opts);
+    let restored = ckpt.stop(conn);
+    let out = out?;
+    restored?;
+    Ok(out)
+}
+
+// Checkpoints sync twice and took seconds at very low I/O priority; a side connection runs them instead.
+struct Checkpointer {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Checkpointer {
+    fn start(conn: &Connection) -> Checkpointer {
+        let stop = Arc::new(AtomicBool::new(false));
+        let side = conn
+            .path()
+            .filter(|p| !p.is_empty())
+            .and_then(|p| Connection::open(p).ok());
+        let thread = side.and_then(|side| {
+            conn.execute_batch("PRAGMA wal_autocheckpoint = 0").ok()?;
+            let stop = stop.clone();
+            Some(std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    std::thread::park_timeout(CHECKPOINT_EVERY);
+                    let _ = side.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
+                }
+            }))
+        });
+        Checkpointer { stop, thread }
+    }
+
+    fn stop(self, conn: &Connection) -> Result<()> {
+        let Some(thread) = self.thread else {
+            return Ok(());
+        };
+        self.stop.store(true, Ordering::Relaxed);
+        thread.thread().unpark();
+        let _ = thread.join();
+        conn.execute_batch("PRAGMA wal_autocheckpoint = 1000")?;
+        Ok(())
+    }
+}
+
+fn walk_volume(
+    conn: &Connection,
+    lister: &dyn DirLister,
+    root: &str,
+    opts: &RefreshOptions,
+) -> Result<RefreshOutcome> {
     let started_ms = now_ms();
     let t0 = Instant::now();
     let root = normalize_path(root);
@@ -387,6 +446,12 @@ pub fn refresh(
     // Queried before the walk so changes made while it runs are replayed by the next journal refresh.
     let position = opts.journal.and_then(|j| j.query().ok());
     let begin = begin_generation(conn, &root, vinfo.as_ref())?;
+    let first_build = conn.query_row(
+        "SELECT COUNT(*) <= 1 FROM (SELECT 1 FROM node LIMIT 2)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )?;
+    bulk_indexes(conn, first_build)?;
     if let Some(cb) = opts.on_event {
         cb(Event::Start {
             volume: &root,
@@ -420,21 +485,19 @@ pub fn refresh(
                 continue;
             }
             let chain = load_chain(conn, id)?;
-            queue.push_hot(Work {
-                node_id: id,
-                path: super::path_of(conn, id)?.unwrap_or(path),
+            queue.push_hot(Work::existing(
+                id,
+                super::path_of(conn, id)?.unwrap_or(path),
                 chain,
-                is_new: false,
-            });
+            ));
             w.hot_ids.insert(id);
         }
     }
-    queue.push_rest(Work {
-        node_id: begin.root_id,
-        path: root.clone(),
-        chain: Chain::root(begin.root_id),
-        is_new: false,
-    });
+    queue.push_rest(Work::existing(
+        begin.root_id,
+        root.clone(),
+        Chain::root(begin.root_id),
+    ));
 
     let workers = opts.workers.max(1);
     let local_cancel = Arc::new(AtomicBool::new(false));
@@ -447,7 +510,8 @@ pub fn refresh(
         root_id: begin.root_id,
         has_hot: !w.hot_ids.is_empty(),
     };
-    let (tx, rx) = bounded::<Listed>(workers * 4);
+    // Deep enough that listers keep going through a slow commit (a listing averages ~7 entries).
+    let (tx, rx) = bounded::<Listed>(workers * 32);
     let walked = std::thread::scope(|s| {
         for _ in 0..workers {
             let tx = tx.clone();
@@ -495,9 +559,17 @@ pub fn refresh(
     emit_progress(&w, &ctx, "finalize");
     w.ensure_tx()?;
     let fin = (|| -> Result<()> {
-        w.resolve_groups(false)?;
-        out.rows_deleted = w.delete_unseen()?;
+        bulk_indexes(conn, false)?;
+        {
+            let _s = super::prof::span(super::prof::Phase::Gone);
+            out.rows_deleted = w.delete_gone()?;
+        }
+        {
+            let _s = super::prof::span(super::prof::Phase::Groups);
+            w.resolve_groups(false)?;
+        }
         w.flush_deltas()?;
+        let _s = super::prof::span(super::prof::Phase::Summary);
         out.indexed_bytes = root_alloc(conn, begin.root_id)?;
         let same_volume = vinfo
             .as_ref()
@@ -548,8 +620,12 @@ pub fn refresh(
         w.rollback();
         return Err(e);
     }
-    w.commit()?;
+    {
+        let _s = super::prof::span(super::prof::Phase::Commit);
+        w.commit()?;
+    }
     out.duration_ms = t0.elapsed().as_millis() as i64;
+    super::prof::report("full refresh");
     Ok(out)
 }
 

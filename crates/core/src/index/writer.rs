@@ -9,8 +9,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::dedupe::SeenSet;
 use super::{
-    FLAG_DENIED, FLAG_HARDLINK_DUP, FLAG_PLACEHOLDER, KIND_DIR, KIND_FILE, KIND_LINK, PathCache,
-    join_path, to_i64,
+    FLAG_DENIED, FLAG_HARDLINK_DUP, FLAG_PLACEHOLDER, FileId, KIND_DIR, KIND_FILE, KIND_LINK,
+    PathCache, join_path, to_i64,
 };
 
 const NAME_SURROGATE: u32 = 0x2000_0000;
@@ -131,16 +131,45 @@ pub(crate) fn load_chain(conn: &Connection, id: i64) -> Result<Arc<Chain>> {
     chain.ok_or_else(|| anyhow!("empty chain"))
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Prev {
+    pub small: Delta,
+    pub flags: i64,
+}
+
+pub(crate) struct NewDir {
+    parent: i64,
+    name: String,
+    vals: Vals,
+}
+
+// A new dir's row is written once, when it is listed; `prev`/`new_dir` are void after a foreign commit.
 pub(crate) struct Work {
     pub node_id: i64,
     pub path: String,
     pub chain: Arc<Chain>,
     pub is_new: bool,
+    prev: Option<Prev>,
+    new_dir: Option<Box<NewDir>>,
+    epoch: u64,
+}
+
+impl Work {
+    pub fn existing(node_id: i64, path: String, chain: Arc<Chain>) -> Work {
+        Work {
+            node_id,
+            path,
+            chain,
+            is_new: false,
+            prev: None,
+            new_dir: None,
+            epoch: 0,
+        }
+    }
 }
 
 struct Row {
     id: i64,
-    name: String,
     kind: i64,
     alloc: i64,
     logical: i64,
@@ -149,15 +178,30 @@ struct Row {
     ctime: Option<i64>,
     attrs: i64,
     reparse_tag: Option<i64>,
-    file_id: Option<Vec<u8>>,
+    file_id: Option<[u8; 16]>,
     flags: i64,
-    seen_gen: i64,
     sub: Delta,
+    small: Delta,
 }
 
 impl Row {
     fn contrib(&self) -> Delta {
         contrib(self.kind, self.flags, self.alloc, self.logical, self.sub)
+    }
+}
+
+#[derive(Default)]
+struct Existing(HashMap<String, Vec<Row>>);
+
+impl Existing {
+    fn take(&mut self, name: &str, kind: i64) -> Option<Row> {
+        let rows = self.0.get_mut(name)?;
+        let i = rows.iter().position(|r| r.kind == kind)?;
+        Some(rows.swap_remove(i))
+    }
+
+    fn into_rows(self) -> impl Iterator<Item = Row> {
+        self.0.into_values().flatten()
     }
 }
 
@@ -175,17 +219,18 @@ struct Vals {
 }
 
 impl Vals {
+    // Nothing reads a directory's access or creation time, and listing it moves its access time.
     fn from_entry(e: &DirEntry, kind: i64, flags: i64) -> Vals {
         let (alloc, logical) = if kind == KIND_FILE {
             (to_i64(e.alloc), to_i64(e.logical))
         } else {
             (0, 0)
         };
-        let t = |v: i64| (v != 0).then_some(v);
+        let t = |v: i64| (v != 0 && kind != KIND_DIR).then_some(v);
         Vals {
             alloc,
             logical,
-            mtime: t(e.mtime_ms),
+            mtime: (e.mtime_ms != 0).then_some(e.mtime_ms),
             atime: t(e.atime_ms),
             ctime: t(e.ctime_ms),
             attrs: i64::from(e.attrs),
@@ -204,7 +249,7 @@ impl Vals {
             && self.ctime == r.ctime
             && self.attrs == r.attrs
             && self.reparse_tag == r.reparse_tag
-            && self.file_id.as_ref().map(|f| f.as_slice()) == r.file_id.as_deref()
+            && self.file_id == r.file_id
             && self.flags == r.flags
     }
 }
@@ -233,13 +278,21 @@ pub(crate) struct Writer<'c> {
     regroup: HashSet<[u8; 16]>,
     deltas: HashMap<i64, Delta>,
     chains: HashMap<i64, Arc<Chain>>,
+    // A walk deletes nothing until it completes; these rows were missing from their parent's listing.
+    gone: Vec<i64>,
+    data_version: Option<i64>,
+    epoch: u64,
     in_tx: bool,
     pub writes: usize,
     pub stats: Stats,
 }
 
 const CHILD_COLS: &str = "id, name, kind, alloc, logical, mtime, atime, ctime, attrs, reparse_tag, \
-     file_id, flags, seen_gen, sub_alloc, sub_logical, sub_count";
+     file_id, flags, sub_alloc, sub_logical, sub_count, small_bytes, small_logical, small_count";
+
+fn fid(id: &Option<[u8; 16]>) -> Option<FileId> {
+    id.map(FileId)
+}
 
 impl<'c> Writer<'c> {
     pub fn new(
@@ -259,6 +312,9 @@ impl<'c> Writer<'c> {
             regroup: HashSet::new(),
             deltas: HashMap::new(),
             chains: HashMap::new(),
+            gone: Vec::new(),
+            data_version: None,
+            epoch: 0,
             in_tx: false,
             writes: 0,
             stats: Stats::default(),
@@ -274,6 +330,12 @@ impl<'c> Writer<'c> {
         if !self.in_tx {
             self.conn.execute_batch("BEGIN IMMEDIATE")?;
             self.in_tx = true;
+            let v: i64 = self
+                .conn
+                .query_row("PRAGMA data_version", [], |r| r.get(0))?;
+            if self.data_version.replace(v).is_some_and(|old| old != v) {
+                self.epoch += 1;
+            }
         }
         Ok(())
     }
@@ -332,33 +394,43 @@ impl<'c> Writer<'c> {
         Ok(c)
     }
 
-    fn self_row(&self, id: i64) -> Result<Option<(Delta, i64, i64)>> {
+    fn self_row(&self, id: i64) -> Result<Option<Prev>> {
         let mut st = self.conn.prepare_cached(
-            "SELECT small_bytes, small_logical, small_count, flags, seen_gen FROM node WHERE id = ?1",
+            "SELECT small_bytes, small_logical, small_count, flags FROM node WHERE id = ?1",
         )?;
         Ok(st
             .query_row([id], |r| {
-                Ok((
-                    Delta {
+                Ok(Prev {
+                    small: Delta {
                         alloc: r.get(0)?,
                         logical: r.get(1)?,
                         count: r.get(2)?,
                     },
-                    r.get(3)?,
-                    r.get(4)?,
-                ))
+                    flags: r.get(3)?,
+                })
             })
             .optional()?)
     }
 
-    fn children(&self, id: i64) -> Result<Vec<Row>> {
+    fn dir_row(&self, parent: i64, name: &str) -> Result<Option<i64>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT id FROM node WHERE parent_id = ?1 AND name = ?2 AND kind = 0 LIMIT 1",
+            )?
+            .query_row(params![parent, name], |r| r.get(0))
+            .optional()?)
+    }
+
+    fn children(&self, id: i64) -> Result<Existing> {
+        let _s = super::prof::span(super::prof::Phase::Children);
         let mut st = self.conn.prepare_cached(&format!(
             "SELECT {CHILD_COLS} FROM node WHERE parent_id = ?1"
         ))?;
+        let mut out = Existing::default();
         let rows = st.query_map([id], |r| {
-            Ok(Row {
+            let row = Row {
                 id: r.get(0)?,
-                name: r.get(1)?,
                 kind: r.get(2)?,
                 alloc: r.get(3)?,
                 logical: r.get(4)?,
@@ -367,20 +439,30 @@ impl<'c> Writer<'c> {
                 ctime: r.get(7)?,
                 attrs: r.get(8)?,
                 reparse_tag: r.get(9)?,
-                file_id: r.get(10)?,
+                file_id: r.get::<_, Option<FileId>>(10)?.map(|f| f.0),
                 flags: r.get(11)?,
-                seen_gen: r.get(12)?,
                 sub: Delta {
-                    alloc: r.get(13)?,
-                    logical: r.get(14)?,
-                    count: r.get(15)?,
+                    alloc: r.get(12)?,
+                    logical: r.get(13)?,
+                    count: r.get(14)?,
                 },
-            })
+                small: Delta {
+                    alloc: r.get(15)?,
+                    logical: r.get(16)?,
+                    count: r.get(17)?,
+                },
+            };
+            Ok((r.get::<_, String>(1)?, row))
         })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        for row in rows {
+            let (name, row) = row?;
+            out.0.entry(name).or_default().push(row);
+        }
+        Ok(out)
     }
 
     fn insert(&mut self, parent: i64, name: &str, v: &Vals) -> Result<i64> {
+        let _s = super::prof::span(super::prof::Phase::Write);
         let mut st = self.conn.prepare_cached(
             "INSERT INTO node(parent_id, volume_id, name, kind, alloc, logical, mtime, atime, ctime, \
              attrs, reparse_tag, file_id, flags, seen_gen) \
@@ -398,7 +480,7 @@ impl<'c> Writer<'c> {
             v.ctime,
             v.attrs,
             v.reparse_tag,
-            v.file_id,
+            fid(&v.file_id),
             v.flags,
             self.generation
         ])?;
@@ -406,20 +488,59 @@ impl<'c> Writer<'c> {
         Ok(self.conn.last_insert_rowid())
     }
 
+    // `work.chain` is the parent's chain until here; the row starts with its own listing's totals.
+    fn insert_dir(
+        &mut self,
+        work: &mut Work,
+        nd: &NewDir,
+        small: Delta,
+        sub: Delta,
+        flags: i64,
+    ) -> Result<()> {
+        let _s = super::prof::span(super::prof::Phase::Write);
+        let v = &nd.vals;
+        self.conn
+            .prepare_cached(
+                "INSERT INTO node(parent_id, volume_id, name, kind, mtime, attrs, reparse_tag, file_id, \
+                 flags, small_count, small_bytes, small_logical, sub_alloc, sub_logical, sub_count, seen_gen) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            )?
+            .execute(params![
+                nd.parent,
+                self.volume_id,
+                nd.name,
+                KIND_DIR,
+                v.mtime,
+                v.attrs,
+                v.reparse_tag,
+                fid(&v.file_id),
+                flags,
+                small.count,
+                small.alloc,
+                small.logical,
+                sub.alloc,
+                sub.logical,
+                sub.count,
+                self.generation
+            ])?;
+        self.writes += 1;
+        let id = self.conn.last_insert_rowid();
+        let parent_chain = work.chain.clone();
+        self.add_delta(&parent_chain, sub);
+        work.node_id = id;
+        work.chain = parent_chain.child(id);
+        Ok(())
+    }
+
     fn upsert_existing(&mut self, row: &Row, v: &Vals) -> Result<()> {
         if v.same_as(row) {
-            if row.seen_gen != self.generation {
-                self.conn
-                    .prepare_cached("UPDATE node SET seen_gen = ?1 WHERE id = ?2")?
-                    .execute(params![self.generation, row.id])?;
-                self.writes += 1;
-            }
             return Ok(());
         }
+        let _s = super::prof::span(super::prof::Phase::Write);
         self.conn
             .prepare_cached(
                 "UPDATE node SET alloc = ?1, logical = ?2, mtime = ?3, atime = ?4, ctime = ?5, \
-                 attrs = ?6, reparse_tag = ?7, file_id = ?8, flags = ?9, seen_gen = ?10 WHERE id = ?11",
+                 attrs = ?6, reparse_tag = ?7, file_id = ?8, flags = ?9 WHERE id = ?10",
             )?
             .execute(params![
                 v.alloc,
@@ -429,9 +550,8 @@ impl<'c> Writer<'c> {
                 v.ctime,
                 v.attrs,
                 v.reparse_tag,
-                v.file_id,
+                fid(&v.file_id),
                 v.flags,
-                self.generation,
                 row.id
             ])?;
         self.writes += 1;
@@ -439,19 +559,13 @@ impl<'c> Writer<'c> {
     }
 
     fn set_self(&mut self, id: i64, small: Delta, flags: i64) -> Result<()> {
+        let _s = super::prof::span(super::prof::Phase::Write);
         self.conn
             .prepare_cached(
-                "UPDATE node SET small_bytes = ?1, small_logical = ?2, small_count = ?3, flags = ?4, \
-                 seen_gen = ?5 WHERE id = ?6",
+                "UPDATE node SET small_bytes = ?1, small_logical = ?2, small_count = ?3, flags = ?4 \
+                 WHERE id = ?5",
             )?
-            .execute(params![
-                small.alloc,
-                small.logical,
-                small.count,
-                flags,
-                self.generation,
-                id
-            ])?;
+            .execute(params![small.alloc, small.logical, small.count, flags, id])?;
         self.writes += 1;
         Ok(())
     }
@@ -465,10 +579,8 @@ impl<'c> Writer<'c> {
              SELECT n.file_id FROM node n JOIN sub ON n.id = sub.id \
              WHERE n.kind = 1 AND n.file_id IS NOT NULL",
         )?;
-        for key in ids.query_map([id], |r| r.get::<_, Vec<u8>>(0))? {
-            if let Ok(k) = <[u8; 16]>::try_from(key?.as_slice()) {
-                self.regroup.insert(k);
-            }
+        for key in ids.query_map([id], |r| r.get::<_, FileId>(0))? {
+            self.regroup.insert(key?.0);
         }
         let n = conn
             .prepare_cached(
@@ -482,9 +594,20 @@ impl<'c> Writer<'c> {
         Ok(())
     }
 
+    // A walk defers the deletion to its end; any other run deletes at once.
+    fn drop_row(&mut self, row: &Row, delta: &mut Delta) -> Result<()> {
+        if matches!(self.dedupe, Dedupe::Walk(_)) {
+            self.gone.push(row.id);
+        } else {
+            *delta = *delta - row.contrib();
+            self.delete_rows(row.id)?;
+        }
+        Ok(())
+    }
+
     pub fn apply_listing(
         &mut self,
-        work: &Work,
+        work: &mut Work,
         listing: io::Result<Vec<DirEntry>>,
         push: &mut Vec<Work>,
     ) -> Result<()> {
@@ -501,10 +624,8 @@ impl<'c> Writer<'c> {
              WHERE n.kind = 1 AND n.file_id IS NOT NULL AND EXISTS (SELECT 1 FROM node m \
              WHERE m.volume_id = n.volume_id AND m.file_id = n.file_id AND m.id <> n.id)",
         )?;
-        for key in st.query_map([id], |r| r.get::<_, Vec<u8>>(0))? {
-            if let Ok(k) = <[u8; 16]>::try_from(key?.as_slice()) {
-                self.regroup.insert(k);
-            }
+        for key in st.query_map([id], |r| r.get::<_, FileId>(0))? {
+            self.regroup.insert(key?.0);
         }
         Ok(())
     }
@@ -512,90 +633,102 @@ impl<'c> Writer<'c> {
     // small_fold: the caller derived the fold from the stored one, keeping its hard-link exclusions.
     pub fn apply_listing_with(
         &mut self,
-        work: &Work,
+        work: &mut Work,
         listing: io::Result<Vec<DirEntry>>,
         push: &mut Vec<Work>,
         small_fold: Option<Delta>,
     ) -> Result<()> {
         self.ensure_tx()?;
-        let Some((old_small, old_flags, old_seen)) = self.self_row(work.node_id)? else {
-            return Ok(());
+        let mut new_dir = work.new_dir.take();
+        let mut prev = work.prev.take();
+        if work.epoch != self.epoch {
+            prev = None;
+            // The app may have patched this directory in since its parent was listed.
+            if let Some(nd) = &new_dir
+                && let Some(id) = self.dir_row(nd.parent, &nd.name)?
+            {
+                work.node_id = id;
+                work.chain = work.chain.child(id);
+                new_dir = None;
+            }
+        }
+        let old = match (&new_dir, prev) {
+            (Some(_), _) => Prev::default(),
+            (None, Some(p)) => p,
+            (None, None) => match self.self_row(work.node_id)? {
+                Some(p) => p,
+                None => return Ok(()),
+            },
         };
         self.stats.dirs += 1;
-        let walk = matches!(self.dedupe, Dedupe::Walk(_));
         let entries = match listing {
             Ok(e) => e,
             Err(err) => {
                 tracing::debug!(path = %work.path, error = %err, "cannot list directory");
                 self.stats.denied += 1;
-                let mut delta = -old_small;
-                if walk {
-                    // A child listed early as a hotspot must not outlive an unreadable parent.
-                    let n = self
-                        .conn
-                        .prepare_cached(
-                            "UPDATE node SET seen_gen = 0 WHERE parent_id = ?1 AND seen_gen = ?2",
-                        )?
-                        .execute(params![work.node_id, self.generation])?;
-                    self.writes += n;
-                } else {
-                    for row in self.children(work.node_id)? {
-                        delta = delta - row.contrib();
-                        self.delete_rows(row.id)?;
-                    }
+                if let Some(nd) = new_dir {
+                    return self.insert_dir(
+                        work,
+                        &nd,
+                        Delta::default(),
+                        Delta::default(),
+                        FLAG_DENIED,
+                    );
                 }
-                self.set_self(work.node_id, Delta::default(), old_flags | FLAG_DENIED)?;
+                let mut delta = -old.small;
+                for row in self.children(work.node_id)?.into_rows() {
+                    self.drop_row(&row, &mut delta)?;
+                }
+                self.set_self(work.node_id, Delta::default(), old.flags | FLAG_DENIED)?;
                 self.add_delta(&work.chain, delta);
                 return Ok(());
             }
         };
 
-        let mut existing: HashMap<(String, i64), Row> = self
-            .children(work.node_id)?
-            .into_iter()
-            .map(|r| ((r.name.clone(), r.kind), r))
-            .collect();
+        let mut existing = match new_dir {
+            Some(_) => Existing::default(),
+            None => self.children(work.node_id)?,
+        };
         let mut small = Delta::default();
         let mut delta = Delta::default();
         let mut small_links: HashSet<[u8; 16]> = HashSet::new();
+        let mut new_rows: Vec<(String, Vals)> = Vec::new();
+        let mut old_dirs: Vec<(String, Row)> = Vec::new();
+        let mut new_dirs: Vec<(String, Vals)> = Vec::new();
         for e in entries {
             match classify(&e) {
                 KIND_DIR => {
                     let vals = Vals::from_entry(&e, KIND_DIR, 0);
-                    let (id, is_new) = match existing.remove(&(e.name.clone(), KIND_DIR)) {
+                    match existing.take(&e.name, KIND_DIR) {
                         Some(row) => {
                             let vals = Vals {
                                 flags: row.flags,
                                 ..vals
                             };
                             self.upsert_existing(&row, &vals)?;
-                            (row.id, false)
+                            if !self.hot_ids.contains(&row.id) {
+                                old_dirs.push((e.name, row));
+                            }
                         }
-                        None => (self.insert(work.node_id, &e.name, &vals)?, true),
-                    };
-                    if !self.hot_ids.contains(&id) {
-                        push.push(Work {
-                            node_id: id,
-                            path: join_path(&work.path, &e.name),
-                            chain: work.chain.child(id),
-                            is_new,
-                        });
+                        None => new_dirs.push((e.name, vals)),
                     }
                 }
                 KIND_LINK => {
                     let vals = Vals::from_entry(&e, KIND_LINK, 0);
-                    match existing.remove(&(e.name.clone(), KIND_LINK)) {
+                    match existing.take(&e.name, KIND_LINK) {
                         Some(row) => self.upsert_existing(&row, &vals)?,
-                        None => {
-                            self.insert(work.node_id, &e.name, &vals)?;
-                        }
+                        None => new_rows.push((e.name, vals)),
                     }
                 }
                 _ => {
                     self.stats.files += 1;
                     let row_sized = e.alloc.max(e.logical) >= self.threshold;
                     let key = (e.file_id != [0; 16]).then_some(e.file_id);
-                    let prev = existing.remove(&(e.name.clone(), KIND_FILE));
+                    let prev = if row_sized {
+                        existing.take(&e.name, KIND_FILE)
+                    } else {
+                        None
+                    };
                     let dup = match (&mut self.dedupe, key) {
                         (Dedupe::Walk(seen), Some(k)) => {
                             let first = seen.first_sighting(&k);
@@ -607,8 +740,7 @@ impl<'c> Writer<'c> {
                         (Dedupe::Db, Some(k)) if row_sized => {
                             self.regroup.insert(k);
                             prev.as_ref().is_some_and(|r| {
-                                r.flags & FLAG_HARDLINK_DUP != 0
-                                    && r.file_id.as_deref() == Some(&k[..])
+                                r.flags & FLAG_HARDLINK_DUP != 0 && r.file_id == Some(k)
                             })
                         }
                         (Dedupe::Db, Some(k)) => !small_links.insert(k),
@@ -635,74 +767,93 @@ impl<'c> Writer<'c> {
                             }
                             None => {
                                 delta += new_c;
-                                self.insert(work.node_id, &e.name, &vals)?;
+                                new_rows.push((e.name, vals));
                             }
                         }
-                    } else {
-                        if let Some(row) = prev {
-                            existing.insert((row.name.clone(), KIND_FILE), row);
-                        }
-                        if !dup {
-                            small += Delta {
-                                alloc: to_i64(e.alloc),
-                                logical: to_i64(e.logical),
-                                count: 1,
-                            };
-                        }
+                    } else if !dup {
+                        small += Delta {
+                            alloc: to_i64(e.alloc),
+                            logical: to_i64(e.logical),
+                            count: 1,
+                        };
                     }
                 }
             }
         }
-        for row in existing.into_values() {
-            if !walk {
-                delta = delta - row.contrib();
-                self.delete_rows(row.id)?;
-            } else if row.seen_gen == self.generation {
-                // Seen earlier this generation (a hotspot) but gone from its parent's listing now.
-                self.conn
-                    .prepare_cached("UPDATE node SET seen_gen = 0 WHERE id = ?1")?
-                    .execute([row.id])?;
-                self.writes += 1;
-            }
+        for row in existing.into_rows() {
+            self.drop_row(&row, &mut delta)?;
         }
         if let Some(s) = small_fold
-            && old_flags & FLAG_DENIED == 0
+            && old.flags & FLAG_DENIED == 0
         {
             small = s;
         }
-        delta = delta + small - old_small;
-        let flags = old_flags & !FLAG_DENIED;
-        if small != old_small || flags != old_flags || old_seen != self.generation {
-            self.set_self(work.node_id, small, flags)?;
+        delta = delta + small - old.small;
+        match new_dir {
+            Some(nd) => self.insert_dir(work, &nd, small, delta, 0)?,
+            None => {
+                let flags = old.flags & !FLAG_DENIED;
+                if small != old.small || flags != old.flags {
+                    self.set_self(work.node_id, small, flags)?;
+                }
+                self.add_delta(&work.chain, delta);
+            }
         }
-        self.add_delta(&work.chain, delta);
+        for (name, vals) in new_rows {
+            self.insert(work.node_id, &name, &vals)?;
+        }
+        for (name, row) in old_dirs {
+            push.push(Work {
+                node_id: row.id,
+                path: join_path(&work.path, &name),
+                chain: work.chain.child(row.id),
+                is_new: false,
+                prev: Some(Prev {
+                    small: row.small,
+                    flags: row.flags,
+                }),
+                new_dir: None,
+                epoch: self.epoch,
+            });
+        }
+        for (name, vals) in new_dirs {
+            push.push(Work {
+                node_id: 0,
+                path: join_path(&work.path, &name),
+                chain: work.chain.clone(),
+                is_new: true,
+                prev: None,
+                new_dir: Some(Box::new(NewDir {
+                    parent: work.node_id,
+                    name,
+                    vals,
+                })),
+                epoch: self.epoch,
+            });
+        }
         Ok(())
     }
 
     // Smallest path owns the bytes so ownership does not depend on which worker listed first.
     pub fn resolve_groups(&mut self, promote_if_none: bool) -> Result<()> {
         let keys: Vec<[u8; 16]> = self.regroup.drain().collect();
-        let this_gen_only = matches!(self.dedupe, Dedupe::Walk(_));
         let conn = self.conn;
         let mut paths = PathCache::default();
         for key in keys {
             let rows: Vec<(i64, i64, i64, i64, i64)> = {
                 let mut st = conn.prepare_cached(
                     "SELECT id, parent_id, flags, alloc, logical FROM node \
-                     WHERE volume_id = ?1 AND file_id = ?2 AND kind = 1 AND (?3 = 0 OR seen_gen = ?4)",
+                     WHERE volume_id = ?1 AND file_id = ?2 AND kind = 1",
                 )?;
-                st.query_map(
-                    params![self.volume_id, &key[..], this_gen_only, self.generation],
-                    |r| {
-                        Ok((
-                            r.get(0)?,
-                            r.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                            r.get(2)?,
-                            r.get(3)?,
-                            r.get(4)?,
-                        ))
-                    },
-                )?
+                st.query_map(params![self.volume_id, FileId(key)], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                    ))
+                })?
                 .collect::<rusqlite::Result<_>>()?
             };
             if rows.is_empty() {
@@ -747,42 +898,55 @@ impl<'c> Writer<'c> {
         Ok(())
     }
 
-    pub fn delete_unseen(&mut self) -> Result<u64> {
-        let conn = self.conn;
-        let roots: Vec<(i64, i64, Delta)> = {
-            let mut st = conn.prepare(
-                "SELECT n.id, n.parent_id, n.kind, n.flags, n.alloc, n.logical, n.sub_alloc, \
-                 n.sub_logical, n.sub_count FROM node n JOIN node p ON p.id = n.parent_id \
-                 WHERE n.volume_id = ?1 AND n.seen_gen <> ?2 AND p.seen_gen = ?2",
-            )?;
-            st.query_map(params![self.volume_id, self.generation], |r| {
-                let sub = Delta {
-                    alloc: r.get(6)?,
-                    logical: r.get(7)?,
-                    count: r.get(8)?,
-                };
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    contrib(r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, sub),
-                ))
-            })?
-            .collect::<rusqlite::Result<_>>()?
-        };
-        if roots.is_empty() {
+    // Runs before resolve_groups, so that only rows of the finished walk remain to own a link group.
+    pub fn delete_gone(&mut self) -> Result<u64> {
+        if self.gone.is_empty() {
             return Ok(0);
+        }
+        let gone: HashSet<i64> = self.gone.drain(..).collect();
+        let conn = self.conn;
+        let mut found: Vec<(i64, i64, Delta)> = Vec::new();
+        {
+            let mut st = conn.prepare_cached(
+                "SELECT parent_id, kind, flags, alloc, logical, sub_alloc, sub_logical, sub_count \
+                 FROM node WHERE id = ?1",
+            )?;
+            for &id in &gone {
+                let row = st
+                    .query_row([id], |r| {
+                        let sub = Delta {
+                            alloc: r.get(5)?,
+                            logical: r.get(6)?,
+                            count: r.get(7)?,
+                        };
+                        Ok((
+                            r.get::<_, Option<i64>>(0)?,
+                            contrib(r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, sub),
+                        ))
+                    })
+                    .optional()?;
+                if let Some((Some(parent), c)) = row {
+                    found.push((id, parent, c));
+                }
+            }
         }
         conn.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS gone(id INTEGER PRIMARY KEY); DELETE FROM temp.gone;",
         )?;
-        {
-            let mut ins = conn.prepare_cached("INSERT OR IGNORE INTO temp.gone(id) VALUES (?1)")?;
-            for (id, _, _) in &roots {
-                ins.execute([id])?;
-            }
-        }
-        for (_, parent, c) in roots {
+        for (id, parent, c) in found {
             let chain = self.chain_cached(parent)?;
+            let mut cur = Some(&chain);
+            let mut under_gone = false;
+            while let Some(link) = cur {
+                under_gone |= gone.contains(&link.id);
+                cur = link.parent.as_ref();
+            }
+            // A gone ancestor's own delta already covers this row.
+            if under_gone {
+                continue;
+            }
+            conn.prepare_cached("INSERT OR IGNORE INTO temp.gone(id) VALUES (?1)")?
+                .execute([id])?;
             self.add_delta(&chain, -c);
         }
         let n = conn.execute(
@@ -835,5 +999,61 @@ mod tests {
         assert_eq!(classify(&entry(r, IO_REPARSE_TAG_WOF)), KIND_FILE);
         assert_eq!(classify(&entry(r, 0)), KIND_FILE);
         assert_eq!(classify(&entry(r, IO_REPARSE_TAG_SYMLINK)), KIND_LINK);
+    }
+
+    // A patch from another connection lands between a parent's listing and its children's.
+    #[test]
+    fn a_patch_between_parent_and_child_listings_keeps_totals() {
+        use crate::index::{
+            DirLister, FakeFs, RefreshOptions, patch_rescan, refresh, verify_totals,
+        };
+        use std::path::Path;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::store::Db::open(dir.path().join("w.db")).unwrap();
+        let conn = db.conn().unwrap();
+        let fs = FakeFs::new(r"C:\");
+        fs.file(r"C:\a\x.txt", 10 << 10);
+        fs.file(r"C:\a\y.txt", 20 << 10);
+        fs.file(r"C:\b\z.bin", 3 << 20);
+        let out = refresh(&conn, &fs, r"C:\", &RefreshOptions::default()).unwrap();
+        fs.file(r"C:\c\new.bin", 2 << 20);
+        let root_id: i64 = conn
+            .query_row("SELECT root_node_id FROM volume", [], |r| r.get(0))
+            .unwrap();
+        let mut w = Writer::new(
+            &conn,
+            out.volume_id,
+            out.generation,
+            1 << 20,
+            Dedupe::Walk(SeenSet::new(true)),
+        );
+        let mut root = Work::existing(root_id, r"C:\".into(), Chain::root(root_id));
+        let mut subs = Vec::new();
+        w.apply_listing(&mut root, fs.list_dir(Path::new(r"C:\")), &mut subs)
+            .unwrap();
+        w.commit().unwrap();
+        assert!(subs.iter().any(|s| s.prev.is_some()) && subs.iter().any(|s| s.is_new));
+
+        fs.remove(r"C:\a\y.txt");
+        let other = db.conn().unwrap();
+        patch_rescan(&other, &fs, r"C:\a\y.txt").unwrap();
+        patch_rescan(&other, &fs, r"C:\c").unwrap();
+
+        let mut more = Vec::new();
+        for mut s in subs {
+            let listing = fs.list_dir(Path::new(&s.path));
+            w.apply_listing(&mut s, listing, &mut more).unwrap();
+        }
+        w.commit().unwrap();
+        assert!(verify_totals(&conn).unwrap().is_empty());
+        let c_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM node WHERE parent_id = ?1 AND name = 'c'",
+                [root_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(c_rows, 1, "the walk adopts the row the patch made");
     }
 }
