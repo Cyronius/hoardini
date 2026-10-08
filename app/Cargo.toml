@@ -1,0 +1,22 @@
+[package]
+name = "hoardini-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hoardini desktop shell"
+
+[[bin]]
+name = "hoardini-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+futures = "0.3"
+hoardini-core = { path = "../crates/core" }
+hoardini-server = { path = "../crates/server" }
+tauri = { version = "2", default-features = false, features = ["wry", "compression"] }
+tauri-plugin-dialog = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
