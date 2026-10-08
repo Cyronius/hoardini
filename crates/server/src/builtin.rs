@@ -18,7 +18,8 @@ use crate::state::{ApiError, AppState, blocking};
 pub const PROVIDER_ID: &str = "builtin";
 // Never dialled: the run resolves the live child's address at request time.
 pub const BASE_PLACEHOLDER: &str = "builtin://llama-server/v1";
-pub const CONTEXT: u32 = 16_384;
+// The longest eval prompt was ~2.7k tokens plus 1024 output; 8k keeps 3x headroom and halves KV RAM.
+pub const CONTEXT: u32 = 8_192;
 // Decided by the M6 eval (.claude/plans/m6-eval-results.md); None keeps the built-in option hidden.
 pub const RECOMMENDED: Option<&str> = None;
 const MODEL_META: &str = "builtin_model";
@@ -36,6 +37,7 @@ pub fn model_info(id: &str) -> ModelInfo {
         "lfm2.5-2.6b" => ("LFM2.5 2.6B", "LFM Open License v1.0"),
         "qwen3-4b-instruct-2507" => ("Qwen3 4B Instruct 2507", "Apache-2.0"),
         "granite-4.0-micro" => ("Granite 4.0 Micro", "Apache-2.0"),
+        "minicpm5-2b" => ("MiniCPM5 2B", "Apache-2.0"),
         _ => ("", ""),
     };
     ModelInfo {
@@ -102,6 +104,10 @@ pub fn args(spec: &LaunchSpec) -> Vec<String> {
         "1",
         "--cache-ram",
         "0",
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q8_0",
         "-ngl",
         "0",
         "-a",
@@ -806,13 +812,14 @@ mod tests {
             model_id: "x".into(),
             port: 4321,
             threads: 10,
-            ctx: 16384,
+            ctx: 8192,
         });
         let s = a.join(" ");
         assert!(s.contains(
-            r"-m C:\m\x.gguf --host 127.0.0.1 --port 4321 --jinja -t 10 -c 16384 --no-webui"
+            r"-m C:\m\x.gguf --host 127.0.0.1 --port 4321 --jinja -t 10 -c 8192 --no-webui"
         ));
         assert!(s.contains("-ngl 0"));
+        assert!(s.contains("--cache-type-k q8_0 --cache-type-v q8_0"));
         assert!(s.ends_with("-a x"));
     }
 

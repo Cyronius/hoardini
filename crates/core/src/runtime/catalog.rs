@@ -87,6 +87,15 @@ pub const MODELS: &[Pinned] = &[
         kind: Kind::File,
         license_url: "https://www.apache.org/licenses/LICENSE-2.0",
     },
+    Pinned {
+        id: "minicpm5-2b",
+        version: "q4_k_m",
+        url: "https://huggingface.co/openbmb/MiniCPM5-2B-GGUF/resolve/2079a22f3beaa4e306449978533478fe0522f4b3/MiniCPM5-2B-Q4_K_M.gguf",
+        sha256: "ec2d5801640099e97d8d7e8003ad4d81f336e757811f03a26173dddf386602fd",
+        size: 1_561_318_368,
+        kind: Kind::File,
+        license_url: "https://www.apache.org/licenses/LICENSE-2.0",
+    },
 ];
 
 pub const PINS: &[&Pinned] = &[
@@ -96,6 +105,7 @@ pub const PINS: &[&Pinned] = &[
     &MODELS[1],
     &MODELS[2],
     &MODELS[3],
+    &MODELS[4],
 ];
 
 pub fn find(id: &str) -> Option<&'static Pinned> {

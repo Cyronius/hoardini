@@ -27,5 +27,6 @@ rclone, llama.cpp and the built-in model files are downloaded on demand from a U
 | lfm2.5-2.6b Q4_K_M | HF commit e7caca5 | 1,674,455,040 | same |
 | qwen3-4b-instruct-2507 Q4_K_M (Apache-2.0) | HF commit a06e946 | 2,497,281,120 | same |
 | granite-4.0-micro Q4_K_M (Apache-2.0) | HF commit ec48475 | 2,099,502,528 | same |
+| minicpm5-2b Q4_K_M (Apache-2.0) | HF openbmb commit 2079a22 | 1,561,318,368 | same |
 
 Bumping a pin means re-reading the publisher checksum, never copying a hash from a mirror.

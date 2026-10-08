@@ -94,7 +94,7 @@ When the child has exited on its own, the next run shall start a fresh one rathe
 **Applies to:** hoardini-server
 **Verification:** test
 
-The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <random> --jinja -t <physical cores - 2, at least 1> -c 16384 --no-webui -np 1 --cache-ram 0 -ngl 0 -a <model id>`, with `CREATE_NO_WINDOW` and normal priority, inside a kill-on-close job object so it dies with the app. The Built-in profile is `small: true` and `redact_paths: true`.
+The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <random> --jinja -t <physical cores - 2, at least 1> -c 8192 --no-webui -np 1 --cache-ram 0 --cache-type-k q8_0 --cache-type-v q8_0 -ngl 0 -a <model id>`, with `CREATE_NO_WINDOW` and normal priority, inside a kill-on-close job object so it dies with the app. The Built-in profile is `small: true` and `redact_paths: true`.
 
 **Acceptance criteria:**
 - `builtin::args` puts `127.0.0.1` after `--host`, the port after `--port`, the GGUF after `-m`, `0` after `-ngl`, 16384 after `-c`, `physical_cores() - 2` (at least 1) after `-t`, and includes `--jinja` and `--no-webui`.
