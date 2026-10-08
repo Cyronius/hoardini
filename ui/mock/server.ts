@@ -27,6 +27,12 @@ const status: T.Status = {
   running_runs: 0,
 };
 
+const setFill = (f: number) => {
+  const c = status.volumes[0]!;
+  c.free_bytes = Math.round(c.total_bytes * (1 - Math.min(1, Math.max(0, f))));
+};
+if (process.env.MOCK_FILL) setFill(Number(process.env.MOCK_FILL));
+
 const jobs = new Map<string, T.Job>();
 const subscribers = new Set<(frame: string) => void>();
 let dirty = true;
@@ -309,6 +315,14 @@ async function route(req: Request): Promise<Response> {
   const seg = path.slice(5).split("/");
 
   switch (seg[0]) {
+    case "mock": {
+      const b = await body<{ fill?: number; running_runs?: number; idle?: boolean }>();
+      if (b.fill != null) setFill(b.fill);
+      if (b.running_runs != null) status.running_runs = b.running_runs;
+      if (b.idle) Object.assign(status.index, { state: "idle", mode: null, progress: null });
+      dirty = true;
+      return json(status);
+    }
     case "status":
       return json(status);
     case "index":
