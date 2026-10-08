@@ -56,7 +56,12 @@ path = "vault/tests/vault.rs"
 name = "srch"
 path = "srch/tests/srch.rs"
 
+[[test]]
+name = "agent_approval"
+path = "agent/tests/approval.rs"
+
 [dev-dependencies]
+blake3 = "1.8.7"
 hoardini-agent = { path = "../crates/agent" }
 hoardini-core = { path = "../crates/core" }
 hoardini-server = { path = "../crates/server" }

@@ -698,6 +698,7 @@ dependencies = [
 name = "hoardini-specs"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "hoardini-agent",
  "hoardini-core",
  "hoardini-server",

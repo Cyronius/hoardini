@@ -1,0 +1,449 @@
+use std::os::windows::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
+
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
+
+use super::{PolicyEnv, Verdict, cap_for_with, deny_reason};
+use crate::catalog::Category;
+use crate::index::{self, TopFilesQuery, normalize_path};
+
+pub const IN_USE_FILE_CAP: usize = 500;
+const SCAN_BUDGET: usize = 250_000;
+const NAME_SURROGATE: u32 = 0x2000_0000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemKind {
+    Dir,
+    File,
+    Link,
+}
+
+impl ItemKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ItemKind::Dir => "dir",
+            ItemKind::File => "file",
+            ItemKind::Link => "link",
+        }
+    }
+
+    pub fn to_db(self) -> i64 {
+        match self {
+            ItemKind::Dir => index::KIND_DIR,
+            ItemKind::File => index::KIND_FILE,
+            ItemKind::Link => index::KIND_LINK,
+        }
+    }
+
+    pub fn from_db(k: i64) -> ItemKind {
+        match k {
+            index::KIND_DIR => ItemKind::Dir,
+            index::KIND_FILE => ItemKind::File,
+            _ => ItemKind::Link,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Delete,
+    Archive,
+    Compress,
+    Dedupe,
+}
+
+impl Action {
+    fn reads_data(self) -> bool {
+        matches!(self, Action::Archive | Action::Compress)
+    }
+}
+
+// What the fs says right now; revalidation compares a fresh one against the stored one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FsState {
+    pub kind: ItemKind,
+    pub logical: i64,
+    pub mtime: Option<i64>,
+    pub file_id: Option<[u8; 16]>,
+    pub attrs: u32,
+}
+
+pub fn fs_state(path: &Path) -> std::io::Result<FsState> {
+    let md = std::fs::symlink_metadata(path)?;
+    let ft = md.file_type();
+    let kind = if ft.is_symlink() {
+        ItemKind::Link
+    } else if ft.is_dir() {
+        ItemKind::Dir
+    } else {
+        ItemKind::File
+    };
+    let mtime = md
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64);
+    Ok(FsState {
+        kind,
+        logical: if kind == ItemKind::File {
+            index::to_i64(md.len())
+        } else {
+            0
+        },
+        mtime,
+        file_id: hoardini_win::file_id_of(path).ok(),
+        attrs: md.file_attributes(),
+    })
+}
+
+fn strip_verbatim(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        s.into_owned()
+    }
+}
+
+fn lexical(p: &str) -> String {
+    let p = p.replace('/', "\\");
+    let (prefix, rest) = if let Some(r) = p.strip_prefix(r"\\") {
+        let mut parts = r.splitn(3, '\\');
+        let server = parts.next().unwrap_or("");
+        let share = parts.next().unwrap_or("");
+        (
+            format!(r"\\{server}\{share}"),
+            parts.next().unwrap_or("").to_string(),
+        )
+    } else {
+        let (d, r) = p.split_at(p.find('\\').unwrap_or(p.len()));
+        (d.to_string(), r.to_string())
+    };
+    let mut out: Vec<&str> = Vec::new();
+    for c in rest.split('\\') {
+        match c {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    normalize_path(&format!("{prefix}\\{}", out.join("\\")))
+}
+
+fn is_absolute(p: &str) -> bool {
+    let b = p.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+        || p.starts_with(r"\\")
+        || p.starts_with("//")
+}
+
+// Short names and junctions in the parent chain resolve to the real location; a final link stays itself.
+pub fn resolve(env: &PolicyEnv, raw: &str) -> Result<String, String> {
+    let expanded = env.expand(raw);
+    let expanded = expanded
+        .strip_prefix(r"\\?\")
+        .map(|s| s.to_string())
+        .unwrap_or(expanded);
+    if !is_absolute(&expanded) {
+        return Err(format!("{raw} is not an absolute path"));
+    }
+    let lex = lexical(&expanded);
+    let path = Path::new(&lex);
+    let Ok(md) = std::fs::symlink_metadata(path) else {
+        return Ok(lex);
+    };
+    // Opening a cloud placeholder can trigger a recall, so only its parent is resolved.
+    let real = if md.file_type().is_symlink()
+        || hoardini_win::is_cloud_placeholder(md.file_attributes())
+    {
+        match (path.parent(), path.file_name()) {
+            (Some(parent), Some(name)) => std::fs::canonicalize(parent)
+                .map(|p| strip_verbatim(&p.join(name)))
+                .unwrap_or_else(|_| lex.clone()),
+            _ => lex.clone(),
+        }
+    } else {
+        std::fs::canonicalize(path)
+            .map(|p| strip_verbatim(&p))
+            .unwrap_or_else(|_| lex.clone())
+    };
+    Ok(normalize_path(&real))
+}
+
+#[derive(Clone, Debug)]
+pub struct Examined {
+    pub path: String,
+    pub state: Option<FsState>,
+    pub alloc: i64,
+    pub logical: i64,
+    pub node_id: Option<i64>,
+    pub block: Option<String>,
+    pub cap: Option<Verdict>,
+    pub category: Option<Category>,
+}
+
+#[derive(Default)]
+struct TreeScan {
+    alloc: u64,
+    logical: u64,
+    files: Vec<(u64, PathBuf)>,
+    placeholder: bool,
+}
+
+// Name surrogates are links (junctions, symlinks); other reparse folders, like cloud folders, are real.
+fn scan_tree(root: &Path) -> TreeScan {
+    let mut out = TreeScan::default();
+    let mut stack = vec![root.to_path_buf()];
+    let mut seen = 0usize;
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = hoardini_win::list_dir(&dir) else {
+            continue;
+        };
+        for e in entries {
+            seen += 1;
+            if seen > SCAN_BUDGET {
+                return out;
+            }
+            let path = dir.join(&e.name);
+            if e.is_dir() {
+                if !e.is_reparse() || e.reparse_tag & NAME_SURROGATE == 0 {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if e.is_link() {
+                continue;
+            }
+            out.placeholder |= e.is_placeholder();
+            let alloc = if e.needs_alloc_by_open() {
+                e.logical
+            } else {
+                e.alloc
+            };
+            out.alloc += alloc;
+            out.logical += e.logical;
+            out.files.push((alloc, path));
+        }
+    }
+    out
+}
+
+fn largest_files(conn: &Connection, dir: &str) -> Vec<PathBuf> {
+    let q = TopFilesQuery {
+        under: Some(dir.to_string()),
+        min_size: 0,
+        ext: None,
+        not_used_for_days: None,
+        limit: IN_USE_FILE_CAP,
+    };
+    match index::top_files(conn, &q) {
+        Ok(r) => r.items.into_iter().map(|f| PathBuf::from(f.path)).collect(),
+        Err(_) => {
+            let mut files = scan_tree(Path::new(dir)).files;
+            files.sort_by(|a, b| b.0.cmp(&a.0));
+            files.truncate(IN_USE_FILE_CAP);
+            files.into_iter().map(|(_, p)| p).collect()
+        }
+    }
+}
+
+fn describe_users(users: &[hoardini_win::ProcessUse]) -> Option<String> {
+    let mut seen: Vec<(u32, String)> = Vec::new();
+    for u in users {
+        if !seen.iter().any(|(pid, _)| *pid == u.pid) {
+            let name = if u.app_name.trim().is_empty() {
+                u.exe
+                    .as_deref()
+                    .and_then(|e| e.rsplit('\\').next())
+                    .unwrap_or("another program")
+                    .to_string()
+            } else {
+                u.app_name.clone()
+            };
+            seen.push((u.pid, name));
+        }
+    }
+    let first = seen
+        .iter()
+        .take(3)
+        .map(|(pid, name)| format!("{name} (pid {pid})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match seen.len() {
+        0 => None,
+        n if n > 3 => Some(format!("Open in {first} +{} more", n - 3)),
+        _ => Some(format!("Open in {first}")),
+    }
+}
+
+fn processes_using_files(files: &[PathBuf]) -> Option<String> {
+    if files.is_empty() {
+        return None;
+    }
+    let users = match hoardini_win::processes_using(files) {
+        Ok(u) => u,
+        Err(_) => {
+            // A stale index row can name a path that is now a folder, which Restart Manager rejects.
+            let only_files: Vec<PathBuf> = files.iter().filter(|f| f.is_file()).cloned().collect();
+            match hoardini_win::processes_using(&only_files) {
+                Ok(u) => u,
+                Err(err) => {
+                    tracing::warn!(error = %err, "open-file check failed");
+                    return None;
+                }
+            }
+        }
+    };
+    describe_users(&users)
+}
+
+pub fn in_use_reason(conn: &Connection, path: &str, kind: ItemKind) -> Option<String> {
+    match kind {
+        ItemKind::File => processes_using_files(&[PathBuf::from(path)]),
+        ItemKind::Dir => processes_using_files(&largest_files(conn, path)),
+        ItemKind::Link => None,
+    }
+}
+
+fn dir_has_placeholder(conn: &Connection, node_id: i64) -> anyhow::Result<bool> {
+    Ok(conn.query_row(
+        "WITH RECURSIVE d(id) AS (SELECT ?1 UNION ALL SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE n.kind = 0) \
+         SELECT EXISTS(SELECT 1 FROM node f WHERE f.parent_id IN (SELECT id FROM d) AND (f.flags & ?2) != 0)",
+        rusqlite::params![node_id, index::FLAG_PLACEHOLDER],
+        |r| r.get(0),
+    )?)
+}
+
+const PLACEHOLDER_REASON: &str =
+    "Cloud-only (online-only) file; archiving or compressing would download it first";
+
+pub fn examine(
+    conn: &Connection,
+    env: &PolicyEnv,
+    path: &str,
+    action: Action,
+) -> anyhow::Result<Examined> {
+    let catalog = env.catalog().lookup_match(path);
+    let category = catalog.as_ref().map(|m| m.category);
+    let catalog_cap = catalog.as_ref().and_then(|m| m.cap);
+    let mut ex = Examined {
+        path: path.to_string(),
+        state: None,
+        alloc: 0,
+        logical: 0,
+        node_id: None,
+        block: None,
+        cap: None,
+        category,
+    };
+    let state = match fs_state(Path::new(path)) {
+        Ok(s) => s,
+        Err(_) => {
+            ex.block = Some("Not found".into());
+            ex.cap = cap_for_with(conn, env, Path::new(path), catalog_cap, false)?;
+            return Ok(ex);
+        }
+    };
+    let node = index::node_by_path(conn, path)?;
+    let mut placeholder = hoardini_win::is_cloud_placeholder(state.attrs);
+    match state.kind {
+        ItemKind::File => {
+            ex.logical = state.logical;
+            ex.alloc = match &node {
+                Some(n)
+                    if n.kind == index::NodeKind::File
+                        && index::to_i64(n.logical) == state.logical =>
+                {
+                    index::to_i64(n.size)
+                }
+                _ => hoardini_win::alloc_size_by_open(Path::new(path))
+                    .map(index::to_i64)
+                    .unwrap_or(state.logical),
+            };
+        }
+        ItemKind::Dir => match &node {
+            Some(n) if n.kind == index::NodeKind::Dir => {
+                ex.alloc = index::to_i64(n.size);
+                ex.logical = index::to_i64(n.logical);
+                if action.reads_data() {
+                    placeholder |= dir_has_placeholder(conn, n.id)?;
+                }
+            }
+            _ => {
+                let scan = scan_tree(Path::new(path));
+                ex.alloc = index::to_i64(scan.alloc);
+                ex.logical = index::to_i64(scan.logical);
+                placeholder |= scan.placeholder;
+            }
+        },
+        ItemKind::Link => {}
+    }
+    ex.node_id = node.map(|n| n.id);
+    let in_use = in_use_reason(conn, path, state.kind);
+    ex.block = if let Some(r) = &in_use {
+        Some(r.clone())
+    } else if action.reads_data() && placeholder {
+        Some(PLACEHOLDER_REASON.into())
+    } else if action.reads_data() && state.kind == ItemKind::Link {
+        Some("A link holds no data; delete it instead".into())
+    } else {
+        None
+    };
+    ex.cap = cap_for_with(conn, env, Path::new(path), catalog_cap, in_use.is_some())?;
+    ex.state = Some(state);
+    Ok(ex)
+}
+
+// None = still the item the user approved; Some(detail) = skip it.
+pub fn revalidate(
+    conn: &Connection,
+    env: &PolicyEnv,
+    action: Action,
+    path: &str,
+    expected: &FsState,
+) -> anyhow::Result<Option<String>> {
+    if let Some(r) = deny_reason(conn, env, path)? {
+        return Ok(Some(format!("Denied: {r}")));
+    }
+    let now = match fs_state(Path::new(path)) {
+        Ok(s) => s,
+        Err(_) => return Ok(Some("Not found anymore".into())),
+    };
+    if now.kind != expected.kind {
+        return Ok(Some(format!(
+            "Changed since the proposal: now a {}",
+            now.kind.as_str()
+        )));
+    }
+    if now.logical != expected.logical {
+        return Ok(Some(format!(
+            "Changed since the proposal: size {} -> {} bytes",
+            expected.logical, now.logical
+        )));
+    }
+    if now.mtime != expected.mtime {
+        return Ok(Some("Changed since the proposal: modified".into()));
+    }
+    if expected.file_id.is_some() && now.file_id.is_some() && now.file_id != expected.file_id {
+        return Ok(Some(
+            "Changed since the proposal: replaced by another file".into(),
+        ));
+    }
+    if let Some(r) = in_use_reason(conn, path, now.kind) {
+        return Ok(Some(r));
+    }
+    if action.reads_data()
+        && now.kind == ItemKind::File
+        && hoardini_win::is_cloud_placeholder(now.attrs)
+    {
+        return Ok(Some(PLACEHOLDER_REASON.into()));
+    }
+    Ok(None)
+}
