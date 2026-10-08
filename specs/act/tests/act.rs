@@ -150,6 +150,43 @@ fn archive_deletes_the_source_only_after_size_and_blake3_match() {
 
 // Traces: ACT-ARCHIVE-VERIFY
 #[test]
+fn a_failed_archive_leaves_the_source_atime_alone() {
+    const MS_2020: i64 = 1_577_836_800_000;
+    let fx = Fx::new();
+    let (dest, _) = fx.local_destination("nas");
+    let file = fx.file(r"docs\old.bin", &data(600_000, 5));
+    let dir = make_tree(&fx, "old-project");
+    let ex = fx.executor();
+    ex.set_copy_hook(Some(Arc::new(|tmp: &Path| {
+        std::fs::write(tmp, b"garbage").unwrap();
+    })));
+    let p = fx
+        .propose(ProposalKind::Archive, &[&file, &dir], Some(&dest.id))
+        .unwrap();
+    let probe = dir.join("a.bin");
+    for f in [&file, &probe] {
+        hoardini_win::set_file_times(f, Some(MS_2020), None).unwrap();
+    }
+    let before = [
+        std::fs::metadata(&file).unwrap().accessed().unwrap(),
+        std::fs::metadata(&probe).unwrap().accessed().unwrap(),
+    ];
+
+    let r = ex.approve(&p.id, &ids(&p)).unwrap();
+    assert_eq!(wait(&ex, &r.job_id).status, "failed");
+    assert!(file.exists() && dir.exists());
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().accessed().unwrap(),
+        before[0]
+    );
+    assert_eq!(
+        std::fs::metadata(&probe).unwrap().accessed().unwrap(),
+        before[1]
+    );
+}
+
+// Traces: ACT-ARCHIVE-VERIFY
+#[test]
 fn a_rerun_reuses_copies_that_already_verify() {
     let fx = Fx::new();
     let (dest, _) = fx.local_destination("nas");

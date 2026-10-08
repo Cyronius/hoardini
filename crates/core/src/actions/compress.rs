@@ -181,7 +181,7 @@ impl CompressRunner {
             args.push(cx.item.path.clone());
             undo_args.push(cx.item.path.clone());
         }
-        let mut child = Command::new("compact.exe")
+        let mut child = Command::new(hoardini_win::system_tool("compact.exe")?)
             .args(&args)
             .creation_flags(CREATE_NO_WINDOW)
             .stdin(Stdio::null())

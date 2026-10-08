@@ -395,9 +395,12 @@ fn ollama_blobs(store: &str, m: &ActiveModel) -> Vec<String> {
             if !m.candidates.iter().any(|c| contains_ci(rel, c)) {
                 return false;
             }
-            let Ok(text) = std::fs::read_to_string(path) else {
+            let mut text = String::new();
+            let read = hoardini_win::open_read_preserving_atime(Path::new(path))
+                .and_then(|mut f| std::io::Read::read_to_string(&mut f, &mut text));
+            if read.is_err() {
                 return false;
-            };
+            }
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
                 return false;
             };

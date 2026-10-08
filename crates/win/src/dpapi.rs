@@ -22,6 +22,10 @@ fn take(out: CRYPT_INTEGER_BLOB) -> Vec<u8> {
     }
     let v = unsafe { std::slice::from_raw_parts(out.pbData, out.cbData as usize) }.to_vec();
     unsafe {
+        // Volatile so the compiler cannot drop the wipe of a buffer that is about to be freed.
+        for i in 0..out.cbData as usize {
+            std::ptr::write_volatile(out.pbData.add(i), 0);
+        }
         let _ = LocalFree(Some(HLOCAL(out.pbData.cast())));
     }
     v

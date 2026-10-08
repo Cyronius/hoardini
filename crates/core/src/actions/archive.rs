@@ -108,8 +108,16 @@ impl Copier<'_> {
     }
 }
 
-fn hash_file(path: &Path, c: Option<&mut Copier<'_>>) -> anyhow::Result<(u64, String)> {
-    let mut f = std::fs::File::open(path)?;
+fn hash_file(
+    path: &Path,
+    c: Option<&mut Copier<'_>>,
+    keep_atime: bool,
+) -> anyhow::Result<(u64, String)> {
+    let mut f = if keep_atime {
+        hoardini_win::open_read_preserving_atime(path)?
+    } else {
+        std::fs::File::open(path)?
+    };
     let mut h = blake3::Hasher::new();
     let mut buf = vec![0u8; CHUNK];
     let mut total = 0u64;
@@ -153,8 +161,8 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, c: &mut Copier<'_>) -> anyho
         && existing.len() == src_len
     {
         // Resume: a verified copy from an earlier, interrupted run is reused when it still matches.
-        let (_, sh) = hash_file(src, Some(c))?;
-        let (_, dh) = hash_file(dst, None)?;
+        let (_, sh) = hash_file(src, Some(c), true)?;
+        let (_, dh) = hash_file(dst, None, false)?;
         if sh == dh {
             return Ok(Copied {
                 size: src_len,
@@ -168,7 +176,7 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, c: &mut Copier<'_>) -> anyho
     }
     let tmp = with_suffix(dst, PARTIAL_SUFFIX);
     let result = (|| -> anyhow::Result<Copied> {
-        let mut r = std::fs::File::open(src)?;
+        let mut r = hoardini_win::open_read_preserving_atime(src)?;
         let mut w = std::fs::File::create(&tmp)?;
         let mut hasher = blake3::Hasher::new();
         let mut buf = vec![0u8; CHUNK];
@@ -196,7 +204,7 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, c: &mut Copier<'_>) -> anyho
         if let Some(hook) = c.hook {
             hook(&tmp);
         }
-        let (dst_len, dst_hash) = hash_file(&tmp, None)?;
+        let (dst_len, dst_hash) = hash_file(&tmp, None, false)?;
         if dst_len != total || dst_hash != src_hash {
             anyhow::bail!(
                 "verification failed: the copy at {} does not match the source (size or BLAKE3)",

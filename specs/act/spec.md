@@ -73,6 +73,7 @@ records.
 - When each finished copy is altered before verification, the file and the folder items fail with "verification failed", both sources are byte-identical to before, no `archive_entry` is written, and the job frees 0 bytes.
 - After a run whose second file failed verification, a new archive of the same folder copies only the two files not yet verified and succeeds.
 - A file created in the folder while it is copied, or a file appended to after its copy finished, fails the item; the source (with the new data) stays, no `archive_entry` is written, and 0 bytes are freed.
+- An archive whose copies fail verification leaves the last-access time of the source file and of a file inside the source folder unchanged (the copy reads the source through the atime-preserving handle).
 - Archiving a file and a folder, then new content at the same paths again the same day, gives four entries with four distinct `dest_uri`s, and restoring the first two brings back the first bytes and tree.
 
 ### ACT-JOURNAL: Every action is journaled with undo info before it reports success
@@ -107,9 +108,10 @@ copy no longer matches its recorded BLAKE3.
 **Applies to:** hoardini
 **Verification:** manual
 
-A delete proposal card shall say the delete is permanent and cannot be undone, and shall approve only after the delete
-button is held for the full hold time (`HoldButton` in `ui/src/components/ProposalCard.tsx`, 1.2 s). A click, a short
-press, or releasing early shall not approve. Archive cards approve with one click.
+A delete proposal card, and a dedupe card whose mode is `delete`, shall say the delete is permanent and cannot be undone,
+and shall approve only after the delete button is held for the full hold time (`HoldButton` in
+`ui/src/components/ProposalCard.tsx`, 1.2 s). A click, a short press, or releasing early shall not approve. Archive
+cards, compress cards, and hardlink dedupe cards approve with one click.
 
 **Verification (manual):**
 1. Start the app, ask the agent to propose deleting a scratch file you created (e.g. `D:\scratch\junk.bin`).
@@ -121,6 +123,7 @@ press, or releasing early shall not approve. Archive cards approve with one clic
 7. Uncheck every item on another delete card: the hold button is disabled.
 8. Ask for an archive proposal to a registered destination: its approve button works with a single click. The card shows the job's progress bar and item count, then "Done. Freed …", and the header's "made to vanish" grows.
 9. Settings → Destinations → Archived items lists the archived folder; Restore puts it back (the row turns "restored") and the folder reappears in the index.
+10. Ask for a dedupe proposal in `delete` mode on two scratch copies: the card shows the permanent-delete warning and "Hold to delete"; a click does nothing, a full hold approves. A `hardlink` dedupe card still approves with one click ("Remove duplicates").
 (2026-10-08, sandbox folder, scripted mock model: 1–6 and 8–9 as described; 7 seen on a card whose only item was blocked, which disables the button the same way.)
 
 ### ACT-COMPRESS-ESTIMATE: Compression estimates track the data

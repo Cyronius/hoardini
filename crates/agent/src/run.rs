@@ -401,7 +401,12 @@ impl Run {
                 .into_iter()
                 .map(|m| {
                     let kind = serde_json::to_value(m.kind).unwrap_or_default();
-                    format!("[{}] {}", kind.as_str().unwrap_or("note"), m.text)
+                    format!(
+                        "[{}, {}] {}",
+                        kind.as_str().unwrap_or("note"),
+                        m.source,
+                        m.text
+                    )
                 })
                 .collect();
             let system = system_prompt(&PromptInput {

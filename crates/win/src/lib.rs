@@ -9,6 +9,7 @@ mod net;
 mod process;
 mod registry;
 mod rm;
+mod sysdir;
 mod usn;
 mod util;
 mod volume;
@@ -27,6 +28,7 @@ pub use process::{
 };
 pub use registry::{installed_programs, last_access_setting, user_assist};
 pub use rm::processes_using;
+pub use sysdir::{system_directory, system_tool};
 pub use usn::{path_by_file_id, usn_query, usn_read};
 pub use volume::{fixed_volumes, volume_info, volume_root_of};
 

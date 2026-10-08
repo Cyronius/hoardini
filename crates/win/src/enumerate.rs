@@ -239,7 +239,7 @@ mod tests {
     }
 
     fn compact(args: &[&str], path: &Path) {
-        let out = std::process::Command::new("compact")
+        let out = std::process::Command::new(crate::system_tool("compact.exe").unwrap())
             .args(args)
             .arg(path)
             .output()

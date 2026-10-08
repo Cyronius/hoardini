@@ -86,9 +86,12 @@ with the same reason.
 
 Before an approved item runs, the gate shall compare the path with what was proposed: kind, size (files), mtime, and
 file ID. Any difference, a deny reason, an open handle, or a missing path shall mark the item `skipped` with a detail;
-it shall not execute. The proposal ends `partial` when some approved items ran and others did not.
+it shall not execute. The proposal ends `partial` when some approved items ran and others did not. The open-handle
+check is the slow one, so it runs first; the deny list and the kind, size, mtime, file-ID, and link comparisons run
+after it, immediately before the item executes, so a path swapped for a junction during the slow check is caught.
 
 **Acceptance criteria:**
+- A folder replaced by a junction while the open-handle check runs is skipped with a detail starting `Changed since the proposal` (verified by a test-only hook between the two phases in `crates/core/src/policy/gate.rs`).
 - Of four proposed files, one grown, one with only its mtime changed, and one deleted and re-created with the same size and mtime are `skipped` with a detail starting `Changed since the proposal` and still exist; the untouched one is deleted.
 - `approve` returns only the untouched item's id; the proposal status is `partial`.
 

@@ -425,6 +425,11 @@ pub fn examine(
     Ok(ex)
 }
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_IN_USE: std::cell::RefCell<Option<Box<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
 // None = still the item the user approved; Some(detail) = skip it.
 pub fn revalidate(
     conn: &Connection,
@@ -433,6 +438,16 @@ pub fn revalidate(
     path: &str,
     expected: &FsState,
 ) -> anyhow::Result<Option<String>> {
+    // The open-file check is slow, so every cheap check runs after it, as close to acting as possible.
+    if let Some(r) = in_use_reason(conn, path, expected.kind) {
+        return Ok(Some(r));
+    }
+    #[cfg(test)]
+    AFTER_IN_USE.with(|h| {
+        if let Some(f) = h.borrow().as_ref() {
+            f()
+        }
+    });
     if let Some(r) = deny_reason(conn, env, path)? {
         return Ok(Some(format!("Denied: {r}")));
     }
@@ -460,9 +475,6 @@ pub fn revalidate(
             "Changed since the proposal: replaced by another file".into(),
         ));
     }
-    if let Some(r) = in_use_reason(conn, path, now.kind) {
-        return Ok(Some(r));
-    }
     if action.reads_data()
         && now.kind == ItemKind::File
         && hoardini_win::is_cloud_placeholder(now.attrs)
@@ -470,4 +482,41 @@ pub fn revalidate(
         return Ok(Some(PLACEHOLDER_REASON.into()));
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Db;
+
+    #[test]
+    fn a_swap_during_the_open_file_check_is_caught() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Db::open(tmp.path().join("h.db")).unwrap();
+        let conn = db.conn().unwrap();
+        let env = PolicyEnv::with_paths(&tmp.path().join("profile"), &tmp.path().join("data"));
+        let victim = tmp.path().join("work").join("cache");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let path = victim.to_string_lossy().into_owned();
+        let expected = fs_state(&victim).unwrap();
+        assert_eq!(expected.kind, ItemKind::Dir);
+        assert_eq!(
+            revalidate(&conn, &env, Action::Delete, &path, &expected).unwrap(),
+            None
+        );
+
+        let (v, e) = (victim.clone(), elsewhere.clone());
+        AFTER_IN_USE.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                std::fs::remove_dir(&v).unwrap();
+                hoardini_win::create_junction(&v, &e).unwrap();
+            }));
+        });
+        let got = revalidate(&conn, &env, Action::Delete, &path, &expected).unwrap();
+        AFTER_IN_USE.with(|h| *h.borrow_mut() = None);
+        let detail = got.expect("swap must be caught");
+        assert!(detail.starts_with("Changed since the proposal"), "{detail}");
+    }
 }

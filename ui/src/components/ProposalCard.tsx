@@ -251,6 +251,7 @@ export function ProposalCard({ proposalId }: { proposalId: string }) {
   const outcome = outcomeLine(proposal, job);
   const compressNote = proposal.kind === "compress" ? compressNoteFor(proposal.format) : null;
   const dedupe = proposal.kind === "dedupe" ? proposal.dedupe : null;
+  const permanentDelete = proposal.kind === "delete" || dedupe?.mode === "delete";
 
   return (
     <div className="fade-up my-2 rounded-2xl border border-brass/40 bg-ink-850 p-3 shadow-sm" data-proposal-id={proposalId} data-status={proposal.status}>
@@ -280,14 +281,14 @@ export function ProposalCard({ proposalId }: { proposalId: string }) {
           <div className="mt-2 text-[length:var(--fs-sm)] text-muted tabular-nums">
             {selected.size} of {proposal.items.length} selected · {humanBytes(total)}
           </div>
-          {proposal.kind === "delete" && (
+          {permanentDelete && (
             <p className="mt-1 text-[length:var(--fs-sm)] font-semibold text-err">Deleting is permanent and cannot be undone. Nothing goes to the Recycle Bin.</p>
           )}
           {proposal.kind === "archive" && (
             <p className="mt-1 text-[length:var(--fs-sm)] text-muted">Copies to {dest}, verifies the copy, then deletes the originals.</p>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            {proposal.kind === "delete" ? (
+            {permanentDelete ? (
               <HoldButton label="Hold to delete" disabled={busy || selected.size === 0} onConfirm={() => void approve()} />
             ) : (
               <button
