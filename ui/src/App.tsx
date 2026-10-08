@@ -21,7 +21,9 @@ function useLiveStatus() {
   const apply = useStore((s) => s.applyStatusEvent);
   const setConnected = useStore((s) => s.setConnected);
   const setSummary = useStore((s) => s.setSummary);
+  // Journal refreshes keep the generation but move last_refresh_ms; either one makes the greeting stale.
   const generation = useStore((s) => s.status?.index.generation);
+  const lastRefresh = useStore((s) => s.status?.index.last_refresh_ms);
 
   useEffect(() => {
     routes
@@ -33,7 +35,7 @@ function useLiveStatus() {
 
   useEffect(() => {
     routes.summary().then(setSummary).catch(() => setSummary(null));
-  }, [generation, setSummary]);
+  }, [generation, lastRefresh, setSummary]);
 }
 
 export function App() {

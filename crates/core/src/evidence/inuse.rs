@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use super::ProcessRef;
 
-pub const DIR_FILE_CAP: usize = 500;
+// Restart Manager's cost grows with the file count (cold, 500 files took 10-76 s; 64 took 1-8 s).
+pub const DIR_FILE_CAP: usize = 64;
 
 // Restart Manager takes files only, so a folder is checked through its largest indexed files.
 pub fn holders(files: &[PathBuf]) -> Vec<ProcessRef> {

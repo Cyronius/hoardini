@@ -101,7 +101,7 @@ const presets: T.Preset[] = [
 const secrets = new Set<string>();
 const serverModels = ["qwen3.8-27b", "llama-3.3-70b-instruct", "mistral-small-24b", "gemma-4-12b"];
 
-const destinations: T.Destination[] = [{ id: "dest-nas", name: "NAS", kind: "smb", config: { unc: "\\\\nas\\backups\\hoardini", user: "josh" }, created_ms: now() - 20 * 86_400_000 }];
+const destinations: T.Destination[] = [{ id: "dest-nas", name: "NAS", kind: "smb", config: { path: "\\\\nas\\backups\\hoardini", username: "josh" }, created_ms: now() - 20 * 86_400_000 }];
 
 const searchProviders: T.SearchProviderView[] = (["tavily", "brave", "exa", "serper", "searxng"] as T.SearchKind[]).map((kind) => ({ kind, is_active: kind === "tavily", has_key: kind === "tavily", base_url: null }));
 

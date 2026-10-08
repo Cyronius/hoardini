@@ -41,3 +41,25 @@ The chat shall show each run in the order it happened: text before a tool round,
 5. With a model that takes longer than the timeout to answer: "No response from the model for 2 minutes." with Keep waiting and Stop.
 6. Open the thread again from Recent chats (or reload the page and open it): messages, chips, and every proposal card's status are as before.
 (2026-10-08: steps 1–4 and 6 pass against a scripted mock; 1 and 5 against LM Studio `minicpm5-2b`.)
+
+### UI-NO-IPC: The app page has no usable Tauri IPC
+**Applies to:** hoardini-app
+**Verification:** manual
+
+The desktop window shall load the UI from the loopback server and talk to it only over HTTP with the launch token. The
+page shall have no Tauri command it can call: `window.__TAURI__` is absent (`withGlobalTauri: false`) and, because the
+app ships no capability files, every `__TAURI_INTERNALS__.invoke` is rejected. Native dialogs go through the server's
+`/api/dialog/pick-folder` relay, never through page IPC.
+
+**Verification (manual):**
+1. Build and run `cargo run -p hoardini-app` with `HOARDINI_DATA_DIR` set to a scratch folder and
+   `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`.
+2. Connect with Playwright (`chromium.connect_over_cdp("http://127.0.0.1:9333")`) and pick the `http://127.0.0.1:<port>/` page.
+3. The URL has no `#token=` fragment; `typeof window.__TAURI__` is `"undefined"`; `/api/status` answers 200 with the
+   session token and 401 without.
+4. Each of `invoke('plugin:dialog|open')`, `invoke('plugin:app|version')`, `invoke('plugin:event|emit')`,
+   `invoke('plugin:window|title')` rejects with "... not allowed".
+5. `app/` has no `capabilities` folder and `tauri.conf.json` lists `"capabilities": []`.
+(2026-10-08: as described. Note: Tauri 2.12 always injects `window.__TAURI_INTERNALS__` (a non-configurable property)
+into every main-frame page, also external URLs, so `typeof window.__TAURI_INTERNALS__` is `"object"`; the protection is
+the empty capability set, not the absence of the global.)
