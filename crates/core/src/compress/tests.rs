@@ -92,3 +92,60 @@ fn already_compressed_files_skip_the_codecs() {
             .all(|f| f.ratio == 1.0 && f.saved_bytes == 0)
     );
 }
+
+#[test]
+fn every_archive_format_keeps_each_files_mtime() {
+    let want_ms = 1_700_000_000_000_i64;
+    for fmt in [Format::Zip, Format::SevenZ, Format::TarZst] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        tree(&root);
+        hoardini_win::set_file_times(&root.join("a.txt"), None, Some(want_ms)).unwrap();
+        let cancel = AtomicBool::new(false);
+        let packed = pack(&root, fmt, &cancel, &mut |_| {}, None).unwrap();
+        match fmt {
+            Format::Zip => {
+                let mut z =
+                    zip::ZipArchive::new(std::fs::File::open(&packed.archive).unwrap()).unwrap();
+                let name = z
+                    .file_names()
+                    .find(|n| n.ends_with("a.txt"))
+                    .unwrap()
+                    .to_string();
+                let got = z.by_name(&name).unwrap().last_modified().unwrap();
+                assert_eq!(Some(got), super::pack::zip_time(want_ms));
+                assert_eq!(got.year(), 2023);
+            }
+            Format::SevenZ => {
+                let r = sevenz_rust2::ArchiveReader::open(
+                    &packed.archive,
+                    sevenz_rust2::Password::empty(),
+                )
+                .unwrap();
+                let f = r
+                    .archive()
+                    .files
+                    .iter()
+                    .find(|f| f.name().ends_with("a.txt"))
+                    .unwrap();
+                assert!(f.has_last_modified_date);
+                let got = std::time::SystemTime::from(f.last_modified_date);
+                let secs = got.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+                assert_eq!(secs, want_ms / 1000);
+            }
+            Format::TarZst => {
+                let dec =
+                    zstd::stream::read::Decoder::new(std::fs::File::open(&packed.archive).unwrap())
+                        .unwrap();
+                let mut ar = tar::Archive::new(dec);
+                let mtime = ar
+                    .entries()
+                    .unwrap()
+                    .map(|e| e.unwrap())
+                    .find(|e| e.path().unwrap().ends_with("a.txt"))
+                    .map(|e| e.header().mtime().unwrap());
+                assert_eq!(mtime, Some((want_ms / 1000) as u64));
+            }
+        }
+    }
+}

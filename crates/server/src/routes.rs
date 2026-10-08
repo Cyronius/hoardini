@@ -456,7 +456,22 @@ async fn destination_update(
     body: Bytes,
 ) -> ApiResult {
     let b: NewDestination = parse(&body)?;
-    blocking(move || Ok(Json(json!(destinations::update(&s.db.conn()?, &id, b)?)))).await
+    blocking(move || {
+        let conn = s.db.conn()?;
+        let old = destinations::get(&conn, &id)?;
+        let d = destinations::update(&conn, &id, b)?;
+        if d.kind == "rclone"
+            && let Err(e) = destinations::rclone::sync_remote(
+                s.secrets.as_ref(),
+                old.as_ref().map(|o| &o.config),
+                &d.config,
+            )
+        {
+            tracing::warn!(error = %e, destination = %d.name, "updating the rclone remote failed");
+        }
+        Ok(Json(json!(d)))
+    })
+    .await
 }
 
 async fn destination_delete(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult {

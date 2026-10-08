@@ -228,7 +228,11 @@ pub(crate) fn layout_rel(path: &str) -> String {
     path.to_string()
 }
 
-pub(crate) fn utc_date(ms: i64) -> String {
+pub(crate) fn local_date(ms: i64) -> String {
+    ymd(ms + hoardini_win::local_offset_ms(ms))
+}
+
+fn ymd(ms: i64) -> String {
     let days = ms.div_euclid(86_400_000);
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -240,6 +244,12 @@ pub(crate) fn utc_date(ms: i64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn stub_text(original: &str, dest_uri: &str, date: &str) -> String {
+    format!(
+        "{STUB_MARKER}\r\n\r\nThis note stands in for something Hoardini moved off this PC to free up space.\r\n\r\nWhere it was: {original}\r\nWhere it is now: {dest_uri}\r\nMoved on: {date}\r\n\r\nTo get it back: open Hoardini, go to the Archive list, find this item, and choose Restore. Hoardini copies it back to where it was and deletes this note.\r\n"
+    )
 }
 
 // Stubs help where a person looks for their files, not inside caches an app manages.
@@ -286,7 +296,7 @@ impl Handler for ArchiveHandler {
         let stubs = get_meta(job.conn, "archive_stubs")?.is_none_or(|v| v.trim() != "false");
         Ok(Box::new(ArchiveRunner {
             dest_id: dest.id,
-            day_dir: root.join(utc_date(now_ms())),
+            day_dir: root.join(local_date(now_ms())),
             stubs,
             env: job.env.clone(),
             hook: job.hook.clone(),
@@ -394,11 +404,7 @@ pub(crate) fn commit_archive(
         }
         cx.freed = item.alloc;
         if let Some(stub) = &stub {
-            let text = format!(
-                "{STUB_MARKER}\r\nOriginal: {}\r\nArchived copy: {dest_uri}\r\nDate: {}\r\nRestore it from Hoardini's archive list.\r\n",
-                item.path,
-                utc_date(now_ms())
-            );
+            let text = stub_text(&item.path, dest_uri, &local_date(now_ms()));
             if std::fs::write(stub, text).is_ok() {
                 cx.rescan = true;
             } else {
@@ -519,10 +525,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stubs_say_where_it_went_and_how_to_restore_and_skip_caches() {
+        let t = stub_text(
+            r"C:\x\a.zip",
+            r"D:\store\2026-10-08\C\x\a.zip",
+            "2026-10-08",
+        );
+        assert!(t.starts_with(STUB_MARKER));
+        assert!(t.contains(r"C:\x\a.zip") && t.contains(r"D:\store\2026-10-08"));
+        assert!(t.contains("Archive list") && t.contains("Restore"));
+        for c in [
+            Category::Cache,
+            Category::PackageCache,
+            Category::BrowserCache,
+            Category::Temp,
+        ] {
+            assert!(!wants_stub(Some(c)), "{c:?}");
+        }
+        assert!(wants_stub(None) && wants_stub(Some(Category::UserData)));
+    }
+
+    #[test]
     fn dates_and_layout() {
-        assert_eq!(utc_date(0), "1970-01-01");
-        assert_eq!(utc_date(1_791_417_600_000), "2026-10-08");
-        assert_eq!(utc_date(951_782_400_000), "2000-02-29");
+        assert_eq!(ymd(0), "1970-01-01");
+        assert_eq!(ymd(1_791_417_600_000), "2026-10-08");
+        assert_eq!(ymd(951_782_400_000), "2000-02-29");
+        let off = hoardini_win::local_offset_ms(1_791_417_600_000);
+        assert!(off.abs() <= 14 * 3_600_000 && off % 900_000 == 0);
+        assert_eq!(local_date(1_791_417_600_000), ymd(1_791_417_600_000 + off));
         assert_eq!(layout_rel(r"C:\Users\x\a.bin"), r"C\Users\x\a.bin");
         assert_eq!(layout_rel(r"\\nas\share\a"), r"UNC\nas\share\a");
     }

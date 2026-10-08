@@ -220,6 +220,48 @@ fn protect_memories_block_the_path_its_contents_and_its_ancestors() {
     assert_eq!(denied(&fx, &s(&photo)), None);
 }
 
+// Traces: POLICY-PROTECT
+#[test]
+fn a_wildcard_protect_glob_blocks_a_folder_that_holds_a_match_deeper_inside() {
+    let fx = Fx::new();
+    let conn = fx.db.conn().unwrap();
+    let proj = fx.work.join("proj");
+    let with = fx.file(r"proj\app\secrets\key.pem", b"pem");
+    fx.file(r"proj\app\src\main.rs", b"fn main() {}");
+    let clean = fx.file(r"clean\app\src\main.rs", b"fn main() {}");
+    remember_with(
+        &conn,
+        NewMemory::new(
+            Scope::Glob,
+            &format!(r"{}\**\secrets\**", s(&fx.work)),
+            Kind::Protect,
+            "private keys",
+            "user",
+        ),
+        1,
+        &s(&fx.profile),
+    )
+    .unwrap();
+
+    let unindexed = denied(&fx, &s(&proj)).expect("an unindexed folder cannot be cleared");
+    assert!(unindexed.contains("index cannot confirm"), "{unindexed}");
+
+    fx.index_work();
+    let why = denied(&fx, &s(&proj)).expect("proj holds a protected folder");
+    assert!(
+        why.contains("private keys") && why.contains("secrets"),
+        "{why}"
+    );
+    assert!(denied(&fx, &s(&proj.join("app"))).is_some());
+    assert_eq!(denied(&fx, &s(&proj.join("app").join("src"))), None);
+    assert_eq!(
+        denied(&fx, &s(clean.parent().unwrap().parent().unwrap())),
+        None
+    );
+    assert_eq!(denied(&fx, &s(&clean)), None);
+    assert!(with.exists());
+}
+
 fn assert_open_in_me(reason: Option<&str>) {
     let r = reason.expect("blocked with a reason");
     assert!(r.starts_with("Open in "), "{r}");

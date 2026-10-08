@@ -19,13 +19,46 @@ pub struct Stored {
 pub const OMITTED_PREFIX: &str = "[omitted:";
 const MIN_SHED_CHARS: usize = 400;
 
+const TITLE_MAX: usize = 60;
+
 pub fn title_from(text: &str) -> String {
-    let line = text.trim().lines().next().unwrap_or("").trim();
-    let mut t: String = line.chars().take(80).collect();
-    if line.chars().count() > 80 {
-        t.push_str("...");
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    let plain = strip_markdown(line);
+    let plain = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+    if plain.chars().count() <= TITLE_MAX {
+        return plain;
     }
-    t
+    let cut: String = plain.chars().take(TITLE_MAX - 3).collect();
+    let cut = match cut.rfind(' ') {
+        Some(i) if i > TITLE_MAX / 2 => &cut[..i],
+        _ => cut.as_str(),
+    };
+    format!("{}...", cut.trim_end_matches([' ', ',', ';', ':', '.']))
+}
+
+// Links keep their text; emphasis, code, heading and quote marks are dropped.
+fn strip_markdown(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line.trim_start_matches(['#', '>', '-', '*', ' ']);
+    while let Some(c) = rest.chars().next() {
+        if c == '['
+            && let Some(close) = rest.find("](")
+            && let Some(end) = rest[close..].find(')')
+        {
+            out.push_str(&rest[1..close]);
+            rest = &rest[close + end + 1..];
+            continue;
+        }
+        if !matches!(c, '*' | '`' | '~') {
+            out.push(c);
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }
 
 pub fn ensure_conversation(

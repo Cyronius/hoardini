@@ -19,8 +19,27 @@ export function decisionFor(proposalId: string): Deferred {
   return d;
 }
 
+const awaited = new Set<string>();
+type RestoredSink = (proposalId: string, content: string) => void;
+let restoredSink: RestoredSink | null = null;
+
+export function markAwaited(proposalId: string): void {
+  awaited.add(proposalId);
+}
+
+// A card restored from history has no live tool handler, so its answer must start the next run itself.
+export function setRestoredSink(sink: RestoredSink | null): void {
+  restoredSink = sink;
+}
+
 export function settle(proposalId: string, result: unknown): void {
-  decisionFor(proposalId).resolve(JSON.stringify(result));
+  const content = JSON.stringify(result);
+  if (!awaited.has(proposalId) && restoredSink) {
+    awaited.add(proposalId);
+    restoredSink(proposalId, content);
+    return;
+  }
+  decisionFor(proposalId).resolve(content);
 }
 
 export function outcomeOf(p: Proposal): { approved: boolean; items?: number[]; job_id?: string | null; status: string } {

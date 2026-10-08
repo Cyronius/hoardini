@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "@itkennel/lm-ag-ui";
 import { ProposalCard } from "../components/ProposalCard";
 import { useStore } from "../store";
-import { decisionFor, outcomeOf } from "./decisions";
+import { decisionFor, markAwaited, outcomeOf } from "./decisions";
 import { PROPOSE_TOOLS, proposeToolDefs } from "./toolDefs";
 
 async function handler(args: { proposal_id?: string } | null): Promise<string> {
@@ -10,6 +10,7 @@ async function handler(args: { proposal_id?: string } | null): Promise<string> {
   const p = await useStore.getState().loadProposal(id);
   if (!p) return JSON.stringify({ ok: false, error: "proposal_not_found" });
   if (p.status !== "pending") return JSON.stringify(outcomeOf(p));
+  markAwaited(id);
   return decisionFor(id).promise;
 }
 

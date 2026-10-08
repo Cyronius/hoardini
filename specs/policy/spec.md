@@ -46,12 +46,15 @@ ancestor holding them shall be refused (best effort).
 
 A path shall be refused when a `protect` memory covers it (the path itself, an ancestor, or a matching glob, per
 MEM-RECALL-ANCESTRY) and when it contains a protected path (a `path` key below it, or a glob whose literal prefix is at
-or below it). A protect memory added after a proposal shall stop that item at execution.
+or below it, or a wildcard glob that matches something deeper inside it, found by walking the folder's index nodes up to a
+bound; a folder the index cannot answer for is refused with a "review it first" reason). A protect memory added after a
+proposal shall stop that item at execution.
 
 **Acceptance criteria:**
 - With protect `work\keep` ("family photos"): `work\keep\2024\a.jpg`, `work\keep`, and `work` are refused with the memory text; `work\other\b.bin` is not.
 - With protect glob `work\secrets\*.kdbx`: `work\secrets\vault.kdbx` and `work\secrets` are refused.
 - A proposal for `work\other\b.bin`, approved after a protect on `work\other` is added, skips the item with a "Denied: ... late protect" detail and the file stays.
+- With protect glob `work\**\secrets\**`: `work\proj` (holding `app\secrets\key.pem`) and `work\proj\app` are refused naming the memory; `work\proj\app\src` and an unrelated `work\clean` are not. Before the index is built, `work\proj` is refused with "the index cannot confirm".
 - Deleting the memory lifts the refusal.
 
 ### POLICY-IN-USE: Open files block delete and archive

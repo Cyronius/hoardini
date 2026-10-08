@@ -40,6 +40,7 @@ The chat shall show each run in the order it happened: text before a tool round,
 4. With `max_tool_steps = 3` and a model that always calls a tool: three rounds of chips, then "Hoardini used its 3 tool steps for this turn before finishing." with Keep going; Keep going sends "Continue.".
 5. With a model that takes longer than the timeout to answer: "No response from the model for 2 minutes." with Keep waiting and Stop.
 6. Open the thread again from Recent chats (or reload the page and open it): messages, chips, and every proposal card's status are as before.
+7. Leave a proposal card pending, reload, open the thread, and approve or decline the card: the decision is recorded and a new run starts from the answer (a `tool_*` message for the proposal's tool call), so the agent continues in the same chat.
 (2026-10-08: steps 1–4 and 6 pass against a scripted mock; 1 and 5 against LM Studio `minicpm5-2b`.)
 
 ### UI-NO-IPC: The app page has no usable Tauri IPC

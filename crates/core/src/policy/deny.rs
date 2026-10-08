@@ -10,6 +10,7 @@ const SYSTEM_DIRS: &[&str] = &["System Volume Information", "$Recycle.Bin"];
 const SYSTEM_FILES: &[&str] = &["pagefile.sys", "hiberfil.sys", "swapfile.sys"];
 const WALK_BUDGET: usize = 20_000;
 const WALK_DEPTH: usize = 7;
+const PROTECT_NODE_BUDGET: usize = 100_000;
 
 pub(crate) fn same_or_under(ancestor: &str, path: &str) -> bool {
     ancestor.eq_ignore_ascii_case(path) || is_ancestor_path(ancestor, path)
@@ -118,6 +119,67 @@ fn glob_literal_prefix(key: &str) -> String {
         .join("\\")
 }
 
+enum Descendant {
+    Hit(String),
+    None,
+    Unknown,
+}
+
+// Index nodes are folders and big files, so a folder match covers everything inside it via a probe child.
+fn glob_descendant(conn: &Connection, p: &str, glob: &str) -> Descendant {
+    let Ok(md) = std::fs::symlink_metadata(p) else {
+        return Descendant::None;
+    };
+    if !md.is_dir() {
+        return Descendant::None;
+    }
+    let Ok(matcher) = memory::compile_glob(glob) else {
+        return Descendant::None;
+    };
+    let Ok(Some(root)) = crate::index::node_id_by_path(conn, p) else {
+        return Descendant::Unknown;
+    };
+    let Ok(mut st) = conn.prepare_cached("SELECT id, name, kind FROM node WHERE parent_id = ?1")
+    else {
+        return Descendant::Unknown;
+    };
+    let hits = |path: &str, is_dir: bool| {
+        let slashed = path.replace('\\', "/");
+        matcher.is_match(&slashed) || (is_dir && matcher.is_match(format!("{slashed}/_")))
+    };
+    let mut stack = vec![(root, p.to_string())];
+    let mut seen = 0usize;
+    while let Some((id, path)) = stack.pop() {
+        let Ok(rows) = st.query_map([id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        }) else {
+            return Descendant::Unknown;
+        };
+        for row in rows {
+            let Ok((cid, name, kind)) = row else {
+                return Descendant::Unknown;
+            };
+            seen += 1;
+            if seen > PROTECT_NODE_BUDGET {
+                return Descendant::Unknown;
+            }
+            let child = crate::index::join_path(&path, &name);
+            let is_dir = kind == crate::index::KIND_DIR;
+            if hits(&child, is_dir) {
+                return Descendant::Hit(child);
+            }
+            if is_dir {
+                stack.push((cid, child));
+            }
+        }
+    }
+    Descendant::None
+}
+
 fn protect_reason(conn: &Connection, env: &PolicyEnv, p: &str) -> anyhow::Result<Option<String>> {
     if let Some(m) = memory::protect_covering_with(conn, p, &env.profile)? {
         return Ok(Some(format!("{p} is protected by a memory: {}", m.text)));
@@ -140,16 +202,33 @@ fn protect_reason(conn: &Connection, env: &PolicyEnv, p: &str) -> anyhow::Result
         let target = if scope == "glob" {
             glob_literal_prefix(&key)
         } else {
-            key
+            key.clone()
         };
-        if target.is_empty() {
-            continue;
-        }
-        let target = normalize_path(&target);
-        if same_or_under(p, &target) {
+        let target = if target.is_empty() {
+            target
+        } else {
+            normalize_path(&target)
+        };
+        if !target.is_empty() && same_or_under(p, &target) {
             return Ok(Some(format!(
                 "{p} contains the protected path {target}: {text}"
             )));
+        }
+        // A wildcard before the first literal folder can still match deeper inside p.
+        if scope == "glob" && (target.is_empty() || is_ancestor_path(&target, p)) {
+            match glob_descendant(conn, p, &key) {
+                Descendant::Hit(hit) => {
+                    return Ok(Some(format!(
+                        "{p} contains {hit}, which the protect pattern {key} covers: {text}"
+                    )));
+                }
+                Descendant::Unknown => {
+                    return Ok(Some(format!(
+                        "{p} may contain something the protect pattern {key} covers ({text}); the index cannot confirm it does not, so review it first"
+                    )));
+                }
+                Descendant::None => {}
+            }
         }
     }
     Ok(None)

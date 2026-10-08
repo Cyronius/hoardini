@@ -16,7 +16,9 @@ mod volume;
 pub use atime::open_read_preserving_atime;
 pub use dpapi::{dpapi_protect, dpapi_unprotect};
 pub use enumerate::{alloc_size_by_open, list_dir, list_dir_each};
-pub use fsutil::{create_junction, file_id_of, set_file_times, set_sparse_and_zero_range};
+pub use fsutil::{
+    create_junction, file_id_of, local_offset_ms, set_file_times, set_sparse_and_zero_range,
+};
 pub use killjob::kill_child_on_exit;
 pub use net::smb_connect;
 pub use process::{

@@ -185,6 +185,22 @@ fn record(expect: &mut Expect, e: &Entry, s: Source<'_>) -> Result<()> {
     Ok(())
 }
 
+// Zip stores wall-clock local time with 2 s resolution and no zone.
+pub(crate) fn zip_time(ms: i64) -> Option<zip::DateTime> {
+    let local = ms + hoardini_win::local_offset_ms(ms);
+    let (y, mo, d) = crate::history::civil_from_unix_ms(local);
+    let secs = local.div_euclid(1000).rem_euclid(86_400);
+    zip::DateTime::from_date_and_time(
+        u16::try_from(y).ok()?,
+        mo as u8,
+        d as u8,
+        (secs / 3600) as u8,
+        (secs % 3600 / 60) as u8,
+        (secs % 60) as u8,
+    )
+    .ok()
+}
+
 fn write_zip(
     out: &Path,
     entries: &[Entry],
@@ -197,6 +213,10 @@ fn write_zip(
         .large_file(true);
     let mut expect = Expect::new();
     for e in entries {
+        let opts = match e.mtime_ms.and_then(zip_time) {
+            Some(t) => opts.last_modified_time(t),
+            None => opts,
+        };
         if e.is_dir {
             zw.add_directory(format!("{}/", e.rel), opts)?;
             continue;

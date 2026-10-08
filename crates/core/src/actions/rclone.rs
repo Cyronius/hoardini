@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use sha2::Digest;
 
 use super::archive::{
-    Committed, Copier, EntryRow, commit_archive, finish_restore, layout_rel, list_tree,
-    manifest_hash, remove_tmp, utc_date, with_suffix,
+    Committed, Copier, EntryRow, commit_archive, finish_restore, layout_rel, list_tree, local_date,
+    manifest_hash, remove_tmp, with_suffix,
 };
 use super::handler::{Cancelled, ItemCx, JobCx, Outcome, Runner};
 use crate::destinations::Destination;
@@ -486,7 +486,7 @@ pub(crate) fn begin(job: &JobCx<'_>, dest: &Destination) -> anyhow::Result<Box<d
         cfg,
         client,
         hash,
-        day: utc_date(now_ms()),
+        day: local_date(now_ms()),
         stubs,
         env: job.env.clone(),
     }))
@@ -518,12 +518,24 @@ fn unchanged(src: &Path, kind: ItemKind, local: &[LocalFile]) -> anyhow::Result<
 
 impl RcloneRunner {
     fn discard_remote(&self, target: &str, kind: ItemKind) {
-        let _ = if kind == ItemKind::Dir {
+        let r = if kind == ItemKind::Dir {
             self.client.purge(&self.cfg.fs(target))
         } else {
             let (parent, name) = split_parent(target);
             self.client.delete_file(&self.cfg.fs(parent), name)
         };
+        if let Err(e) = r {
+            tracing::warn!(error = %e, target, "could not remove the partial remote copy");
+        }
+    }
+
+    // A listing failure other than "not found" counts as present, so nothing unknown is ever purged.
+    fn remote_exists(&self, target: &str) -> bool {
+        let (parent, name) = split_parent(target);
+        match self.client.list(&self.cfg.fs(parent), false, None) {
+            Ok(items) => items.iter().any(|i| i.name == name),
+            Err(e) => !e.to_string().to_lowercase().contains("not found"),
+        }
     }
 }
 
@@ -534,39 +546,50 @@ impl Runner for RcloneRunner {
         let rel = slashes(&layout_rel(&item.path));
         let target = self.cfg.join(&format!("{}/{}", self.day, rel));
         let (local, links) = scan(&src, item.kind, self.hash, cx.cancel)?;
-        let group = format!("hoardini-a{}", cx.action_id);
-        let (method, params) = copy_params_up(&self.cfg, &src, item.kind, &target);
-        run_job(
-            &self.client,
-            method,
-            params,
-            &group,
-            cx.cancel,
-            &mut *cx.progress,
-        )?;
-        let verdict = if local.is_empty() {
-            Verdict::Match
-        } else {
-            let listing = remote_listing(&self.client, &self.cfg, &target, item.kind, self.hash)?;
-            match compare(&local, &listing, self.hash) {
-                Verdict::NeedDownload => download_compare(
-                    &self.client,
-                    &self.cfg,
-                    &target,
-                    item.kind,
-                    &local,
-                    &format!("{group}-verify"),
-                    cx.cancel,
-                )?,
-                v => v,
+        // Never purge a target that was there before this copy started.
+        let preexisting = self.remote_exists(&target);
+        let copied = (|| -> anyhow::Result<()> {
+            let group = format!("hoardini-a{}", cx.action_id);
+            let (method, params) = copy_params_up(&self.cfg, &src, item.kind, &target);
+            run_job(
+                &self.client,
+                method,
+                params,
+                &group,
+                cx.cancel,
+                &mut *cx.progress,
+            )?;
+            let verdict = if local.is_empty() {
+                Verdict::Match
+            } else {
+                let listing =
+                    remote_listing(&self.client, &self.cfg, &target, item.kind, self.hash)?;
+                match compare(&local, &listing, self.hash) {
+                    Verdict::NeedDownload => download_compare(
+                        &self.client,
+                        &self.cfg,
+                        &target,
+                        item.kind,
+                        &local,
+                        &format!("{group}-verify"),
+                        cx.cancel,
+                    )?,
+                    v => v,
+                }
+            };
+            if let Verdict::Mismatch(why) = verdict {
+                anyhow::bail!("verification failed: {why}; the source was kept");
             }
-        };
-        if let Verdict::Mismatch(why) = verdict {
-            self.discard_remote(&target, item.kind);
-            anyhow::bail!("verification failed: {why}; the source was kept");
+            cx.check_cancel()?;
+            unchanged(&src, item.kind, &local)?;
+            Ok(())
+        })();
+        if let Err(e) = copied {
+            if !preexisting {
+                self.discard_remote(&target, item.kind);
+            }
+            return Err(e);
         }
-        cx.check_cancel()?;
-        unchanged(&src, item.kind, &local)?;
         let size: u64 = local.iter().map(|f| f.size).sum();
         let hash = if item.kind == ItemKind::File {
             local[0].blake3.clone()

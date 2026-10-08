@@ -14,7 +14,7 @@ SMB UNC path), compress, dedupe.
 
 - **Delete**: `remove_file` (read-only cleared), `remove_dir_all` for folders (never follows links inside), and a link
   item removes the link itself.
-- **Archive**: copy to `<destination>\<yyyy-mm-dd UTC>\<original path without the drive colon>` (`UNC\server\share\...`
+- **Archive**: copy to `<destination>\<yyyy-mm-dd local time>\<original path without the drive colon>` (`UNC\server\share\...`
   for network sources), hashing the source while copying into `<name>.hoardini-partial`; flush; re-read the copy; size
   and BLAKE3 must match; rename into place; then delete the source. Folders copy file by file with the same check; links
   inside are skipped and named in the item detail. A re-run reuses a final copy whose BLAKE3 still matches. User

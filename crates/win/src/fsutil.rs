@@ -6,7 +6,8 @@ use std::path::Path;
 use windows::Win32::Foundation::{FILETIME, GENERIC_WRITE};
 use windows::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES,
-    FILE_WRITE_ATTRIBUTES, FileIdInfo, GetFileInformationByHandleEx, SetFileTime,
+    FILE_WRITE_ATTRIBUTES, FileIdInfo, FileTimeToLocalFileTime, GetFileInformationByHandleEx,
+    SetFileTime,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
@@ -22,6 +23,17 @@ fn filetime(ms: i64) -> FILETIME {
         dwLowDateTime: ft as u32,
         dwHighDateTime: (ft >> 32) as u32,
     }
+}
+
+pub fn local_offset_ms(utc_ms: i64) -> i64 {
+    let ft = filetime(utc_ms);
+    let mut local = FILETIME::default();
+    // SAFETY: both pointers are valid for the call.
+    if unsafe { FileTimeToLocalFileTime(&ft, &mut local) }.is_err() {
+        return 0;
+    }
+    let l = u64::from(local.dwHighDateTime) << 32 | u64::from(local.dwLowDateTime);
+    (l as i64 - unix_ms_to_filetime(utc_ms) as i64) / 10_000
 }
 
 pub fn set_file_times(path: &Path, atime_ms: Option<i64>, mtime_ms: Option<i64>) -> io::Result<()> {

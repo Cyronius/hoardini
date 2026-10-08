@@ -198,6 +198,19 @@ impl RcClient {
         .map_err(|e| anyhow::anyhow!("could not create the rclone remote {name}: {e}"))
     }
 
+    pub fn config_update(&self, name: &str, parameters: &Map<String, Value>) -> Result<()> {
+        self.call(
+            "config/update",
+            &json!({
+                "name": name,
+                "parameters": parameters,
+                "opt": {"obscure": true, "nonInteractive": true, "noOutput": true},
+            }),
+        )
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("could not update the rclone remote {name}: {e}"))
+    }
+
     pub fn config_delete(&self, name: &str) -> Result<()> {
         self.call("config/delete", &json!({"name": name}))
             .map(|_| ())
@@ -701,6 +714,29 @@ pub fn prepare_remote(
         return Ok(());
     }
     client.config_create(&cfg.remote, &cfg.kind, &cfg.materialize(secrets)?)
+}
+
+// prepare_remote keeps an existing remote as-is, so edits to a destination must be pushed here.
+pub fn sync_remote(secrets: &dyn SecretStore, old: Option<&Value>, new: &Value) -> Result<()> {
+    let cfg = parse_config(new)?;
+    let old = old.and_then(|o| parse_config(o).ok());
+    let client = open_client(secrets, None)?;
+    let remotes = client.list_remotes()?;
+    if let Some(o) = &old
+        && o.remote != cfg.remote
+        && remotes.contains(&o.remote)
+    {
+        client.config_delete(&o.remote)?;
+    }
+    let params = cfg.materialize(secrets)?;
+    if !remotes.contains(&cfg.remote) {
+        return client.config_create(&cfg.remote, &cfg.kind, &params);
+    }
+    if old.as_ref().is_some_and(|o| o.kind != cfg.kind) {
+        client.config_delete(&cfg.remote)?;
+        return client.config_create(&cfg.remote, &cfg.kind, &params);
+    }
+    client.config_update(&cfg.remote, &params)
 }
 
 pub fn remove_remote(secrets: &dyn SecretStore, remote: &str) -> Result<()> {

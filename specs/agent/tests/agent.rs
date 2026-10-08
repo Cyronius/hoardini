@@ -547,6 +547,19 @@ async fn the_server_owns_history_and_ignores_client_assistant_messages() {
 }
 
 // Traces: AGENT-HISTORY
+#[test]
+fn titles_are_short_plain_single_lines() {
+    assert_eq!(
+        thread::title_from("## **Why** is [this folder](http://x.y) so `big`?\nmore"),
+        "Why is this folder so big?"
+    );
+    let long = "word ".repeat(40);
+    let t = thread::title_from(&long);
+    assert!(t.chars().count() <= 60 && t.ends_with("..."), "{t}");
+    assert_eq!(thread::title_from("\n\n  hello  "), "hello");
+}
+
+// Traces: AGENT-HISTORY
 #[tokio::test]
 async fn a_client_tool_answer_for_a_proposal_is_rewritten_from_the_proposal_row() {
     let h = Harness::new(None);

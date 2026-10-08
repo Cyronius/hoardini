@@ -5,6 +5,7 @@ import { getToken, routes } from "../api/client";
 import type { ProviderView } from "../api/types";
 import { resolveMaxSteps, resolveStallMs, WATCHDOG_BACKSTOP_MS } from "../agent/aiTimeouts";
 import { useActivity } from "../agent/activityStore";
+import { setRestoredSink } from "../agent/decisions";
 import { currentRunId, requestHandler } from "../agent/events";
 import { proposalTools } from "../agent/proposalTools";
 import { classifySettledTurn, describeRunError, isAbortError } from "../agent/runError";
@@ -132,6 +133,31 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
       sendingRef.current = false;
     }
   };
+
+  const latest = useRef({ messages, isStreaming });
+  latest.current = { messages, isStreaming };
+  useEffect(() => {
+    setRestoredSink((proposalId, content) => {
+      const { messages: msgs } = latest.current;
+      const call = msgs.flatMap((m) => (m as unknown as { toolCalls?: ToolCallLike[] }).toolCalls ?? []).find((tc) => {
+        try {
+          return JSON.parse(tc.function?.arguments || "{}").proposal_id === proposalId;
+        } catch {
+          return false;
+        }
+      });
+      if (!call) return;
+      const answer = { id: `tool_${crypto.randomUUID()}`, role: "tool", toolCallId: call.id, content } as unknown as Message;
+      addMessage(answer);
+      agentClient.startNewRun();
+      void agentClient
+        .runAgent([...msgs, answer], Object.values(toolDefs).map((t) => t.definition), agentSubscriber, getForwardedProps())
+        .catch((err) => {
+          if (!isAbortError(err)) addMessage({ id: `error_${Date.now()}`, role: "assistant", content: `Error: ${describeRunError(err)}` });
+        });
+    });
+    return () => setRestoredSink(null);
+  });
 
   const send = async () => {
     const text = input.trim();
