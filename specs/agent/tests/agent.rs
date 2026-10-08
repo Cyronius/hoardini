@@ -110,6 +110,8 @@ fn every_tool_leaves_the_filesystem_unchanged_and_propose_tools_only_create_pend
             json!({"scope": file, "kind": "fact", "text": "test model"}),
         ),
         ("destinations", json!({})),
+        ("duplicates", json!({"under": root, "min_size": "1 KB"})),
+        ("estimate_compression", json!({"path": file})),
         (
             "propose_delete",
             json!({"paths": [file], "verdict": "redownload", "reason": "test"}),

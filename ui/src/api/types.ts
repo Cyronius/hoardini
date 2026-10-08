@@ -58,6 +58,7 @@ export type Proposal = {
   job_id: string | null;
   destination: { id: string; name: string } | null;
   format: string | null;
+  dedupe?: { group_id: number; keep: string; mode: "hardlink" | "delete" } | null;
   summary: string;
   items: ProposalItem[];
 };

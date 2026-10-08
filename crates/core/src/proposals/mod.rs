@@ -109,6 +109,8 @@ pub struct Proposal {
     pub job_id: Option<String>,
     pub destination: Option<DestinationRef>,
     pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedupe: Option<DedupeParams>,
     pub summary: String,
     pub conversation_id: Option<String>,
     pub tool_call_id: Option<String>,
@@ -445,6 +447,7 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         job_id,
         destination,
         format: params.format,
+        dedupe: params.dedupe,
         summary: params.summary,
         conversation_id,
         tool_call_id,
