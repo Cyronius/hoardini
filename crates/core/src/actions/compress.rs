@@ -59,6 +59,32 @@ fn alloc_of(path: &Path, kind: ItemKind) -> Option<i64> {
     }
 }
 
+// compact /s walks into junctions and recalls cloud files, so a folder must hold neither.
+fn refuse_links_inside(root: &Path) -> anyhow::Result<()> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for e in hoardini_win::list_dir(&dir)? {
+            let p = dir.join(&e.name);
+            if e.is_reparse() && e.reparse_tag != hoardini_win::IO_REPARSE_TAG_WOF {
+                anyhow::bail!(
+                    "{} is a link or reparse point; compact would follow it",
+                    p.display()
+                );
+            }
+            if e.is_placeholder() {
+                anyhow::bail!(
+                    "{} is cloud-only; compressing would download it",
+                    p.display()
+                );
+            }
+            if e.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn map_cancel(e: anyhow::Error) -> anyhow::Error {
     if e.is::<pack::Cancelled>() {
         Cancelled.into()
@@ -135,6 +161,9 @@ impl CompressRunner {
     fn in_place(&self, cx: &mut ItemCx<'_>, lzx: bool) -> anyhow::Result<Outcome> {
         let path = Path::new(&cx.item.path);
         let is_dir = cx.item.kind == ItemKind::Dir;
+        if is_dir {
+            refuse_links_inside(path)?;
+        }
         let before = alloc_of(path, cx.item.kind).unwrap_or(cx.item.alloc);
         let mut args: Vec<String> = vec!["/c".into()];
         let mut undo_args: Vec<String> = vec!["/u".into()];

@@ -7,7 +7,9 @@ Code: `crates/core/src/policy`, `crates/core/src/proposals`. Tests: `specs/polic
 ## Model
 
 Every requested path is resolved first: `~\...` expands to the profile, `.`/`..` collapse, and short names and junctions
-in the parent chain resolve to the real location (a final link stays the link itself). Then one of three outcomes:
+in the parent chain resolve to the real location (a final link stays the link itself). A final link or cloud
+placeholder, which is not opened, keeps its on-disk name, so a trailing dot or an 8.3 alias resolves to the real name.
+Then one of three outcomes:
 
 - **Denied**: the path never becomes an item. It is listed in the proposal's `dropped` with a reason. A request whose
   every path is denied fails with an error that names each path and reason.
@@ -28,7 +30,9 @@ The gate shall refuse, with no override, any path that is, is inside, or contain
 folder at a volume root (and the `%ProgramFiles*%` locations), `ProgramData\Microsoft`, `System Volume Information`,
 `$Recycle.Bin`, and Hoardini's data folder. It shall refuse `pagefile.sys`, `hiberfil.sys`, and `swapfile.sys`. It shall
 refuse any volume root (`C:\`, `\\server\share`), the profile root, `AppData`, and `AppData\Local`, `Roaming`, and
-`LocalLow` themselves, and any ancestor of them (so `C:\Users` is refused because it holds the profile). When the active
+`LocalLow` themselves, and any ancestor of them (so `C:\Users` is refused because it holds the profile). It shall refuse
+any network path that leads back to a fixed volume of this PC (`\\localhost\C$\...`, a share of a local folder; the
+share reports the local volume's serial), since the rules above are written for local names. When the active
 provider points at `localhost`/`127.0.0.1`/`::1` and names a model, files of that model under the LM Studio, Ollama, and
 Hugging Face stores (path contains the model id, case-insensitive; Ollama blobs via the model's manifest) and every
 ancestor holding them shall be refused (best effort).
@@ -39,6 +43,7 @@ ancestor holding them shall be refused (best effort).
 - A request made only of denied paths creates no proposal and returns an error naming the reasons ("volume root", "profile").
 - A mixed request keeps the allowed items; `profile\Downloads\..\..` and `~\AppData\Local` are among the `dropped` entries.
 - With an active `http://localhost:1234/v1` provider and model `qwen3.8-27b`, `~\.lmstudio\models\...\Qwen3.8-27B-GGUF\Qwen3.8-27B-Q8_0.gguf`, its folder, `models\lmstudio-community`, `models`, and `~\.lmstudio` are refused with the model id in the reason; a sibling Llama model is not. With a non-local base URL nothing is refused.
+- Where the administrative share is reachable, the profile root and a file in it, written as `\\localhost\C$\...`, are refused with "this PC" in the reason, and a proposal for the profile that way creates nothing.
 
 ### POLICY-PROTECT: Protect memories block their paths
 **Applies to:** hoardini
@@ -56,6 +61,7 @@ proposal shall stop that item at execution.
 - A proposal for `work\other\b.bin`, approved after a protect on `work\other` is added, skips the item with a "Denied: ... late protect" detail and the file stays.
 - With protect glob `work\**\secrets\**`: `work\proj` (holding `app\secrets\key.pem`) and `work\proj\app` are refused naming the memory; `work\proj\app\src` and an unrelated `work\clean` are not. Before the index is built, `work\proj` is refused with "the index cannot confirm".
 - Deleting the memory lifts the refusal.
+- A protected offline (cloud placeholder) file requested with a trailing dot (`Tax Return 2024.pdf.`) is refused with the memory text.
 
 ### POLICY-IN-USE: Open files block delete and archive
 **Applies to:** hoardini
@@ -72,6 +78,7 @@ with the same reason.
 - An archive proposal for a held file is blocked the same way; approving a blocked item is rejected and the proposal stays `pending`.
 - A file opened between proposal and approval is `skipped` with the `Open in` detail and still exists.
 - A file with the offline attribute is blocked for archive (reason mentions the download) and selectable for delete; a missing path is blocked `Not found`.
+- A folder whose open file is too small to have an index row (so the check cannot see it) is not deleted in part: the item does not finish `done`, every file in the folder still exists, and 0 bytes are freed (ACT delete renames the folder first).
 
 ### POLICY-REVALIDATE: Changed items are skipped at execution
 **Applies to:** hoardini

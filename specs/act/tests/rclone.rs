@@ -212,6 +212,24 @@ fn a_read_back_mismatch_fails_the_item_and_keeps_the_source() {
 
 // Traces: ACT-RCLONE-VERIFY
 #[test]
+fn a_second_archive_of_the_same_path_keeps_the_first_remote_copy() {
+    let r = rig(sha256_only());
+    let v1 = data(300_000, 1);
+    let file = r.fx.file(r"dl\setup.exe", &v1);
+    assert_eq!(run_archive(&r, &[&file]).0.status, "done");
+    let first = entry_for(&r.fx, &file);
+    r.fx.file(r"dl\setup.exe", &data(200_000, 2));
+    assert_eq!(run_archive(&r, &[&file]).0.status, "done");
+    let all = entries(&r.fx);
+    assert_eq!(all.len(), 2);
+    assert_ne!(all[0].dest_uri, all[1].dest_uri, "{all:#?}");
+    assert_eq!(std::fs::read(remote_file(&r, &first.dest_uri)).unwrap(), v1);
+    assert_eq!(wait(&r.ex, &r.ex.restore(first.id).unwrap()).status, "done");
+    assert_eq!(std::fs::read(&file).unwrap(), v1);
+}
+
+// Traces: ACT-RCLONE-VERIFY
+#[test]
 fn a_source_that_changes_after_it_was_hashed_is_kept() {
     let fx_file: std::sync::Arc<parking_lot::Mutex<Option<PathBuf>>> = Default::default();
     let hook_file = fx_file.clone();

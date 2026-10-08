@@ -87,6 +87,64 @@ fn deny_list_rejects_system_locations_profile_roots_and_their_ancestors() {
     assert!(downloads.exists() && pip.exists());
 }
 
+fn via_admin_share(p: &Path) -> String {
+    let local = s(p);
+    let (drive, rest) = local.split_at(1);
+    format!(
+        r"\\localhost\{drive}$\{}",
+        rest.trim_start_matches(':').trim_start_matches('\\')
+    )
+}
+
+// Traces: POLICY-DENY
+#[test]
+fn a_share_that_leads_back_to_this_pc_cannot_dodge_the_deny_list() {
+    let fx = Fx::new();
+    let profile_unc = via_admin_share(&fx.profile);
+    if std::fs::metadata(&profile_unc).is_err() {
+        eprintln!("skipped: the administrative share is not reachable here ({profile_unc})");
+        return;
+    }
+    let file = fx.pfile(r"Documents\taxes.pdf", b"pdf");
+    for p in [profile_unc.clone(), via_admin_share(&file)] {
+        let why = denied(&fx, &p).unwrap_or_else(|| panic!("{p} must be denied"));
+        assert!(why.contains("this PC"), "{why}");
+    }
+    let err = fx
+        .propose(ProposalKind::Delete, &[Path::new(&profile_unc)], None)
+        .unwrap_err();
+    assert!(err.contains("refused by policy"), "{err}");
+    assert!(file.exists());
+}
+
+// Traces: POLICY-PROTECT
+#[test]
+fn a_protected_cloud_file_cannot_be_named_around_its_protect_memory() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let fx = Fx::new();
+    let conn = fx.db.conn().unwrap();
+    let f = fx.work.join("Tax Return 2024.pdf");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .attributes(hoardini_win::FILE_ATTRIBUTE_OFFLINE)
+        .open(&f)
+        .unwrap();
+    remember_with(
+        &conn,
+        NewMemory::new(Scope::Path, &s(&f), Kind::Protect, "tax records", "user"),
+        1,
+        &s(&fx.profile),
+    )
+    .unwrap();
+    let dotted = PathBuf::from(format!("{}.", s(&f)));
+    let err = fx
+        .propose(ProposalKind::Delete, &[&dotted], None)
+        .unwrap_err();
+    assert!(err.contains("tax records"), "{err}");
+    assert!(f.exists());
+}
+
 // Traces: POLICY-DENY
 #[test]
 fn files_of_the_active_local_model_are_denied() {

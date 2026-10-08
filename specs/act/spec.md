@@ -12,12 +12,16 @@ starts a job on its own thread, and returns `{approved, items, job_id}`. Jobs ru
 table; cancel takes effect between files and between 1 MiB copy chunks. Kinds: delete, archive (local folder,
 SMB UNC path), compress, dedupe.
 
-- **Delete**: `remove_file` (read-only cleared), `remove_dir_all` for folders (never follows links inside), and a link
+- **Delete**: `remove_file` (read-only cleared); a folder is first renamed to a temporary sibling name (Windows refuses
+  while anything inside is open, so nothing is deleted then), then `remove_dir_all` (never follows links inside); a link
   item removes the link itself.
 - **Archive**: copy to `<destination>\<yyyy-mm-dd local time>\<original path without the drive colon>` (`UNC\server\share\...`
   for network sources), hashing the source while copying into `<name>.hoardini-partial`; flush; re-read the copy; size
-  and BLAKE3 must match; rename into place; then delete the source. Folders copy file by file with the same check; links
-  inside are skipped and named in the item detail. A re-run reuses a final copy whose BLAKE3 still matches. User
+  and BLAKE3 must match; rename into place; check that every source file still has the size and mtime it had when its
+  copy started and that no file was added; then delete the source. Folders copy file by file with the same check; links
+  inside are skipped and named in the item detail. When an earlier `archive_entry` holds that location (or a folder
+  above or inside it), the next free `<yyyy-mm-dd>-N` folder is used instead, so an archive never writes into another's
+  copy. A re-run reuses a final copy whose BLAKE3 still matches. User
   folders (no catalog entry, `user-data`, `downloads`) get a `<name>.hoardini.txt` stub naming the copy; caches do not
   (`meta.archive_stubs = false` turns stubs off).
 - **Compress**: formats `zip`, `7z`, `tar.zst` write `<name>.<ext>` next to the original (`<name>.<ext>.hoardini-partial`
@@ -25,7 +29,8 @@ SMB UNC path), compress, dedupe.
   BLAKE3 must match, the sources must be unchanged, and only then is the archive renamed into place and the originals
   deleted (undo = extract). Links, reparse points, and cloud-only files make the item fail up front. `lzx`
   (`compact /c /exe:lzx`, for data that is not written to again) and `lznt1` (`compact /c`) run `compact.exe` in place with
-  no console window (undo = `compact /u`). Freed bytes = allocation before minus after.
+  no console window (undo = `compact /u`); a folder holding a link, reparse point, or cloud-only file fails up front too,
+  because `compact /s` would follow the link. Freed bytes = allocation before minus after (WOF files measured by handle).
 - **Dedupe**: items are the extra copies; `keep` (from the proposal) is never listed, opened for write, or changed.
   `hardlink` (same volume only) hashes keep and extra in full at execution, creates the link under a temp name beside
   the extra, then renames it over the extra; `delete` removes the extra. Candidates come from `core::dupes`: same
@@ -58,13 +63,17 @@ SMB UNC path), compress, dedupe.
 **Verification:** test
 
 An archive shall delete a source file or folder only after every copied file's size and BLAKE3 match the source as read
-during the copy. A copy that fails verification shall be removed, the item shall fail, and the source shall stay
-untouched. A re-run shall reuse copies that still verify.
+during the copy, and only while every source file is unchanged since its copy started and no file was added. A copy
+that fails verification shall be removed, the item shall fail, and the source shall stay untouched. A re-run shall
+reuse copies that still verify. An archive shall never overwrite or add to a copy that an earlier `archive_entry`
+records.
 
 **Acceptance criteria:**
 - Archiving a 3 MiB file and a nested folder (with an empty subfolder) to a local destination removes both sources; the copy sits under the destination with the original layout (`...\work\docs\model.gguf`), byte-identical, and `archive_entry.blake3` equals BLAKE3 of the original bytes.
 - When each finished copy is altered before verification, the file and the folder items fail with "verification failed", both sources are byte-identical to before, no `archive_entry` is written, and the job frees 0 bytes.
 - After a run whose second file failed verification, a new archive of the same folder copies only the two files not yet verified and succeeds.
+- A file created in the folder while it is copied, or a file appended to after its copy finished, fails the item; the source (with the new data) stays, no `archive_entry` is written, and 0 bytes are freed.
+- Archiving a file and a folder, then new content at the same paths again the same day, gives four entries with four distinct `dest_uri`s, and restoring the first two brings back the first bytes and tree.
 
 ### ACT-JOURNAL: Every action is journaled with undo info before it reports success
 **Applies to:** hoardini
@@ -140,6 +149,8 @@ partial file. An in-place compress shall leave content identical and reduce allo
 - For each of zip, 7z, tar.zst: a text file and a nested folder (with an empty subfolder) compress to `<name>.<ext>` beside them, both originals are gone, the job frees more than 0 bytes, and the zip's entries equal the folder's file bytes.
 - When each finished archive is damaged before its test, the job fails, the file and folder are byte-identical to before, no archive or `.hoardini-partial` exists, and 0 bytes are freed.
 - `lzx` and `lznt1` on a 4 MiB text file: content is identical, allocation after is under half of before, `freed_bytes` equals the difference, and the journaled undo is a `compact /u` command.
+- `lzx` on a folder of text files: `freed_bytes` equals the files' allocation before minus after.
+- `lzx` and `lznt1` on a folder holding a junction to another folder: the item fails naming the link, and neither the junction's target nor the folder's own files change allocation.
 
 ### ACT-DEDUPE-VERIFY: Duplicates are removed only after a fresh full-hash match
 **Applies to:** hoardini
@@ -172,6 +183,7 @@ then renames into place.
 - When the remote's copy of each file is altered, the file and the folder items fail with "verification failed" (with or without remote hashes), both sources are byte-identical to before, no `archive_entry` exists, the remote holds no files, and 0 bytes are freed.
 - When the source file grows after it was hashed, the item fails with "changed while", the source stays, and no `archive_entry` exists.
 - Restoring both entries brings back identical bytes and keeps the remote copy.
+- A second archive of new content at the same path the same day lands at a different `dest_uri`; the first remote copy keeps its bytes and restores them.
 
 ### ACT-RCLONE-PROGRESS: Archive progress comes from the rclone job group, and cancel stops the job
 **Applies to:** hoardini
