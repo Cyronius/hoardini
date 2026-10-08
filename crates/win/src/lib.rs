@@ -23,8 +23,8 @@ pub use fsutil::{
 pub use killjob::kill_child_on_exit;
 pub use net::smb_connect;
 pub use process::{
-    JobGuard, KillOnCloseJob, cap_process_memory, current_working_set, enter_background_mode,
-    leave_background_mode,
+    JobGuard, KillOnCloseJob, ProcessMemory, cap_process_memory, current_working_set,
+    enter_background_mode, kill_with_job, leave_background_mode, physical_cores, process_memory,
 };
 pub use registry::{installed_programs, last_access_setting, user_assist};
 pub use rm::processes_using;

@@ -477,8 +477,57 @@ async function route(req: Request): Promise<Response> {
       return json(settings);
     case "archive":
       return json([]);
+    case "builtin":
+      if (seg[1] === "install") return json(installBuiltin((await body<{ model_id: string }>()).model_id));
+      if (method === "DELETE") {
+        const freed = builtin.runtime.size + (builtin.model?.size ?? 0);
+        Object.assign(builtin, { installed: false, running: false, model: null, provider_id: null });
+        builtin.runtime.installed = false;
+        for (const c of builtin.candidates) c.installed = false;
+        return json({ ok: true, freed_bytes: freed });
+      }
+      return json(builtin);
   }
   return err(`no mock for ${method} ${path}`, 404);
+}
+
+const builtin: T.BuiltinView = {
+  installed: false,
+  running: false,
+  runtime: { version: "b11503", size: 19_483_533, installed: false, license: "MIT", license_url: "https://github.com/ggml-org/llama.cpp/blob/b11503/LICENSE" },
+  model: null,
+  candidates: [
+    { id: "lfm2.5-1.2b-instruct", name: "LFM2.5 1.2B Instruct", size: 730_895_168, license: "LFM Open License v1.0", license_url: "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF", installed: false, recommended: false },
+    { id: "qwen3-4b-instruct-2507", name: "Qwen3 4B Instruct 2507", size: 2_497_281_120, license: "Apache-2.0", license_url: "https://www.apache.org/licenses/LICENSE-2.0", installed: false, recommended: true },
+  ],
+  free_bytes: 62 * GB,
+  recommended: "qwen3-4b-instruct-2507",
+  install_job: null,
+  provider_id: null,
+  threads: 10,
+  context: 16384,
+};
+
+function installBuiltin(modelId: string): T.Job {
+  const pick = builtin.candidates.find((c) => c.id === modelId)!;
+  const total = builtin.runtime.size + pick.size;
+  const job: T.Job = { id: uuid(), kind: "builtin_install", proposal_id: null, status: "running", progress: { done_bytes: 0, total_bytes: total, done_items: 0, total_items: 2, current: "llama.cpp b11503" }, freed_bytes: 0, error: null, created_ms: now(), finished_ms: null };
+  builtin.install_job = job;
+  emitJob(job);
+  void (async () => {
+    for (let s = 1; s <= 20; s++) {
+      await sleep(300);
+      job.progress.done_bytes = (total * s) / 20;
+      job.progress.current = s < 2 ? "llama.cpp b11503" : pick.name;
+      emitJob(job);
+    }
+    Object.assign(job, { status: "done", finished_ms: now(), progress: { ...job.progress, done_items: 2, current: null } });
+    builtin.runtime.installed = true;
+    pick.installed = true;
+    Object.assign(builtin, { installed: true, model: pick, provider_id: "builtin" });
+    emitJob(job);
+  })();
+  return job;
 }
 
 // Status stream needs raw comment frames, so it is served outside sseResponse.

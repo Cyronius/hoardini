@@ -1,3 +1,5 @@
+mod builtin;
+
 use hoardini_agent::provider::{
     AssembledTurn, ChatMessage, ChatRequest, Client, ProviderConfig, ProviderError, StreamEvent,
     StreamExt, ToolCallMsg, assemble_sse, build_body, presets, suggest_models,

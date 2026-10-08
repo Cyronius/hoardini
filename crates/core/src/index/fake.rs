@@ -533,6 +533,13 @@ impl FakeFs {
         g.log_change(path, USN_REASON_BASIC_INFO_CHANGE);
     }
 
+    pub fn set_times(&self, path: &str, mtime_ms: i64, atime_ms: i64) {
+        if let Some(n) = self.inner.lock().nodes.get_mut(&key(path)) {
+            n.entry.mtime_ms = mtime_ms;
+            n.entry.atime_ms = atime_ms;
+        }
+    }
+
     pub fn file_id(&self, path: &str) -> Option<[u8; 16]> {
         self.inner
             .lock()

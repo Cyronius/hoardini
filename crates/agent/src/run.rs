@@ -312,8 +312,11 @@ impl Run {
 
         let max_steps = self.provider.max_tool_steps.max(1);
         let mut sheds = 0;
+        let mut first_system: Option<String> = None;
         loop {
             let (system, mut stored) = self.load_context().await?;
+            // The summary's "as of N minutes ago" ticks; a fixed prefix keeps a local server's prompt cache warm.
+            let system = first_system.get_or_insert(system).clone();
             let db = self.env.db.clone();
             let conv = self.thread_id.clone();
             let snapshot = stored.clone();

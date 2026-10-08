@@ -8,7 +8,7 @@ pub mod sse;
 pub mod types;
 
 pub use accumulate::{TurnAccumulator, assemble_sse};
-pub use client::Client;
+pub use client::{Client, Meter};
 pub use config::{Params, Preset, ProviderConfig, ProviderView, presets};
 pub use error::{ProviderError, is_context_overflow};
 pub use futures::StreamExt;

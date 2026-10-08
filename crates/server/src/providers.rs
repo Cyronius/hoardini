@@ -109,6 +109,14 @@ fn validate(cfg: &mut ProviderConfig) -> Result<(), ApiError> {
     Ok(())
 }
 
+pub fn config_by_id(conn: &Connection, id: &str) -> anyhow::Result<Option<ProviderConfig>> {
+    Ok(load_one(conn, id)?.map(|r| {
+        let mut cfg = r.config;
+        cfg.id = Some(r.id);
+        cfg
+    }))
+}
+
 pub fn active_summary(conn: &Connection) -> anyhow::Result<Option<Value>> {
     let preferred = get_meta(conn, "active_provider")?.filter(|s| !s.is_empty());
     let rows = load_all(conn)?;
@@ -256,6 +264,16 @@ pub async fn test(State(s): State<AppState>, Path(id): Path<String>) -> ApiResul
     .await?;
     let mut cfg = row.config;
     cfg.id = Some(row.id.clone());
+    let (cfg, _lease) = match crate::builtin::resolve(&s, cfg).await {
+        Ok(x) => x,
+        Err(e) => {
+            let report = hoardini_agent::provider::TestReport {
+                error: Some(e),
+                ..Default::default()
+            };
+            return Ok(Json(json!(report)));
+        }
+    };
     let report = Client::new().test_connection(&cfg, key.as_deref()).await;
     if let Some(caps) = report.caps {
         let st = s.clone();

@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::state::{ApiError, ApiResult, AppState, blocking, parse};
-use crate::{providers, rclone, status, stream};
+use crate::{builtin, providers, rclone, status, stream};
 
 pub struct Entry {
     pub method: &'static str,
@@ -126,9 +126,9 @@ fn entries() -> Vec<Entry> {
         get_("/api/archive", archive_list),
         post_("/api/archive/{id}/restore", archive_restore),
         post_("/api/dialog/pick-folder", pick_folder),
-        get_("/api/builtin", builtin_unavailable),
-        post_("/api/builtin/install", builtin_unavailable),
-        delete_("/api/builtin", builtin_unavailable),
+        get_("/api/builtin", builtin_get),
+        post_("/api/builtin/install", builtin_install),
+        delete_("/api/builtin", builtin_delete),
     ]
 }
 
@@ -357,7 +357,7 @@ async fn jobs_list(State(s): State<AppState>) -> ApiResult {
 }
 
 async fn job_cancel(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult {
-    if s.exec.cancel(&id) {
+    if s.exec.cancel(&id) || s.builtin.install.cancel(&id) {
         Ok(Json(json!({"ok": true})))
     } else {
         Err(ApiError::not_found("running job"))
@@ -659,8 +659,21 @@ async fn pick_folder(State(s): State<AppState>) -> ApiResult {
     ))
 }
 
-async fn builtin_unavailable() -> ApiResult {
-    Err(ApiError::unimplemented(
-        "the built-in model is not available yet",
-    ))
+async fn builtin_get(State(s): State<AppState>) -> ApiResult {
+    blocking(move || Ok(Json(builtin::view(&s)?))).await
+}
+
+#[derive(Deserialize)]
+struct InstallBody {
+    model_id: String,
+}
+
+async fn builtin_install(State(s): State<AppState>, body: Bytes) -> ApiResult {
+    let b: InstallBody = parse(&body)?;
+    let job = builtin::start_install(&s, b.model_id.trim()).await?;
+    Ok(Json(json!(job)))
+}
+
+async fn builtin_delete(State(s): State<AppState>) -> ApiResult {
+    Ok(Json(builtin::remove(&s).await?))
 }

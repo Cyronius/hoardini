@@ -14,6 +14,7 @@ use serde_json::json;
 use tokio::sync::watch;
 
 use crate::DialogProvider;
+use crate::builtin::Builtin;
 use crate::supervisor::Supervisor;
 
 #[derive(Debug)]
@@ -70,6 +71,7 @@ pub struct Inner {
     pub secrets: Arc<dyn SecretStore>,
     pub exec: Arc<Executor>,
     pub supervisor: Arc<Supervisor>,
+    pub builtin: Arc<Builtin>,
     pub env: Arc<AgentEnv>,
     pub dialogs: Option<Arc<dyn DialogProvider>>,
     pub ui_dir: Option<std::path::PathBuf>,

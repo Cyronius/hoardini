@@ -3,6 +3,7 @@ use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use serde_json::Value;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::accumulate::{TurnAccumulator, assemble_sse};
@@ -12,8 +13,17 @@ use super::sanitize::build_body;
 use super::sse::SseParser;
 use super::types::{AssembledTurn, ChatRequest, StreamEvent};
 
+// Sees every raw stream payload of a chat request; the eval harness times tokens with it.
+pub trait Meter: Send + Sync {
+    fn request(&self);
+    fn data(&self, data: &str);
+    fn end(&self);
+}
+
 #[derive(Clone, Default)]
-pub struct Client;
+pub struct Client {
+    meter: Option<Arc<dyn Meter>>,
+}
 
 pub(super) fn map_reqwest(e: reqwest::Error) -> ProviderError {
     let mut msg = e.to_string();
@@ -90,12 +100,16 @@ struct St {
     queue: VecDeque<Result<StreamEvent, ProviderError>>,
     idle: Duration,
     finished: bool,
+    meter: Option<Arc<dyn Meter>>,
 }
 
 impl St {
     fn feed(&mut self, events: Vec<super::sse::SseEvent>) {
         for e in events {
             let Some(acc) = self.acc.as_mut() else { return };
+            if let Some(m) = &self.meter {
+                m.data(&e.data);
+            }
             match acc.push_data(&e.data) {
                 Ok(evs) => self.queue.extend(evs.into_iter().map(Ok)),
                 Err(err) => {
@@ -112,6 +126,9 @@ impl St {
     }
 
     fn complete(&mut self) {
+        if let Some(m) = self.meter.take() {
+            m.end();
+        }
         if let Some(acc) = self.acc.take() {
             self.queue.push_back(if acc.chunks_seen() == 0 {
                 Err(ProviderError::Protocol(
@@ -127,7 +144,11 @@ impl St {
 
 impl Client {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    pub fn with_meter(meter: Arc<dyn Meter>) -> Self {
+        Self { meter: Some(meter) }
     }
 
     pub async fn chat_stream(
@@ -140,6 +161,9 @@ impl Client {
         let rb = decorate(http.post(cfg.endpoint("chat/completions")), cfg, key)
             .json(&build_body(cfg, req, true));
         let idle = Duration::from_secs(cfg.timeout_s.max(1));
+        if let Some(m) = &self.meter {
+            m.request();
+        }
         let resp = tokio::time::timeout(idle, rb.send())
             .await
             .map_err(|_| ProviderError::Timeout("no response headers".into()))?
@@ -162,6 +186,7 @@ impl Client {
                         queue: VecDeque::new(),
                         idle,
                         finished: false,
+                        meter: self.meter.clone(),
                     };
                     let evs = st.parser.push(text.as_bytes());
                     st.feed(evs);
@@ -170,6 +195,10 @@ impl Client {
                     st.complete();
                     st.queue.into_iter().collect()
                 } else {
+                    if let Some(m) = &self.meter {
+                        m.data(&text);
+                        m.end();
+                    }
                     let mut acc = TurnAccumulator::new();
                     match serde_json::from_str::<Value>(text.trim()) {
                         Err(_) => vec![Err(ProviderError::Protocol(format!(
@@ -200,6 +229,7 @@ impl Client {
             queue: VecDeque::new(),
             idle,
             finished: false,
+            meter: self.meter.clone(),
         };
         Ok(stream::unfold(st, |mut st| async move {
             loop {
