@@ -4,17 +4,21 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use super::{Event, Mode, RefreshOptions, WinLister, refresh};
+use super::{
+    Event, JournalSource, Mode, RefreshKind, RefreshOptions, RefreshRun, WinJournal, WinLister,
+    refresh_kind,
+};
 use crate::store::{Db, get_meta};
 
 const USAGE: &str = "usage: hoardini index [--db <path>] [--volume C:\\] [--mode background|fast] \
-[--threshold <bytes>] [--workers N] [--memory-cap-mb N]";
+[--kind auto|full|journal] [--threshold <bytes>] [--workers N] [--memory-cap-mb N]";
 
 #[derive(Debug, PartialEq)]
 struct ChildArgs {
     db: PathBuf,
     volume: String,
     mode: Mode,
+    kind: RefreshKind,
     threshold: Option<u64>,
     workers: Option<usize>,
     memory_cap_mb: Option<u64>,
@@ -30,6 +34,7 @@ fn parse_args(args: &[String]) -> Result<Option<ChildArgs>> {
         db: crate::paths::db_path(),
         volume: default_volume(),
         mode: Mode::Background,
+        kind: RefreshKind::Auto,
         threshold: None,
         workers: None,
         memory_cap_mb: None,
@@ -62,6 +67,7 @@ fn parse_args(args: &[String]) -> Result<Option<ChildArgs>> {
                     other => bail!("unknown mode {other:?}"),
                 }
             }
+            "--kind" => out.kind = value()?.parse()?,
             "--threshold" => out.threshold = Some(value()?.parse().context("--threshold")?),
             "--workers" => out.workers = Some(value()?.parse().context("--workers")?),
             "--memory-cap-mb" => {
@@ -83,7 +89,7 @@ fn meta_num(conn: &rusqlite::Connection, key: &str) -> Option<u64> {
     get_meta(conn, key).ok().flatten()?.trim().parse().ok()
 }
 
-fn run(a: ChildArgs) -> Result<()> {
+fn run(a: ChildArgs) -> Result<i32> {
     let db = Db::open(&a.db)?;
     let conn = db.conn()?;
     if a.mode == Mode::Background
@@ -116,27 +122,55 @@ fn run(a: ChildArgs) -> Result<()> {
             volume,
             generation,
             mode,
+            kind,
         } => emit(json!({
-            "type": "start", "volume": volume, "mode": mode.as_str(), "gen": generation, "kind": "full"
+            "type": "start", "volume": volume, "mode": mode.as_str(), "gen": generation, "kind": kind
         })),
         Event::Progress(p) => emit(json!({
             "type": "progress", "phase": p.phase, "dirs": p.dirs, "files": p.files,
             "bytes": p.bytes, "fraction": p.fraction
         })),
     };
-    let out = refresh(
+    let journal = match WinJournal::for_path(&a.volume) {
+        Ok(j) => Some(j),
+        Err(e) => {
+            tracing::warn!(error = %e, "no change journal for this volume");
+            None
+        }
+    };
+    let ran = refresh_kind(
         &conn,
         &WinLister,
         &a.volume,
+        a.kind,
         &RefreshOptions {
             mode: a.mode,
             workers,
             threshold: a.threshold,
             on_event: Some(&on_event),
+            journal: journal.as_ref().map(|j| j as &dyn JournalSource),
             ..RefreshOptions::default()
         },
     )?;
-    emit(json!({
+    let (out, extra) = match ran {
+        RefreshRun::NeedsFull(why) => {
+            emit(json!({"type": "needs_full", "reason": why.as_str()}));
+            return Ok(3);
+        }
+        RefreshRun::Full { outcome, fallback } => (
+            outcome,
+            json!({"kind": "full", "fallback": fallback.map(|f| f.as_str())}),
+        ),
+        RefreshRun::Journal(j) => (
+            j.outcome,
+            json!({
+                "kind": "journal", "records": j.records, "pages": j.pages, "dirty_dirs": j.dirty_dirs,
+                "moved_dirs": j.moved_dirs, "new_dirs": j.new_dirs, "resolved_ids": j.resolved_ids,
+                "next_usn": j.next_usn
+            }),
+        ),
+    };
+    let mut done = json!({
         "type": "done",
         "scan_id": out.scan_id,
         "duration_ms": out.duration_ms,
@@ -145,11 +179,15 @@ fn run(a: ChildArgs) -> Result<()> {
         "dirs": out.dirs,
         "files": out.files,
         "denied": out.denied,
-    }));
-    Ok(())
+    });
+    if let (Some(d), Value::Object(x)) = (done.as_object_mut(), extra) {
+        d.extend(x);
+    }
+    emit(done);
+    Ok(0)
 }
 
-// Exit codes: 0 done, 1 refresh failed, 2 bad arguments.
+// Exit codes: 0 done, 1 refresh failed, 2 bad arguments, 3 `--kind journal` needs a full refresh.
 pub fn run_child(args: &[String]) -> i32 {
     let a = match parse_args(args) {
         Ok(Some(a)) => a,
@@ -164,7 +202,7 @@ pub fn run_child(args: &[String]) -> i32 {
         }
     };
     match run(a) {
-        Ok(()) => 0,
+        Ok(code) => code,
         Err(e) => {
             emit(json!({"type": "error", "message": format!("{e:#}")}));
             1
@@ -203,6 +241,11 @@ mod tests {
         assert_eq!(a.threshold, Some(65536));
         assert_eq!(a.workers, Some(3));
         assert_eq!(a.memory_cap_mb, Some(128));
+        assert_eq!(a.kind, RefreshKind::Auto);
+        let j = parse_args(&s(&["--kind", "journal"])).unwrap().unwrap();
+        assert_eq!(j.kind, RefreshKind::Journal);
+        assert!(parse_args(&s(&["--kind=full"])).unwrap().unwrap().kind == RefreshKind::Full);
+        assert!(parse_args(&s(&["--kind", "partial"])).is_err());
         assert!(parse_args(&s(&["--help"])).unwrap().is_none());
         assert!(parse_args(&s(&["--mode", "turbo"])).is_err());
         assert!(parse_args(&s(&["--bogus"])).is_err());
