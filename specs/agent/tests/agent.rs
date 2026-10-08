@@ -1,3 +1,4 @@
+mod eval;
 mod support;
 
 use std::path::Path;

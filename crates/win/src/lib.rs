@@ -18,7 +18,8 @@ pub use enumerate::{alloc_size_by_open, list_dir, list_dir_each};
 pub use fsutil::{create_junction, file_id_of, set_file_times, set_sparse_and_zero_range};
 pub use net::smb_connect;
 pub use process::{
-    JobGuard, cap_process_memory, current_working_set, enter_background_mode, leave_background_mode,
+    JobGuard, ProcessMemory, cap_process_memory, current_working_set, enter_background_mode,
+    kill_with_job, leave_background_mode, physical_cores, process_memory,
 };
 pub use registry::{installed_programs, last_access_setting, user_assist};
 pub use rm::processes_using;

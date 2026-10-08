@@ -153,3 +153,26 @@ export type ThreadDetail = {
 
 export type ApproveResponse = { approved: true; items: number[]; job_id: string };
 export type DeclineResponse = { approved: false };
+
+export type BuiltinModel = {
+  id: string;
+  name: string;
+  size: number;
+  license: string;
+  license_url: string;
+  installed: boolean;
+  recommended: boolean;
+};
+export type BuiltinView = {
+  installed: boolean;
+  running: boolean;
+  runtime: { version: string; size: number; installed: boolean; license: string; license_url: string };
+  model: BuiltinModel | null;
+  candidates: BuiltinModel[];
+  free_bytes: number;
+  recommended: string | null;
+  install_job: Job | null;
+  provider_id: string | null;
+  threads: number;
+  context: number;
+};

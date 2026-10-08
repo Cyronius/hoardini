@@ -4,7 +4,10 @@ import { DEFAULT_AGENT_MAX_STEPS, DEFAULT_AI_TIMEOUT_SECONDS } from "../agent/ai
 import type { Preset, ProviderConfig, ProviderView, TestReport } from "../api/types";
 import { EditIcon, PlusIcon, TrashIcon } from "../components/icons";
 import { IconButton } from "../components/IconButton";
+import { BuiltinCard } from "./BuiltinCard";
 import { btnDanger, btnPrimary, btnSecondary, ErrorLine, errMsg, field, Field, Toggle } from "./ui";
+
+const BUILTIN_ID = "builtin";
 
 type Form = {
   id?: string;
@@ -320,6 +323,7 @@ export function ProvidersTab() {
         </IconButton>
       </div>
       <ErrorLine error={error} />
+      <BuiltinCard active={rows?.some((r) => r.id === BUILTIN_ID && r.is_active) ?? false} onChange={load} />
       {form && !form.id && <ProviderForm initial={form} presets={presets} onCancel={() => { setForm(null); load(); }} onDone={() => { setForm(null); load(); }} />}
       <ul className="space-y-2">
         {rows?.map((p) =>
@@ -343,11 +347,11 @@ export function ProvidersTab() {
                   {p.small && <span className="rounded-full bg-ink-800 px-2 py-px text-[length:var(--fs-xs)] text-muted">small</span>}
                   {p.is_active && <span className="text-[length:var(--fs-xs)] font-bold text-brass">active</span>}
                 </div>
-                <div className="truncate font-mono text-[length:var(--fs-xs)] text-faint" title={p.base_url}>
-                  {p.model ?? "default model"} · {p.base_url}
+                <div className="truncate font-mono text-[length:var(--fs-xs)] text-faint" title={p.id === BUILTIN_ID ? undefined : p.base_url}>
+                  {p.model ?? "default model"} · {p.id === BUILTIN_ID ? "on this PC, CPU" : p.base_url}
                 </div>
               </div>
-              {confirmId === p.id ? (
+              {p.id === BUILTIN_ID ? null : confirmId === p.id ? (
                 <>
                   <button className={btnDanger} onClick={() => void routes.deleteProvider(p.id).then(() => { setConfirmId(null); load(); })}>
                     Delete

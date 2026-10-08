@@ -16,9 +16,9 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::time::{Instant, interval_at, sleep_until};
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::providers;
 use crate::state::{ApiError, ApiResult, AppState, RunSlot, blocking, parse};
 use crate::status::build_status;
+use crate::{builtin, providers};
 
 const STATUS_MIN_GAP: Duration = Duration::from_millis(500);
 const JOB_FLUSH: Duration = Duration::from_millis(200);
@@ -157,7 +157,32 @@ pub async fn agent_run(State(s): State<AppState>, body: Bytes) -> ApiResult<Resp
         return Ok(event_response(ReceiverStream::new(rx), None));
     };
 
-    let inner = tokio::spawn(run_agent(s.env.clone(), provider, input, tx.clone()));
+    let env = s.env.clone();
+    let st = s.clone();
+    let tx_run = tx.clone();
+    let (tid, rid) = (thread_id.clone(), run_id.clone());
+    let inner = tokio::spawn(async move {
+        // The lease keeps the built-in child alive until this run ends.
+        let (provider, _lease) = match builtin::resolve(&st, provider).await {
+            Ok(x) => x,
+            Err(message) => {
+                let _ = tx_run
+                    .send(Event::RunStarted {
+                        thread_id: tid,
+                        run_id: rid,
+                    })
+                    .await;
+                let _ = tx_run
+                    .send(Event::RunError {
+                        message,
+                        code: None,
+                    })
+                    .await;
+                return Ok(());
+            }
+        };
+        run_agent(env, provider, input, tx_run).await
+    });
     let abort = inner.abort_handle();
     {
         let mut runs = s

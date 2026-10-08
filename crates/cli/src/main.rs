@@ -9,6 +9,8 @@ use hoardini_core::index::{self, IndexStatus, TopFilesQuery};
 use hoardini_core::paths::humanize_bytes;
 use hoardini_core::store::{Db, now_ms};
 
+mod eval_cmd;
+
 #[derive(Parser)]
 #[command(name = "hoardini", version, about = "Hoardini: a Windows disk agent")]
 struct Cli {
@@ -38,6 +40,8 @@ enum Cmd {
     Changes(ChangesArgs),
     #[command(about = "Serve the UI and API on loopback")]
     Serve(ServeArgs),
+    #[command(about = "Score a model on the scripted agent questions over a fixture disk")]
+    Eval(eval_cmd::EvalArgs),
 }
 
 #[derive(Args)]
@@ -307,6 +311,10 @@ fn main() -> ExitCode {
         Cmd::Top(a) => open_db(cli.db).and_then(|db| top(db, a)),
         Cmd::Changes(a) => open_db(cli.db).and_then(|db| changes(db, a)),
         Cmd::Serve(a) => serve(cli.db, a),
+        Cmd::Eval(a) => match eval_cmd::run(cli.db, a) {
+            Ok(code) => return code,
+            Err(e) => Err(e),
+        },
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,

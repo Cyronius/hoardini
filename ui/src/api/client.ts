@@ -109,6 +109,10 @@ export const routes = {
   activateSearchProvider: (kind: T.SearchKind) => api<{ ok: true }>(`/api/search/providers/${kind}/activate`, { body: {} }),
   testSearchProvider: (kind: T.SearchKind) => api<T.SearchTest>(`/api/search/providers/${kind}/test`, { body: {} }),
 
+  builtin: () => api<T.BuiltinView>("/api/builtin"),
+  installBuiltin: (model_id: string) => api<T.Job>("/api/builtin/install", { body: { model_id } }),
+  removeBuiltin: () => del<{ ok: true; freed_bytes: number }>("/api/builtin"),
+
   history: () => api<T.HistoryPoint[]>("/api/history"),
   settings: () => api<T.Settings>("/api/settings"),
   putSettings: (s: Partial<T.Settings>) => put<T.Settings>("/api/settings", s),

@@ -19,6 +19,7 @@ use hoardini_core::vault::{DpapiVault, SecretStore};
 use serde_json::json;
 use tokio::sync::watch;
 
+pub mod builtin;
 mod providers;
 mod routes;
 mod state;
@@ -27,6 +28,7 @@ mod stream;
 mod supervisor;
 mod ui;
 
+pub use providers::config_by_id;
 pub use routes::route_list;
 pub use state::AppState;
 
@@ -209,7 +211,21 @@ pub async fn start_with(
     opts: ServerOptions,
     secrets: Option<Arc<dyn SecretStore>>,
 ) -> anyhow::Result<ServerHandle> {
+    start_with_launcher(opts, secrets, None).await
+}
+
+// `launcher` replaces the llama-server child; tests start a fake one.
+pub async fn start_with_launcher(
+    opts: ServerOptions,
+    secrets: Option<Arc<dyn SecretStore>>,
+    launcher: Option<Arc<dyn builtin::Launcher>>,
+) -> anyhow::Result<ServerHandle> {
     let db = Db::open(&opts.db_path)?;
+    let data_root = opts
+        .db_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
     let secrets: Arc<dyn SecretStore> = match secrets {
         Some(s) => s,
         None => {
@@ -251,12 +267,25 @@ pub async fn start_with(
         secrets.clone(),
         index,
     ));
+    let launcher = launcher.unwrap_or_else(|| {
+        Arc::new(builtin::LlamaLauncher {
+            root: data_root.clone(),
+            ctx: builtin::CONTEXT,
+        })
+    });
+    let built_in = builtin::Builtin::new(
+        launcher,
+        builtin::idle_minutes_from(db.clone()),
+        Some(data_root),
+    );
+    built_in.start_watchdog();
     let (shutdown_tx, _) = watch::channel(false);
     let state: AppState = Arc::new(state::Inner {
         db: db.clone(),
         secrets: secrets.clone(),
         exec: Arc::new(Executor::new(db, secrets)),
         supervisor: supervisor.clone(),
+        builtin: built_in.clone(),
         env,
         dialogs: opts.dialogs,
         ui_dir: opts.ui_dir,
@@ -300,6 +329,7 @@ pub async fn start_with(
             }
         }
         supervisor.shutdown();
+        built_in.shutdown();
         let _ = stop_tx.send(true);
         if tokio::time::timeout(Duration::from_secs(2), &mut serve)
             .await
