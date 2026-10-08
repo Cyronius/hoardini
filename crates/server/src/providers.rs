@@ -86,6 +86,17 @@ fn validate(cfg: &mut ProviderConfig) -> Result<(), ApiError> {
         ));
     }
     cfg.model = cfg.model.take().filter(|m| !m.trim().is_empty());
+    for (name, value) in &cfg.headers {
+        let n = name.to_ascii_lowercase();
+        let secretish = ["auth", "key", "token", "secret", "password", "cookie"]
+            .iter()
+            .any(|w| n.contains(w));
+        if secretish && !is_ref(value.trim()) {
+            return Err(ApiError::bad(format!(
+                "header {name} must be a secret:// reference; store its value with PUT /api/secrets"
+            )));
+        }
+    }
     match cfg.api_key.as_deref().map(str::trim) {
         None | Some("") => cfg.api_key = None,
         Some(r) if is_ref(r) => cfg.api_key = Some(r.to_string()),

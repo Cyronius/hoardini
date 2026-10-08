@@ -146,6 +146,16 @@ fn is_absolute(p: &str) -> bool {
         || p.starts_with("//")
 }
 
+// A trailing dot or an 8.3 alias opens the same entry but would dodge rules keyed by its real name.
+fn on_disk_name(path: &Path) -> Option<String> {
+    let id = hoardini_win::file_id_of(path).ok()?;
+    hoardini_win::list_dir(path.parent()?)
+        .ok()?
+        .into_iter()
+        .find(|e| e.file_id == id)
+        .map(|e| e.name)
+}
+
 // Short names and junctions in the parent chain resolve to the real location; a final link stays itself.
 pub fn resolve(env: &PolicyEnv, raw: &str) -> Result<String, String> {
     let expanded = env.expand(raw);
@@ -166,9 +176,12 @@ pub fn resolve(env: &PolicyEnv, raw: &str) -> Result<String, String> {
         || hoardini_win::is_cloud_placeholder(md.file_attributes())
     {
         match (path.parent(), path.file_name()) {
-            (Some(parent), Some(name)) => std::fs::canonicalize(parent)
-                .map(|p| strip_verbatim(&p.join(name)))
-                .unwrap_or_else(|_| lex.clone()),
+            (Some(parent), Some(name)) => {
+                let name = on_disk_name(path).unwrap_or_else(|| name.to_string_lossy().into());
+                std::fs::canonicalize(parent)
+                    .map(|p| strip_verbatim(&p.join(name)))
+                    .unwrap_or_else(|_| lex.clone())
+            }
             _ => lex.clone(),
         }
     } else {

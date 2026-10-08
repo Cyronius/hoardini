@@ -29,11 +29,34 @@ pub(crate) fn remove_file_force(path: &Path) -> std::io::Result<()> {
     }
 }
 
+// Windows refuses to rename a folder while anything inside is open, so an open file stops the delete before any file goes.
+fn remove_dir_whole(path: &Path) -> std::io::Result<()> {
+    let mut aside = path.as_os_str().to_os_string();
+    aside.push(format!(
+        ".hoardini-delete-{}",
+        uuid::Uuid::now_v7().simple()
+    ));
+    let aside = std::path::PathBuf::from(aside);
+    std::fs::rename(path, &aside).map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!("nothing was deleted: something inside is open in another program ({e})"),
+        )
+    })?;
+    if let Err(e) = std::fs::remove_dir_all(&aside) {
+        if let Err(back) = std::fs::rename(&aside, path) {
+            tracing::warn!(error = %back, aside = %aside.display(), "could not rename a half-deleted folder back");
+        }
+        return Err(e);
+    }
+    Ok(())
+}
+
 // Links go by their own name; remove_dir_all never follows links inside (Rust >= 1.58.1).
 pub(crate) fn remove_item(path: &Path, kind: ItemKind) -> std::io::Result<()> {
     match kind {
         ItemKind::File => remove_file_force(path),
-        ItemKind::Dir => std::fs::remove_dir_all(path),
+        ItemKind::Dir => remove_dir_whole(path),
         ItemKind::Link => {
             if std::fs::symlink_metadata(path)?.is_dir() {
                 std::fs::remove_dir(path)
@@ -57,11 +80,11 @@ pub(crate) fn remaining_alloc(path: &Path) -> i64 {
                     stack.push(dir.join(&e.name));
                 }
             } else if !e.is_link() {
-                total += e.alloc.max(if e.needs_alloc_by_open() {
-                    e.logical
+                total += if e.needs_alloc_by_open() {
+                    hoardini_win::alloc_size_by_open(&dir.join(&e.name)).unwrap_or(e.logical)
                 } else {
-                    0
-                });
+                    e.alloc
+                };
             }
         }
     }

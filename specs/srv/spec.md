@@ -31,11 +31,12 @@ Non-`/api` paths shall serve the UI (from `--ui-dir`, else the embedded build, e
 **Applies to:** hoardini-server
 **Verification:** test
 
-`PUT /api/secrets` shall store the value in the vault and return only `{"ok":true}`. Provider `api_key` must be a `secret://` reference: a raw key is rejected (400) and never written to `provider.config_json`. `has_key` is derived from the vault. Error responses for `/api/secrets` and provider writes never quote the submitted value, and request bodies and query strings are never logged.
+`PUT /api/secrets` shall store the value in the vault and return only `{"ok":true}`. Provider `api_key` must be a `secret://` reference: a raw key is rejected (400) and never written to `provider.config_json`. So must any provider header whose name contains `auth`, `key`, `token`, `secret`, `password`, or `cookie`. `has_key` is derived from the vault. Error responses for `/api/secrets` and provider writes never quote the submitted value, and request bodies and query strings are never logged.
 
 **Acceptance criteria:**
 - After storing `sk-…` and creating a provider that references it, `GET /api/providers` has `has_key: true` and the response text does not contain the value; `provider.config_json` contains the ref and not the value.
 - `POST /api/providers` with `api_key: "sk-…"` → 400 and the response does not contain the value.
+- `POST /api/providers` with a raw `api-key`, `Authorization`, or `X-Goog-Api-Key` header → 400 naming `secret://`, without the value; the same provider with `api-key: secret://…` and a plain `HTTP-Referer` is accepted, and no `provider.config_json` holds the value.
 - A malformed `PUT /api/secrets` body → 4xx and the response does not contain the submitted text.
 
 ### SRV-ONE-REFRESH: One index refresh at a time; "Scan fast" takes over

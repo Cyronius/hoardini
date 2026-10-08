@@ -262,6 +262,38 @@ async fn secret_values_are_never_returned_or_stored_in_config() {
     let _ = f.h.shutdown.send(());
 }
 
+// Traces: SRV-SECRETS-WRITE-ONLY
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_in_a_provider_header_must_be_a_vault_reference() {
+    let f = Fixture::new().await;
+    let secret = "azure-key-0123456789abcdef";
+    for headers in [
+        json!({"api-key": secret}),
+        json!({"Authorization": format!("Bearer {secret}")}),
+        json!({"X-Goog-Api-Key": secret}),
+    ] {
+        let cfg = json!({"name": "Azure", "base_url": "https://x.openai.azure.com/v1", "headers": headers});
+        let (st, err) = f.call("POST", "/api/providers", Some(cfg)).await;
+        assert_eq!(st, 400, "{headers} {err}");
+        assert!(err.to_string().contains("secret://"), "{err}");
+        assert!(!err.to_string().contains(secret));
+    }
+    let ok = json!({"name": "Azure", "base_url": "https://x.openai.azure.com/v1",
+                    "headers": {"api-key": "secret://provider/azure", "HTTP-Referer": "https://hoardini.app"}});
+    let (st, created) = f.call("POST", "/api/providers", Some(ok)).await;
+    assert_eq!(st, 200, "{created}");
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let stored: String = db
+        .conn()
+        .unwrap()
+        .query_row("SELECT group_concat(config_json) FROM provider", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(!stored.contains(secret), "{stored}");
+    let _ = f.h.shutdown.send(());
+}
+
 // Traces: SRV-SETTINGS
 #[tokio::test(flavor = "multi_thread")]
 async fn settings_round_trip() {

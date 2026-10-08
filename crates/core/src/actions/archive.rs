@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
 
 use rusqlite::{Connection, params};
 
@@ -22,6 +23,74 @@ const PARTIAL_SUFFIX: &str = ".hoardini-partial";
 pub(crate) struct Copied {
     pub size: u64,
     pub hash: String,
+    pub mtime: Option<SystemTime>,
+}
+
+// What a source file looked like when its copy started; the source may go only while it still looks so.
+pub(crate) struct Seen {
+    pub rel: String,
+    pub size: u64,
+    pub mtime: Option<SystemTime>,
+}
+
+pub(crate) fn unchanged(src: &Path, kind: ItemKind, files: &[Seen]) -> anyhow::Result<()> {
+    for f in files {
+        let p = if kind == ItemKind::File {
+            src.to_path_buf()
+        } else {
+            src.join(&f.rel)
+        };
+        let md = std::fs::metadata(&p)?;
+        if md.len() != f.size || md.modified().ok() != f.mtime {
+            anyhow::bail!(
+                "{} changed while it was being archived; the source was kept",
+                p.display()
+            );
+        }
+    }
+    if kind == ItemKind::Dir && list_tree(src)?.files.len() != files.len() {
+        anyhow::bail!(
+            "files were added to {} while it was being archived; the source was kept",
+            src.display()
+        );
+    }
+    Ok(())
+}
+
+fn uri_key(s: &str) -> String {
+    s.replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+pub(crate) fn day_name(day: &str, n: u32) -> String {
+    if n <= 1 {
+        day.to_string()
+    } else {
+        format!("{day}-{n}")
+    }
+}
+
+// A location an earlier entry holds (or a folder above or inside it) is never written into; the next <day>-N is used.
+pub(crate) fn free_location<T>(
+    conn: &Connection,
+    day: &str,
+    at: impl Fn(&str) -> (T, String),
+) -> anyhow::Result<T> {
+    let held: Vec<String> = conn
+        .prepare_cached("SELECT dest_uri FROM archive_entry")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .map(|r| r.map(|u| uri_key(&u)))
+        .collect::<rusqlite::Result<_>>()?;
+    for n in 1..=1000 {
+        let (target, uri) = at(&day_name(day, n));
+        let want = uri_key(&uri);
+        let clash = held.iter().any(|h| {
+            *h == want || want.starts_with(&format!("{h}/")) || h.starts_with(&format!("{want}/"))
+        });
+        if !clash {
+            return Ok(target);
+        }
+    }
+    anyhow::bail!("no free archive location under {day}")
 }
 
 pub(crate) struct Copier<'a> {
@@ -78,6 +147,7 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, c: &mut Copier<'_>) -> anyho
         );
     }
     let src_len = md.len();
+    let mtime = md.modified().ok();
     if let Ok(existing) = std::fs::metadata(dst)
         && existing.is_file()
         && existing.len() == src_len
@@ -89,6 +159,7 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, c: &mut Copier<'_>) -> anyho
             return Ok(Copied {
                 size: src_len,
                 hash: sh,
+                mtime,
             });
         }
     }
@@ -136,6 +207,7 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, c: &mut Copier<'_>) -> anyho
         Ok(Copied {
             size: total,
             hash: src_hash,
+            mtime,
         })
     })();
     if result.is_err() {
@@ -195,26 +267,40 @@ pub(crate) fn manifest_hash(entries: &[(String, u64, String)]) -> String {
     h.finalize().to_hex().to_string()
 }
 
+pub(crate) struct TreeCopy {
+    pub size: u64,
+    pub hash: String,
+    pub links: usize,
+    pub files: Vec<Seen>,
+}
+
 // archive_entry has one hash column, so a folder stores BLAKE3 over its sorted (path, size, file hash) list.
-pub(crate) fn copy_tree(
-    src: &Path,
-    dst: &Path,
-    c: &mut Copier<'_>,
-) -> anyhow::Result<(u64, String, usize)> {
+pub(crate) fn copy_tree(src: &Path, dst: &Path, c: &mut Copier<'_>) -> anyhow::Result<TreeCopy> {
     let tree = list_tree(src)?;
     std::fs::create_dir_all(dst)?;
     for d in &tree.dirs {
         std::fs::create_dir_all(dst.join(d))?;
     }
     let mut entries = Vec::with_capacity(tree.files.len());
+    let mut files = Vec::with_capacity(tree.files.len());
     let mut total = 0u64;
     for f in &tree.files {
         c.check()?;
         let copied = copy_verified(&src.join(f), &dst.join(f), c)?;
         total += copied.size;
+        files.push(Seen {
+            rel: f.clone(),
+            size: copied.size,
+            mtime: copied.mtime,
+        });
         entries.push((f.clone(), copied.size, copied.hash));
     }
-    Ok((total, manifest_hash(&entries), tree.links))
+    Ok(TreeCopy {
+        size: total,
+        hash: manifest_hash(&entries),
+        links: tree.links,
+        files,
+    })
 }
 
 pub(crate) fn layout_rel(path: &str) -> String {
@@ -286,7 +372,8 @@ impl Handler for ArchiveHandler {
         let stubs = get_meta(job.conn, "archive_stubs")?.is_none_or(|v| v.trim() != "false");
         Ok(Box::new(ArchiveRunner {
             dest_id: dest.id,
-            day_dir: root.join(utc_date(now_ms())),
+            root,
+            day: utc_date(now_ms()),
             stubs,
             env: job.env.clone(),
             hook: job.hook.clone(),
@@ -296,7 +383,8 @@ impl Handler for ArchiveHandler {
 
 struct ArchiveRunner {
     dest_id: String,
-    day_dir: PathBuf,
+    root: PathBuf,
+    day: String,
     stubs: bool,
     env: PolicyEnv,
     hook: Option<CopyHook>,
@@ -306,21 +394,35 @@ impl Runner for ArchiveRunner {
     fn run(&mut self, cx: &mut ItemCx<'_>) -> anyhow::Result<Outcome> {
         let item = cx.item;
         let src = PathBuf::from(&item.path);
-        let target = self.day_dir.join(layout_rel(&item.path));
+        let rel = layout_rel(&item.path);
+        let target = free_location(cx.conn, &self.day, |day| {
+            let t = self.root.join(day).join(&rel);
+            let uri = t.to_string_lossy().into_owned();
+            (t, uri)
+        })?;
         let mut copier = Copier {
             cancel: cx.cancel,
             progress: &mut *cx.progress,
             hook: self.hook.as_ref(),
         };
-        let (size, hash, links) = match item.kind {
+        let (size, hash, links, seen) = match item.kind {
             ItemKind::File => {
                 let c = copy_verified(&src, &target, &mut copier)?;
-                (c.size, c.hash, 0)
+                let seen = Seen {
+                    rel: String::new(),
+                    size: c.size,
+                    mtime: c.mtime,
+                };
+                (c.size, c.hash, 0, vec![seen])
             }
-            ItemKind::Dir => copy_tree(&src, &target, &mut copier)?,
+            ItemKind::Dir => {
+                let t = copy_tree(&src, &target, &mut copier)?;
+                (t.size, t.hash, t.links, t.files)
+            }
             ItemKind::Link => anyhow::bail!("a link holds no data; delete it instead"),
         };
         cx.check_cancel()?;
+        unchanged(&src, item.kind, &seen)?;
         let dest_uri = target.to_string_lossy().into_owned();
         let to = Committed {
             dest_id: &self.dest_id,
@@ -480,7 +582,7 @@ pub(crate) fn restore_entry(
     }
     let result = (|| -> anyhow::Result<()> {
         let hash = match e.kind {
-            ItemKind::Dir => copy_tree(&src, &tmp, c)?.1,
+            ItemKind::Dir => copy_tree(&src, &tmp, c)?.hash,
             _ => copy_verified(&src, &tmp, c)?.hash,
         };
         if let Some(expected) = &e.blake3

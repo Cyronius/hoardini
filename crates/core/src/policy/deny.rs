@@ -44,6 +44,9 @@ pub fn deny_reason(
     if let Some(r) = fixed_reason(env, &p) {
         return Ok(Some(r));
     }
+    if let Some(r) = local_share_reason(&p) {
+        return Ok(Some(r));
+    }
     if let Some(r) = protect_reason(conn, env, &p)? {
         return Ok(Some(r));
     }
@@ -109,6 +112,23 @@ fn fixed_reason(env: &PolicyEnv, p: &str) -> Option<String> {
         }
     }
     None
+}
+
+// \\localhost\C$\... reaches a local disk under a name no rule above knows; the share reports that volume's serial.
+fn local_share_reason(p: &str) -> Option<String> {
+    if !p.starts_with(r"\\") {
+        return None;
+    }
+    let serial = hoardini_win::volume_info(Path::new(p)).ok()?.serial;
+    let local = hoardini_win::fixed_volumes()
+        .ok()?
+        .into_iter()
+        .filter_map(|v| hoardini_win::volume_info(&v).ok())
+        .find(|v| v.serial == serial)?;
+    Some(format!(
+        "{p} is a network path back to this PC ({}); use the local path",
+        local.root
+    ))
 }
 
 fn glob_literal_prefix(key: &str) -> String {

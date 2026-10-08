@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use sha2::Digest;
 
 use super::archive::{
-    Committed, Copier, EntryRow, commit_archive, finish_restore, layout_rel, list_tree,
-    manifest_hash, remove_tmp, utc_date, with_suffix,
+    Committed, Copier, EntryRow, Seen, commit_archive, finish_restore, free_location, layout_rel,
+    list_tree, manifest_hash, remove_tmp, unchanged, utc_date, with_suffix,
 };
 use super::handler::{Cancelled, ItemCx, JobCx, Outcome, Runner};
 use crate::destinations::Destination;
@@ -492,28 +492,15 @@ pub(crate) fn begin(job: &JobCx<'_>, dest: &Destination) -> anyhow::Result<Box<d
     }))
 }
 
-fn unchanged(src: &Path, kind: ItemKind, local: &[LocalFile]) -> anyhow::Result<()> {
-    for f in local {
-        let p = if kind == ItemKind::File {
-            src.to_path_buf()
-        } else {
-            src.join(&f.rel)
-        };
-        let md = std::fs::metadata(&p)?;
-        if md.len() != f.size || md.modified().ok() != f.mtime {
-            anyhow::bail!(
-                "{} changed while it was being archived; the source was kept",
-                p.display()
-            );
-        }
-    }
-    if kind == ItemKind::Dir && list_tree(src)?.files.len() != local.len() {
-        anyhow::bail!(
-            "files were added to {} while it was being archived; the source was kept",
-            src.display()
-        );
-    }
-    Ok(())
+fn seen(local: &[LocalFile]) -> Vec<Seen> {
+    local
+        .iter()
+        .map(|f| Seen {
+            rel: f.rel.clone(),
+            size: f.size,
+            mtime: f.mtime,
+        })
+        .collect()
 }
 
 impl RcloneRunner {
@@ -532,7 +519,11 @@ impl Runner for RcloneRunner {
         let item = cx.item;
         let src = PathBuf::from(&item.path);
         let rel = slashes(&layout_rel(&item.path));
-        let target = self.cfg.join(&format!("{}/{}", self.day, rel));
+        let target = free_location(cx.conn, &self.day, |day| {
+            let t = self.cfg.join(&format!("{day}/{rel}"));
+            let uri = self.cfg.uri(&t);
+            (t, uri)
+        })?;
         let (local, links) = scan(&src, item.kind, self.hash, cx.cancel)?;
         let group = format!("hoardini-a{}", cx.action_id);
         let (method, params) = copy_params_up(&self.cfg, &src, item.kind, &target);
@@ -566,7 +557,7 @@ impl Runner for RcloneRunner {
             anyhow::bail!("verification failed: {why}; the source was kept");
         }
         cx.check_cancel()?;
-        unchanged(&src, item.kind, &local)?;
+        unchanged(&src, item.kind, &seen(&local))?;
         let size: u64 = local.iter().map(|f| f.size).sum();
         let hash = if item.kind == ItemKind::File {
             local[0].blake3.clone()
