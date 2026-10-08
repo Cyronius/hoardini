@@ -45,6 +45,8 @@ skips the read and reports identity "unknown (no access)".
 **Acceptance criteria:**
 - After `inspect` reads a file's header and hashes it, the file's last-access time equals its value before the call.
 - When the preserving open fails, identity is `unknown (no access)` and no read occurs.
+- A cloud placeholder (offline / recall-on-access attributes, or flagged in the index) is never opened; its identity is `cloud placeholder`.
+- The same holds on a second inspect, whether served from `evidence_cache` or recomputed.
 
 ### EVID-IN-USE: Open-handle detection
 **Applies to:** hoardini
@@ -54,5 +56,5 @@ skips the read and reports identity "unknown (no access)".
 largest first, up to a cap (default 500).
 
 **Acceptance criteria:**
-- A file opened by a helper process is reported with that process's name and pid; after the process exits it is not.
-- For a directory containing that file, the file's holder is reported.
+- A file held open is reported with the holder's process name and pid; once the handle is closed it is not.
+- For an indexed directory containing that file, the file's holder is reported (one Restart Manager session over the largest files).

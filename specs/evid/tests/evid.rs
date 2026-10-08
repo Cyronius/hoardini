@@ -250,3 +250,6 @@ fn gguf_reader_stays_within_the_header() {
         r.max_pos
     );
 }
+
+#[path = "inspect_mod.rs"]
+mod inspect_tests;
