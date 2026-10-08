@@ -1,6 +1,7 @@
 mod child;
 mod dedupe;
 mod fake;
+mod journal;
 mod lister;
 mod patch;
 mod query;
@@ -10,6 +11,10 @@ mod writer;
 
 pub use child::run_child;
 pub use fake::FakeFs;
+pub use journal::{
+    JournalOutcome, JournalRefresh, JournalSource, NeedsFull, RefreshKind, RefreshRun, WinJournal,
+    journal_refresh, refresh_kind,
+};
 pub use lister::{DirLister, WinLister};
 pub use patch::{patch_removed, patch_rescan};
 pub use query::{

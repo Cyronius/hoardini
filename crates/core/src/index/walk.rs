@@ -13,6 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use super::dedupe::SeenSet;
+use super::journal::JournalSource;
 use super::lister::{DirLister, list_fixed};
 use super::writer::{Chain, Dedupe, Work, Writer, load_chain};
 use super::{KIND_DIR, normalize_path, threshold_setting, to_i64, to_u64};
@@ -54,6 +55,7 @@ pub enum Event<'a> {
         volume: &'a str,
         generation: i64,
         mode: Mode,
+        kind: &'static str,
     },
     Progress(&'a Progress),
 }
@@ -66,6 +68,7 @@ pub struct RefreshOptions<'a> {
     pub batch_rows: usize,
     pub cancel: Option<Arc<AtomicBool>>,
     pub on_event: Option<&'a dyn Fn(Event<'_>)>,
+    pub journal: Option<&'a dyn JournalSource>,
 }
 
 impl Default for RefreshOptions<'_> {
@@ -78,6 +81,7 @@ impl Default for RefreshOptions<'_> {
             batch_rows: 5000,
             cancel: None,
             on_event: None,
+            journal: None,
         }
     }
 }
@@ -241,9 +245,11 @@ fn begin_generation(conn: &Connection, root: &str, vinfo: Option<&VolumeInfo>) -
             "UPDATE node SET seen_gen = ?1 WHERE id = ?2",
             params![generation, root_id],
         )?;
+        // An unfinished walk leaves stale rows for its end to delete, so no journal may resume from it.
         conn.execute(
             "UPDATE volume SET gen = ?1, root_node_id = ?2, serial = COALESCE(?3, serial), \
-             fs_name = COALESCE(?4, fs_name), label = COALESCE(?5, label) WHERE id = ?6",
+             fs_name = COALESCE(?4, fs_name), label = COALESCE(?5, label), usn_journal_id = NULL, \
+             usn_next = NULL WHERE id = ?6",
             params![
                 generation,
                 root_id,
@@ -378,12 +384,15 @@ pub fn refresh(
         Some(t) => t,
         None => threshold_setting(conn)?,
     };
+    // Queried before the walk so changes made while it runs are replayed by the next journal refresh.
+    let position = opts.journal.and_then(|j| j.query().ok());
     let begin = begin_generation(conn, &root, vinfo.as_ref())?;
     if let Some(cb) = opts.on_event {
         cb(Event::Start {
             volume: &root,
             generation: begin.generation,
             mode: opts.mode,
+            kind: "full",
         });
     }
     let ntfs = vinfo
@@ -499,12 +508,14 @@ pub fn refresh(
         let finished_ms = now_ms();
         conn.execute(
             "UPDATE volume SET threshold = ?1, last_refresh_ms = ?2, total_bytes = COALESCE(?3, total_bytes), \
-             free_bytes = COALESCE(?4, free_bytes) WHERE id = ?5",
+             free_bytes = COALESCE(?4, free_bytes), usn_journal_id = ?5, usn_next = ?6 WHERE id = ?7",
             params![
                 to_i64(threshold),
                 finished_ms,
                 out.total_bytes.map(to_i64),
                 out.free_bytes.map(to_i64),
+                position.map(|j| j.journal_id as i64),
+                position.map(|j| j.next_usn),
                 begin.volume_id
             ],
         )?;
@@ -542,7 +553,7 @@ pub fn refresh(
     Ok(out)
 }
 
-fn root_alloc(conn: &Connection, root_id: i64) -> Result<u64> {
+pub(crate) fn root_alloc(conn: &Connection, root_id: i64) -> Result<u64> {
     let v: i64 = conn.query_row("SELECT sub_alloc FROM node WHERE id = ?1", [root_id], |r| {
         r.get(0)
     })?;
