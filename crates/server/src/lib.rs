@@ -245,12 +245,12 @@ pub async fn start_with(
         tokio::runtime::Handle::current(),
     );
     let index: Arc<dyn IndexControl> = supervisor.clone();
-    let env = Arc::new(AgentEnv {
-        db: db.clone(),
-        client: Client::new(),
-        secrets: secrets.clone(),
+    let env = Arc::new(AgentEnv::new(
+        db.clone(),
+        Client::new(),
+        secrets.clone(),
         index,
-    });
+    ));
     let (shutdown_tx, _) = watch::channel(false);
     let state: AppState = Arc::new(state::Inner {
         db: db.clone(),

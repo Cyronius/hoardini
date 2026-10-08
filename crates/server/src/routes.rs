@@ -231,67 +231,6 @@ async fn threads_list(State(s): State<AppState>) -> ApiResult {
     .await
 }
 
-fn text_of(content: &Value) -> Option<String> {
-    match content {
-        Value::String(s) => Some(s.clone()),
-        Value::Array(parts) => Some(
-            parts
-                .iter()
-                .filter_map(|p| p.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join(""),
-        ),
-        _ => None,
-    }
-}
-
-fn to_agui(id: &str, raw: &str) -> Option<Value> {
-    let v: Value = serde_json::from_str(raw).ok()?;
-    let role = v.get("role")?.as_str()?;
-    if role == "system" {
-        return None;
-    }
-    let mut out = Map::new();
-    out.insert("id".into(), json!(id));
-    out.insert("role".into(), json!(role));
-    if let Some(t) = v.get("content").and_then(text_of) {
-        out.insert("content".into(), json!(t));
-    }
-    if let Some(calls) = v
-        .get("tool_calls")
-        .or_else(|| v.get("toolCalls"))
-        .and_then(Value::as_array)
-    {
-        let calls: Vec<Value> = calls
-            .iter()
-            .map(|c| {
-                let f = c.get("function").cloned().unwrap_or(Value::Null);
-                let args = match f.get("arguments") {
-                    Some(Value::String(a)) => a.clone(),
-                    Some(other) => other.to_string(),
-                    None => "{}".into(),
-                };
-                json!({
-                    "id": c.get("id").cloned().unwrap_or(Value::Null),
-                    "type": "function",
-                    "function": {"name": f.get("name").cloned().unwrap_or(Value::Null), "arguments": args},
-                })
-            })
-            .collect();
-        if !calls.is_empty() {
-            out.insert("toolCalls".into(), json!(calls));
-        }
-    }
-    if let Some(t) = v
-        .get("tool_call_id")
-        .or_else(|| v.get("toolCallId"))
-        .and_then(Value::as_str)
-    {
-        out.insert("toolCallId".into(), json!(t));
-    }
-    Some(Value::Object(out))
-}
-
 fn display_proposal(mut p: Proposal) -> Value {
     p.summary = redact(&p.summary);
     for it in &mut p.items {
@@ -323,15 +262,10 @@ async fn thread_get(State(s): State<AppState>, Path(id): Path<String>) -> ApiRes
         let Some((title, _)) = head else {
             return Err(ApiError::not_found("thread"));
         };
-        let mut q =
-            conn.prepare("SELECT id, json FROM message WHERE conversation_id = ?1 ORDER BY seq")?;
-        let msgs: Vec<Value> = q
-            .query_map([&id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?
-            .filter_map(Result::ok)
-            .filter_map(|(mid, raw)| to_agui(&mid, &raw))
-            .collect();
+        let profile = hoardini_core::paths::profile_dir()
+            .to_string_lossy()
+            .into_owned();
+        let msgs = hoardini_agent::thread::agui_messages(&s.db, &id, Some(&profile))?;
         let props = match proposals::list_for_conversation(&s.db, &id) {
             Ok(list) => list,
             Err(e) => {
