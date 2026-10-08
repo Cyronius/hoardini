@@ -335,8 +335,18 @@ impl Tool for ProposeDedupe {
                 .ok()?;
             Some(rows)
         });
+        let members = members.unwrap_or_default();
+        if members.is_empty() {
+            return Err(ToolError::Failed(format!(
+                "duplicate group {group} is unknown; call duplicates() and use a group id it lists"
+            )));
+        }
+        if !members.iter().any(|p| p.eq_ignore_ascii_case(&keep)) {
+            return Err(ToolError::Failed(format!(
+                "{keep} is not a member of duplicate group {group}; keep must be one of its copies"
+            )));
+        }
         let items = members
-            .unwrap_or_default()
             .into_iter()
             .filter(|p| !p.eq_ignore_ascii_case(&keep))
             .map(|path| NewItem {

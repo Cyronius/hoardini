@@ -8,7 +8,7 @@ use crate::policy::PolicyEnv;
 use crate::proposals::{Proposal, ProposalKind, StoredItem};
 use crate::vault::SecretStore;
 
-use super::{archive, delete};
+use super::{archive, compress, dedupe, delete};
 
 pub type CopyHook = Arc<dyn Fn(&Path) + Send + Sync>;
 
@@ -50,7 +50,6 @@ pub(crate) struct Outcome {
     pub detail: Option<String>,
 }
 
-// One per proposal kind; wave 3 adds compress and dedupe here without touching the job flow.
 pub(crate) trait Handler: Send + Sync {
     fn weight(&self, item: &StoredItem) -> i64 {
         item.alloc
@@ -66,7 +65,8 @@ pub(crate) fn handler_for(kind: ProposalKind) -> Option<Box<dyn Handler>> {
     match kind {
         ProposalKind::Delete => Some(Box::new(delete::DeleteHandler)),
         ProposalKind::Archive => Some(Box::new(archive::ArchiveHandler)),
-        ProposalKind::Compress | ProposalKind::Dedupe => None,
+        ProposalKind::Compress => Some(Box::new(compress::CompressHandler)),
+        ProposalKind::Dedupe => Some(Box::new(dedupe::DedupeHandler)),
     }
 }
 

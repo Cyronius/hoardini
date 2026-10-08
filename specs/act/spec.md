@@ -9,8 +9,8 @@ Code: `crates/core/src/{actions,destinations}`. Tests: `specs/act/tests/act.rs`.
 proposal and a subset of its selectable item ids, revalidates them (POLICY-REVALIDATE), marks the proposal `approved`,
 starts a job on its own thread, and returns `{approved, items, job_id}`. Jobs run one at a time (`queued` → `running` →
 `done` | `failed` | `cancelled`); progress (bytes, items, current path) goes to `Executor::subscribe()` and the `job`
-table; cancel takes effect between files and between 1 MiB copy chunks. Kinds today: delete and archive (local folder,
-SMB UNC path); compress and dedupe plug into `actions::handler` in wave 3.
+table; cancel takes effect between files and between 1 MiB copy chunks. Kinds: delete, archive (local folder,
+SMB UNC path), compress, dedupe.
 
 - **Delete**: `remove_file` (read-only cleared), `remove_dir_all` for folders (never follows links inside), and a link
   item removes the link itself.
@@ -20,6 +20,17 @@ SMB UNC path); compress and dedupe plug into `actions::handler` in wave 3.
   inside are skipped and named in the item detail. A re-run reuses a final copy whose BLAKE3 still matches. User
   folders (no catalog entry, `user-data`, `downloads`) get a `<name>.hoardini.txt` stub naming the copy; caches do not
   (`meta.archive_stubs = false` turns stubs off).
+- **Compress**: formats `zip`, `7z`, `tar.zst` write `<name>.<ext>` next to the original (`<name>.<ext>.hoardini-partial`
+  while writing), hashing every source file while it is added; then the archive is re-read, every entry's size and
+  BLAKE3 must match, the sources must be unchanged, and only then is the archive renamed into place and the originals
+  deleted (undo = extract). Links, reparse points, and cloud-only files make the item fail up front. `lzx`
+  (`compact /c /exe:lzx`, for data that is not written to again) and `lznt1` (`compact /c`) run `compact.exe` in place with
+  no console window (undo = `compact /u`). Freed bytes = allocation before minus after.
+- **Dedupe**: items are the extra copies; `keep` (from the proposal) is never listed, opened for write, or changed.
+  `hardlink` (same volume only) hashes keep and extra in full at execution, creates the link under a temp name beside
+  the extra, then renames it over the extra; `delete` removes the extra. Candidates come from `core::dupes`: same
+  logical size, distinct `file_id` (hard links are one file), equal head+tail sample, then equal full BLAKE3, files of
+  at least 100 MB by default, never cloud placeholders. Full hashes are reused while size, mtime, and `file_id` hold.
 - **Journal**: one `action` row per item, written `running` before work starts and `done`/`failed`/`cancelled` with
   `freed_bytes`, `undo_json`, and `error` after; archive also writes an `archive_entry` (size, BLAKE3 of the file or of
   the folder manifest, stub path) and the action's `undo_json` before it deletes the source. The index is patched after
@@ -89,3 +100,43 @@ press, or releasing early shall not approve. Archive cards approve with one clic
 6. Press and hold until the bar fills (about 1.2 s). The card switches to approved, a job appears, and the file is gone.
 7. Uncheck every item on another delete card: the hold button is disabled.
 8. Ask for an archive proposal to a registered destination: its approve button works with a single click.
+
+### ACT-COMPRESS-ESTIMATE: Compression estimates track the data
+**Applies to:** hoardini
+**Verification:** test
+
+`compress::estimate(path)` shall sample the file (or the largest files of a folder) through the atime-preserving
+handle and report, per format (`zip`, `7z`, `tar.zst`, `lzx`, `lznt1`), the compressed/original ratio, expected result
+size, savings, and time. All figures are estimates. Data identified as already compressed (media, archives, quantized
+weights) shall report ratio 1.0 without being compressed.
+
+**Acceptance criteria:**
+- A 4 MiB pseudo-random file: every format's ratio is within 0.97 to 1.0 and savings are under 150 KB.
+- A 4 MiB file of zeros: every format's ratio is below 0.1 and savings exceed 3 MiB.
+- A `.mp4`-named random file is flagged `already_compressed`, samples 0 bytes, and every format reports ratio 1.0 and 0 saved.
+
+### ACT-COMPRESS-VERIFY: Originals go only after the archive tests clean
+**Applies to:** hoardini
+**Verification:** test
+
+An archive compress shall delete originals only after the finished archive was re-read and every entry matched the
+source's size and BLAKE3. A failed test shall leave the originals untouched, no archive at the final name, and no
+partial file. An in-place compress shall leave content identical and reduce allocation on compressible data.
+
+**Acceptance criteria:**
+- For each of zip, 7z, tar.zst: a text file and a nested folder (with an empty subfolder) compress to `<name>.<ext>` beside them, both originals are gone, the job frees more than 0 bytes, and the zip's entries equal the folder's file bytes.
+- When each finished archive is damaged before its test, the job fails, the file and folder are byte-identical to before, no archive or `.hoardini-partial` exists, and 0 bytes are freed.
+- `lzx` and `lznt1` on a 4 MiB text file: content is identical, allocation after is under half of before, `freed_bytes` equals the difference, and the journaled undo is a `compact /u` command.
+
+### ACT-DEDUPE-VERIFY: Duplicates are removed only after a fresh full-hash match
+**Applies to:** hoardini
+**Verification:** test
+
+A dedupe shall act on an extra copy only if, at execution, its full BLAKE3 and size equal the kept copy's. The kept copy
+shall never be modified or deleted, and a proposal that lists the kept copy for removal shall change nothing.
+`hardlink` shall leave the extra's path readable with the kept content; `delete` shall remove only verified extras.
+
+**Acceptance criteria:**
+- Keep `a\keep.bin`, extras `b	win.bin` and `c\lookalike.bin` (the latter changed after proposing, same size and mtime): in hardlink mode the twin has keep's `file_id` and bytes, the lookalike is `failed` ("differs"), unchanged, and not linked; keep is byte- and `file_id`-identical; freed bytes are at least the file size; the journaled undo says "break the link".
+- In delete mode the twin is gone, the lookalike remains, keep is unchanged.
+- A proposal listing keep among the items fails the job and leaves every file in place.

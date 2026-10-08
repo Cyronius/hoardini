@@ -189,7 +189,7 @@ async fn index_summary(State(s): State<AppState>) -> ApiResult {
             "age_ms": st.age_ms.unwrap_or(0),
             "free_delta_bytes": free_delta,
             "movers": movers,
-            "duplicate_hint": Value::Null,
+            "duplicate_hint": hoardini_core::dupes::hint(&conn).map(|(bytes, count)| json!({"bytes": bytes, "count": count})),
         })))
     })
     .await

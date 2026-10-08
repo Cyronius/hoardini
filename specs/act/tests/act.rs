@@ -362,3 +362,330 @@ fn restore_puts_back_the_original_path_and_content() {
     assert!(!other.exists());
     assert!(entry_for(&fx, &other).restored_ms.is_none());
 }
+
+fn text_blob(n: usize) -> Vec<u8> {
+    "Hoardini compressible line 0123456789\n"
+        .as_bytes()
+        .iter()
+        .copied()
+        .cycle()
+        .take(n)
+        .collect()
+}
+
+fn compress_request(
+    fx: &Fx,
+    paths: &[&Path],
+    format: &str,
+) -> hoardini_core::proposals::NewProposal {
+    let mut req = fx.request(ProposalKind::Compress, paths, None);
+    req.format = Some(format.into());
+    req
+}
+
+fn compress_proposal(fx: &Fx, paths: &[&Path], format: &str) -> hoardini_core::proposals::Proposal {
+    hoardini_core::proposals::create_with(&fx.db, &fx.env, compress_request(fx, paths, format))
+        .unwrap()
+}
+
+fn archive_beside(original: &Path, ext: &str) -> PathBuf {
+    PathBuf::from(format!("{}.{ext}", s(original)))
+}
+
+fn leftover_partials(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".hoardini-partial")
+        })
+        .count()
+}
+
+// Traces: ACT-COMPRESS-ESTIMATE
+#[test]
+fn estimate_says_random_data_does_not_shrink_and_zeros_do() {
+    let fx = Fx::new();
+    let random = fx.file("random.dat", &data(4 << 20, 21));
+    let zeros = fx.file("zeros.dat", &vec![0u8; 4 << 20]);
+
+    let r = hoardini_core::compress::estimate(&random).unwrap();
+    assert_eq!(r.logical_bytes, 4 << 20);
+    assert_eq!(r.formats.len(), 5);
+    for f in &r.formats {
+        assert!((0.97..=1.0).contains(&f.ratio), "{}: {}", f.format, f.ratio);
+        assert!(f.saved_bytes < 150_000, "{}: {}", f.format, f.saved_bytes);
+    }
+
+    let z = hoardini_core::compress::estimate(&zeros).unwrap();
+    for f in &z.formats {
+        assert!(f.ratio < 0.1, "{}: {}", f.format, f.ratio);
+        assert!(f.saved_bytes > 3 << 20, "{}: {}", f.format, f.saved_bytes);
+    }
+}
+
+// Traces: ACT-COMPRESS-ESTIMATE
+#[test]
+fn estimate_flags_already_compressed_data_without_sampling_it() {
+    let fx = Fx::new();
+    let clip = fx.file("clip.mp4", &data(3 << 20, 22));
+    let e = hoardini_core::compress::estimate(&clip).unwrap();
+    assert!(e.already_compressed);
+    assert_eq!(e.sampled_bytes, 0);
+    assert!(
+        e.formats
+            .iter()
+            .all(|f| f.ratio == 1.0 && f.saved_bytes == 0)
+    );
+}
+
+// Traces: ACT-COMPRESS-VERIFY
+#[test]
+fn archive_formats_delete_originals_only_after_the_archive_tests_clean() {
+    for ext in ["zip", "7z", "tar.zst"] {
+        let fx = Fx::new();
+        let file = fx.file(r"big\log.txt", &text_blob(600_000));
+        let dir = make_tree(&fx, "project");
+        let dir_before = tree(&dir);
+        let ex = fx.executor();
+        let p = compress_proposal(&fx, &[&file, &dir], ext);
+        let job = wait(&ex, &ex.approve(&p.id, &ids(&p)).unwrap().job_id);
+        assert_eq!(job.status, "done", "{ext}: {:?}", job.error);
+        assert!(
+            !file.exists() && !dir.exists(),
+            "{ext}: originals stay only on failure"
+        );
+        let fa = archive_beside(&file, ext);
+        let da = archive_beside(&dir, ext);
+        assert!(fa.is_file() && da.is_file(), "{ext}");
+        assert!(job.freed_bytes > 0, "{ext}: text must free space");
+        let done = fx.get(&p.id);
+        assert!(done.items.iter().all(|i| i.status == "done"), "{ext}");
+
+        if ext == "zip" {
+            let mut z = zip::ZipArchive::new(std::fs::File::open(&da).unwrap()).unwrap();
+            let mut got = BTreeMap::new();
+            for i in 0..z.len() {
+                let mut f = z.by_index(i).unwrap();
+                if f.is_dir() {
+                    continue;
+                }
+                let mut b = Vec::new();
+                std::io::Read::read_to_end(&mut f, &mut b).unwrap();
+                got.insert(f.name().to_string(), b);
+            }
+            for (rel, bytes) in dir_before.iter().filter(|(k, _)| !k.ends_with('\\')) {
+                let name = format!("project/{}", rel.replace('\\', "/"));
+                assert_eq!(got.get(&name), Some(bytes), "{name}");
+            }
+        }
+    }
+}
+
+// Traces: ACT-COMPRESS-VERIFY
+#[test]
+fn a_damaged_archive_keeps_the_originals_and_leaves_no_archive() {
+    for ext in ["zip", "7z", "tar.zst"] {
+        let fx = Fx::new();
+        let file = fx.file(r"big\log.txt", &text_blob(400_000));
+        let dir = make_tree(&fx, "project");
+        let dir_before = tree(&dir);
+        let ex = fx.executor();
+        ex.set_copy_hook(Some(Arc::new(|p: &Path| {
+            let mut b = std::fs::read(p).unwrap();
+            let mid = b.len() / 3;
+            for x in &mut b[mid..mid + 32] {
+                *x ^= 0xFF;
+            }
+            std::fs::write(p, b).unwrap();
+        })));
+        let p = compress_proposal(&fx, &[&file, &dir], ext);
+        let job = wait(&ex, &ex.approve(&p.id, &ids(&p)).unwrap().job_id);
+        assert_eq!(job.status, "failed", "{ext}");
+        assert_eq!(job.freed_bytes, 0, "{ext}");
+        assert_eq!(std::fs::read(&file).unwrap(), text_blob(400_000), "{ext}");
+        assert_eq!(tree(&dir), dir_before, "{ext}");
+        assert!(!archive_beside(&file, ext).exists() && !archive_beside(&dir, ext).exists());
+        assert_eq!(leftover_partials(file.parent().unwrap()), 0, "{ext}");
+        assert_eq!(leftover_partials(dir.parent().unwrap()), 0, "{ext}");
+        assert!(
+            fx.get(&p.id).items.iter().all(|i| i.status == "failed"),
+            "{ext}"
+        );
+    }
+}
+
+// Traces: ACT-COMPRESS-VERIFY
+#[test]
+fn in_place_compression_reduces_allocation_and_keeps_content() {
+    for (format, name) in [("lzx", "wof.txt"), ("lznt1", "ntfs.txt")] {
+        let fx = Fx::new();
+        let bytes = text_blob(4 << 20);
+        let file = fx.file(name, &bytes);
+        let before = hoardini_win::alloc_size_by_open(&file).unwrap();
+        let ex = fx.executor();
+        let p = compress_proposal(&fx, &[&file], format);
+        let job = wait(&ex, &ex.approve(&p.id, &ids(&p)).unwrap().job_id);
+        assert_eq!(job.status, "done", "{format}: {:?}", job.error);
+        let after = hoardini_win::alloc_size_by_open(&file).unwrap();
+        assert!(after < before / 2, "{format}: {before} -> {after}");
+        assert_eq!(std::fs::read(&file).unwrap(), bytes, "{format}");
+        assert_eq!(job.freed_bytes as u64, before - after, "{format}");
+        let undo: String = fx
+            .db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT undo_json FROM action WHERE kind = 'compress'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(undo.contains("/u"), "{undo}");
+    }
+}
+
+struct DupFx {
+    keep: PathBuf,
+    twin: PathBuf,
+    lookalike: PathBuf,
+    group: hoardini_core::dupes::DupGroup,
+}
+
+fn dup_fixture(fx: &Fx) -> DupFx {
+    let bytes = data(600_000, 31);
+    let keep = fx.file(r"a\keep.bin", &bytes);
+    let twin = fx.file(r"b\twin.bin", &bytes);
+    let lookalike = fx.file(r"c\lookalike.bin", &bytes);
+    fx.index_work();
+    let opts = hoardini_core::dupes::DupOptions {
+        min_size: 1000,
+        ..Default::default()
+    };
+    let r = hoardini_core::dupes::find(
+        &fx.db.conn().unwrap(),
+        &opts,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(r.groups.len(), 1);
+    assert_eq!(r.groups[0].paths.len(), 3);
+    DupFx {
+        keep,
+        twin,
+        lookalike,
+        group: r.groups[0].clone(),
+    }
+}
+
+fn dedupe_proposal(
+    fx: &Fx,
+    d: &DupFx,
+    mode: &str,
+    extras: &[&Path],
+) -> hoardini_core::proposals::Proposal {
+    let mut req = fx.request(ProposalKind::Dedupe, extras, None);
+    req.dedupe = Some(hoardini_core::proposals::DedupeParams {
+        group_id: d.group.id,
+        keep: s(&d.keep),
+        mode: mode.into(),
+    });
+    hoardini_core::proposals::create_with(&fx.db, &fx.env, req).unwrap()
+}
+
+// Same size and mtime, different bytes: only a fresh full hash can tell.
+fn silently_alter(path: &Path) {
+    let mtime = std::fs::metadata(path).unwrap().modified().unwrap();
+    let mut b = std::fs::read(path).unwrap();
+    b[300_000] ^= 0xFF;
+    std::fs::write(path, b).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
+// Traces: ACT-DEDUPE-VERIFY
+#[test]
+fn hardlink_dedupe_relinks_only_copies_that_still_match_and_never_touches_keep() {
+    let fx = Fx::new();
+    let d = dup_fixture(&fx);
+    let keep_bytes = std::fs::read(&d.keep).unwrap();
+    let keep_id = hoardini_win::file_id_of(&d.keep).unwrap();
+    let lookalike_id = hoardini_win::file_id_of(&d.lookalike).unwrap();
+    silently_alter(&d.lookalike);
+    let altered = std::fs::read(&d.lookalike).unwrap();
+    let ex = fx.executor();
+    let p = dedupe_proposal(&fx, &d, "hardlink", &[&d.twin, &d.lookalike]);
+    let job = wait(&ex, &ex.approve(&p.id, &ids(&p)).unwrap().job_id);
+    assert_eq!(job.status, "done", "{:?}", job.error);
+
+    let done = fx.get(&p.id);
+    assert_eq!(item(&done, &d.twin).status, "done");
+    assert_eq!(item(&done, &d.lookalike).status, "failed");
+    assert!(
+        item(&done, &d.lookalike)
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("differs")
+    );
+    assert_eq!(hoardini_win::file_id_of(&d.twin).unwrap(), keep_id);
+    assert_eq!(std::fs::read(&d.twin).unwrap(), keep_bytes);
+    assert_eq!(std::fs::read(&d.keep).unwrap(), keep_bytes);
+    assert_eq!(hoardini_win::file_id_of(&d.keep).unwrap(), keep_id);
+    assert_eq!(
+        hoardini_win::file_id_of(&d.lookalike).unwrap(),
+        lookalike_id
+    );
+    assert_eq!(std::fs::read(&d.lookalike).unwrap(), altered);
+    assert!(job.freed_bytes >= 600_000, "{}", job.freed_bytes);
+    let undo: String = fx
+        .db
+        .conn()
+        .unwrap()
+        .query_row(
+            "SELECT undo_json FROM action WHERE path = ?1",
+            [s(&d.twin)],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(undo.contains("break the link"), "{undo}");
+}
+
+// Traces: ACT-DEDUPE-VERIFY
+#[test]
+fn delete_dedupe_removes_verified_extras_and_refuses_changed_ones() {
+    let fx = Fx::new();
+    let d = dup_fixture(&fx);
+    let keep_bytes = std::fs::read(&d.keep).unwrap();
+    silently_alter(&d.lookalike);
+    let ex = fx.executor();
+    let p = dedupe_proposal(&fx, &d, "delete", &[&d.twin, &d.lookalike]);
+    let job = wait(&ex, &ex.approve(&p.id, &ids(&p)).unwrap().job_id);
+    assert_eq!(job.status, "done", "{:?}", job.error);
+    assert!(!d.twin.exists());
+    assert!(
+        d.lookalike.exists(),
+        "a copy that no longer matches is never deleted"
+    );
+    assert_eq!(std::fs::read(&d.keep).unwrap(), keep_bytes);
+    assert!(job.freed_bytes >= 600_000);
+}
+
+// Traces: ACT-DEDUPE-VERIFY
+#[test]
+fn a_dedupe_that_lists_the_kept_copy_for_removal_changes_nothing() {
+    let fx = Fx::new();
+    let d = dup_fixture(&fx);
+    let ex = fx.executor();
+    let p = dedupe_proposal(&fx, &d, "delete", &[&d.keep, &d.twin]);
+    let job = wait(&ex, &ex.approve(&p.id, &ids(&p)).unwrap().job_id);
+    assert_eq!(job.status, "failed");
+    assert!(d.keep.exists() && d.twin.exists());
+}

@@ -77,6 +77,21 @@ export function HoldButton({ label, onConfirm, disabled }: { label: string; onCo
   );
 }
 
+function compressNoteFor(format: string | null): string | null {
+  switch (format) {
+    case "zip":
+    case "7z":
+    case "tar.zst":
+      return `Writes a .${format} next to the original, tests it, then deletes the original. Extract it to undo. Savings are an estimate.`;
+    case "lzx":
+      return "Compresses in place (Windows LZX). Best for data that is not written to again; compact /u undoes it. Savings are an estimate.";
+    case "lznt1":
+      return "Compresses in place (NTFS compression); compact /u undoes it. Savings are an estimate.";
+    default:
+      return null;
+  }
+}
+
 function ItemRow({
   item,
   checked,
@@ -237,16 +252,25 @@ export function ProposalCard({ proposalId }: { proposalId: string }) {
           ? `Compress${proposal.format ? ` (${proposal.format})` : ""}`
           : "Remove duplicates";
   const outcome = outcomeLine(proposal, job);
+  const compressNote = proposal.kind === "compress" ? compressNoteFor(proposal.format) : null;
+  const dedupe = proposal.kind === "dedupe" ? proposal.dedupe : null;
 
   return (
     <div className="fade-up my-2 rounded-2xl border border-brass/40 bg-ink-850 p-3 shadow-sm" data-proposal-id={proposalId} data-status={proposal.status}>
       <div className="flex items-baseline gap-2">
         <span className="font-[family-name:var(--font-display)] text-[length:var(--fs-md)] font-bold">
-          {heading} · free {humanBytes(pending ? total : proposal.total_alloc)}
+          {heading} · {proposal.kind === "compress" ? "up to" : "free"} {humanBytes(pending ? total : proposal.total_alloc)}
         </span>
         <span className="ml-auto text-[length:var(--fs-xs)] text-faint">{proposal.status}</span>
       </div>
       {proposal.summary && <p className="mt-1 text-[length:var(--fs-sm)] text-muted">{proposal.summary}</p>}
+      {dedupe && (
+        <p className="mt-1 text-[length:var(--fs-sm)] text-muted" title={dedupe.keep}>
+          Keeps <span className="font-semibold text-paper">{fileName(dedupe.keep)}</span>. The listed copies are{" "}
+          {dedupe.mode === "hardlink" ? "replaced with hard links to it (every path keeps working)" : "deleted"} after their contents are re-checked.
+        </p>
+      )}
+      {compressNote && <p className="mt-1 text-[length:var(--fs-sm)] text-muted">{compressNote}</p>}
 
       <ul className="mt-2 divide-y divide-line-soft rounded-xl border border-line-soft bg-ink-900 px-2.5">
         {proposal.items.map((it) => (

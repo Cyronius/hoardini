@@ -1,4 +1,6 @@
 mod archive;
+mod compress;
+mod dedupe;
 mod delete;
 mod handler;
 mod journal;

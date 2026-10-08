@@ -97,6 +97,8 @@ registry! {
     recall => [Recall],
     remember => [Remember],
     destinations => [Destinations],
+    duplicates => [Duplicates],
+    estimate_compression => [EstimateCompression],
     propose => [ProposeDelete, ProposeArchive, ProposeCompress, ProposeDedupe],
 }
 
