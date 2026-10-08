@@ -6,16 +6,24 @@ use std::sync::Arc;
 use hoardini_win::{
     DirEntry, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SPARSE_FILE, IO_REPARSE_TAG_MOUNT_POINT,
-    IO_REPARSE_TAG_SYMLINK, VolumeInfo,
+    IO_REPARSE_TAG_SYMLINK, UsnJournal, UsnRecord, VolumeInfo,
 };
 use parking_lot::Mutex;
 
+use super::journal::{
+    ERROR_JOURNAL_ENTRY_DELETED, ERROR_JOURNAL_NOT_ACTIVE, JournalSource,
+    USN_REASON_BASIC_INFO_CHANGE, USN_REASON_CLOSE, USN_REASON_DATA_EXTEND,
+    USN_REASON_DATA_OVERWRITE, USN_REASON_DATA_TRUNCATION, USN_REASON_FILE_CREATE,
+    USN_REASON_FILE_DELETE, USN_REASON_HARD_LINK_CHANGE, USN_REASON_RENAME_NEW_NAME,
+    USN_REASON_RENAME_OLD_NAME, USN_REASON_REPARSE_POINT_CHANGE, USN_REASON_SECURITY_CHANGE,
+};
 use super::lister::DirLister;
-use super::{normalize_path, split_parent};
+use super::{join_path, normalize_path, split_parent};
 
 const T0: i64 = 1_700_000_000_000;
 const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x20;
 const FAKE_CLOUD_TAG: u32 = 0x9000_601A;
+const USN_STEP: i64 = 96;
 type ListHook = Arc<dyn Fn(&str) + Send + Sync>;
 
 #[derive(Clone, Debug)]
@@ -25,12 +33,23 @@ struct Node {
     denied: bool,
 }
 
+struct Journal {
+    id: u64,
+    first: i64,
+    next: i64,
+    records: Vec<UsnRecord>,
+    enabled: bool,
+    page: usize,
+}
+
 struct Inner {
     nodes: BTreeMap<String, Node>,
     next_record: u64,
     listed: Vec<String>,
     opened: Vec<String>,
     volume: Option<VolumeInfo>,
+    journal: Journal,
+    dir_times: bool,
 }
 
 pub struct FakeFs {
@@ -55,8 +74,7 @@ fn round_alloc(logical: u64) -> u64 {
 
 impl Inner {
     fn new_entry(&mut self, name: &str, attrs: u32) -> DirEntry {
-        self.next_record += 1;
-        let t = T0 + self.next_record as i64 * 1000;
+        let t = self.tick();
         DirEntry {
             name: name.to_string(),
             attrs,
@@ -67,6 +85,59 @@ impl Inner {
             atime_ms: t,
             mtime_ms: t,
             file_id: ntfs_id(self.next_record),
+        }
+    }
+
+    fn tick(&mut self) -> i64 {
+        self.next_record += 1;
+        T0 + self.next_record as i64 * 1000
+    }
+
+    fn id_of(&self, path: &str) -> [u8; 16] {
+        self.nodes
+            .get(&key(path))
+            .map(|n| n.entry.file_id)
+            .unwrap_or_default()
+    }
+
+    fn log(&mut self, file_id: [u8; 16], parent_id: [u8; 16], attrs: u32, reason: u32) {
+        let usn = self.journal.next;
+        self.journal.records.push(UsnRecord {
+            usn,
+            file_id,
+            parent_id,
+            reason,
+            attrs,
+        });
+        self.journal.next += USN_STEP;
+    }
+
+    // NTFS logs a change, then the same reasons again with CLOSE when the last handle closes.
+    fn log_change(&mut self, path: &str, reason: u32) {
+        let Some((id, attrs)) = self
+            .nodes
+            .get(&key(path))
+            .map(|n| (n.entry.file_id, n.entry.attrs))
+        else {
+            return;
+        };
+        let parent = split_parent(&normalize_path(path))
+            .map(|(p, _)| self.id_of(&p))
+            .unwrap_or_default();
+        self.log(id, parent, attrs, reason);
+        self.log(id, parent, attrs, reason | USN_REASON_CLOSE);
+    }
+
+    // Adding, removing, or renaming an entry changes the directory's own write time, as on NTFS.
+    fn bump_parent(&mut self, path: &str) {
+        if !self.dir_times {
+            return;
+        }
+        if let Some((parent, _)) = split_parent(&normalize_path(path)) {
+            let t = self.tick();
+            if let Some(n) = self.nodes.get_mut(&key(&parent)) {
+                n.entry.mtime_ms = t;
+            }
         }
     }
 
@@ -88,14 +159,17 @@ impl Inner {
                 denied: false,
             },
         );
+        self.log_change(&path, USN_REASON_FILE_CREATE);
+        self.bump_parent(&path);
     }
 
-    fn put(&mut self, root: &str, path: &str, f: impl FnOnce(&mut DirEntry)) {
+    fn put(&mut self, root: &str, path: &str, reason: u32, f: impl FnOnce(&mut DirEntry)) {
         let path = normalize_path(path);
         let Some((parent, name)) = split_parent(&path) else {
             return;
         };
         self.ensure_dir(root, &parent);
+        self.log_change(&path, USN_REASON_FILE_DELETE);
         let mut entry = self.new_entry(name, 0);
         f(&mut entry);
         self.nodes.insert(
@@ -106,6 +180,8 @@ impl Inner {
                 denied: false,
             },
         );
+        self.log_change(&path, reason);
+        self.bump_parent(&path);
     }
 
     fn subtree_keys(&self, path: &str) -> Vec<String> {
@@ -123,6 +199,42 @@ impl Inner {
                 .map(|(kk, _)| kk.clone()),
         );
         out
+    }
+
+    fn remove_subtree(&mut self, path: &str) -> bool {
+        let keys: Vec<String> = self
+            .subtree_keys(path)
+            .into_iter()
+            .filter(|k| self.nodes.contains_key(k))
+            .collect();
+        for k in keys.iter().rev() {
+            self.log_change(k, USN_REASON_FILE_DELETE);
+        }
+        for k in &keys {
+            self.nodes.remove(k);
+        }
+        !keys.is_empty()
+    }
+
+    fn real_path(&self, root: &str, k: &str) -> String {
+        let mut names = Vec::new();
+        let mut cur = k.to_string();
+        while !cur.eq_ignore_ascii_case(root) {
+            let Some((parent, _)) = split_parent(&cur) else {
+                break;
+            };
+            names.push(
+                self.nodes
+                    .get(&cur)
+                    .map(|n| n.entry.name.clone())
+                    .unwrap_or_default(),
+            );
+            cur = parent;
+        }
+        names
+            .iter()
+            .rev()
+            .fold(root.to_string(), |p, n| join_path(&p, n))
     }
 }
 
@@ -164,6 +276,15 @@ impl FakeFs {
                 listed: Vec::new(),
                 opened: Vec::new(),
                 volume: Some(volume),
+                dir_times: false,
+                journal: Journal {
+                    id: 0x01DC_0000_0000_0001,
+                    first: 4096,
+                    next: 4096,
+                    records: Vec::new(),
+                    enabled: true,
+                    page: 64,
+                },
             }),
             hook: Mutex::new(None),
         }
@@ -200,18 +321,22 @@ impl FakeFs {
     }
 
     pub fn file_alloc(&self, path: &str, alloc: u64, logical: u64) {
-        self.inner.lock().put(&self.root, path, |e| {
-            e.alloc = alloc;
-            e.logical = logical;
-        });
+        self.inner
+            .lock()
+            .put(&self.root, path, USN_REASON_FILE_CREATE, |e| {
+                e.alloc = alloc;
+                e.logical = logical;
+            });
     }
 
     pub fn file_with_id(&self, path: &str, alloc: u64, logical: u64, file_id: [u8; 16]) {
-        self.inner.lock().put(&self.root, path, |e| {
-            e.alloc = alloc;
-            e.logical = logical;
-            e.file_id = file_id;
-        });
+        self.inner
+            .lock()
+            .put(&self.root, path, USN_REASON_FILE_CREATE, |e| {
+                e.alloc = alloc;
+                e.logical = logical;
+                e.file_id = file_id;
+            });
     }
 
     pub fn hard_link(&self, existing: &str, link: &str) {
@@ -219,7 +344,7 @@ impl FakeFs {
         let Some(src) = g.nodes.get(&key(existing)).map(|n| n.entry.clone()) else {
             return;
         };
-        g.put(&self.root, link, |e| {
+        g.put(&self.root, link, USN_REASON_HARD_LINK_CHANGE, |e| {
             let name = std::mem::take(&mut e.name);
             *e = DirEntry { name, ..src };
         });
@@ -234,23 +359,27 @@ impl FakeFs {
     }
 
     pub fn symlink_file(&self, path: &str) {
-        self.inner.lock().put(&self.root, path, |e| {
-            e.attrs = FILE_ATTRIBUTE_REPARSE_POINT;
-            e.reparse_tag = IO_REPARSE_TAG_SYMLINK;
-        });
+        self.inner
+            .lock()
+            .put(&self.root, path, USN_REASON_FILE_CREATE, |e| {
+                e.attrs = FILE_ATTRIBUTE_REPARSE_POINT;
+                e.reparse_tag = IO_REPARSE_TAG_SYMLINK;
+            });
     }
 
     pub fn reparse_dir(&self, path: &str, tag: u32) {
-        self.inner.lock().put(&self.root, path, |e| {
-            e.attrs = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT;
-            e.reparse_tag = tag;
-        });
+        self.inner
+            .lock()
+            .put(&self.root, path, USN_REASON_FILE_CREATE, |e| {
+                e.attrs = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT;
+                e.reparse_tag = tag;
+            });
     }
 
     // Measured on NTFS: a WOF file lists as alloc 0 with plain attributes and no reparse tag.
     pub fn wof_file(&self, path: &str, logical: u64, real_alloc: u64) {
         let mut g = self.inner.lock();
-        g.put(&self.root, path, |e| {
+        g.put(&self.root, path, USN_REASON_FILE_CREATE, |e| {
             e.attrs = FILE_ATTRIBUTE_ARCHIVE;
             e.alloc = 0;
             e.logical = logical;
@@ -261,49 +390,67 @@ impl FakeFs {
     }
 
     pub fn sparse_file(&self, path: &str, alloc: u64, logical: u64) {
-        self.inner.lock().put(&self.root, path, |e| {
-            e.attrs = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_SPARSE_FILE;
-            e.alloc = alloc;
-            e.logical = logical;
-        });
+        self.inner
+            .lock()
+            .put(&self.root, path, USN_REASON_FILE_CREATE, |e| {
+                e.attrs = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_SPARSE_FILE;
+                e.alloc = alloc;
+                e.logical = logical;
+            });
     }
 
     pub fn placeholder(&self, path: &str, logical: u64) {
-        self.inner.lock().put(&self.root, path, |e| {
-            e.attrs = FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS;
-            e.reparse_tag = FAKE_CLOUD_TAG;
-            e.alloc = 0;
-            e.logical = logical;
-        });
+        self.inner
+            .lock()
+            .put(&self.root, path, USN_REASON_FILE_CREATE, |e| {
+                e.attrs = FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS;
+                e.reparse_tag = FAKE_CLOUD_TAG;
+                e.alloc = 0;
+                e.logical = logical;
+            });
     }
 
     pub fn set_attrs(&self, path: &str, attrs: u32, reparse_tag: u32) {
-        if let Some(n) = self.inner.lock().nodes.get_mut(&key(path)) {
-            n.entry.attrs = attrs;
-            n.entry.reparse_tag = reparse_tag;
-        }
+        let mut g = self.inner.lock();
+        let Some(n) = g.nodes.get_mut(&key(path)) else {
+            return;
+        };
+        let tag_changed = n.entry.reparse_tag != reparse_tag;
+        n.entry.attrs = attrs;
+        n.entry.reparse_tag = reparse_tag;
+        let reason = if tag_changed {
+            USN_REASON_REPARSE_POINT_CHANGE
+        } else {
+            USN_REASON_BASIC_INFO_CHANGE
+        };
+        g.log_change(path, reason);
     }
 
     pub fn deny(&self, path: &str) {
-        self.inner.lock().ensure_dir(&self.root, path);
-        if let Some(n) = self.inner.lock().nodes.get_mut(&key(path)) {
+        let mut g = self.inner.lock();
+        g.ensure_dir(&self.root, path);
+        if let Some(n) = g.nodes.get_mut(&key(path)) {
             n.denied = true;
         }
+        g.log_change(path, USN_REASON_SECURITY_CHANGE);
     }
 
     pub fn allow(&self, path: &str) {
-        if let Some(n) = self.inner.lock().nodes.get_mut(&key(path)) {
+        let mut g = self.inner.lock();
+        if let Some(n) = g.nodes.get_mut(&key(path)) {
             n.denied = false;
         }
+        g.log_change(path, USN_REASON_SECURITY_CHANGE);
     }
 
     pub fn remove(&self, path: &str) {
         let mut g = self.inner.lock();
-        for k in g.subtree_keys(path) {
-            g.nodes.remove(&k);
+        if g.remove_subtree(path) {
+            g.bump_parent(path);
         }
     }
 
+    // Only the moved entry is journaled; its subtree keeps its ids and gets no records, as on NTFS.
     pub fn rename(&self, from: &str, to: &str) {
         let mut g = self.inner.lock();
         let from_n = normalize_path(from);
@@ -314,6 +461,20 @@ impl FakeFs {
         g.ensure_dir(&self.root, &to_parent);
         let from_k = key(&from_n);
         let to_k = key(&to_n);
+        let Some((id, attrs)) = g
+            .nodes
+            .get(&from_k)
+            .map(|n| (n.entry.file_id, n.entry.attrs))
+        else {
+            return;
+        };
+        if to_k != from_k && g.remove_subtree(&to_n) {
+            g.bump_parent(&to_n);
+        }
+        let old_parent = split_parent(&from_n)
+            .map(|(p, _)| g.id_of(&p))
+            .unwrap_or_default();
+        g.log(id, old_parent, attrs, USN_REASON_RENAME_OLD_NAME);
         for k in g.subtree_keys(&from_n) {
             if let Some(mut n) = g.nodes.remove(&k) {
                 if k == from_k {
@@ -322,12 +483,26 @@ impl FakeFs {
                 g.nodes.insert(format!("{to_k}{}", &k[from_k.len()..]), n);
             }
         }
+        let new_parent = g.id_of(&to_parent);
+        g.log(id, new_parent, attrs, USN_REASON_RENAME_NEW_NAME);
+        g.log(
+            id,
+            new_parent,
+            attrs,
+            USN_REASON_RENAME_NEW_NAME | USN_REASON_CLOSE,
+        );
+        g.bump_parent(&from_n);
+        g.bump_parent(&to_n);
     }
 
-    // Changes every hard link of the file, like a real write would.
+    // Changes every hard link of the file, like a real write would; the record names only this path.
     pub fn resize(&self, path: &str, alloc: u64, logical: u64) {
         let mut g = self.inner.lock();
-        let Some(id) = g.nodes.get(&key(path)).map(|n| n.entry.file_id) else {
+        let Some((id, old)) = g
+            .nodes
+            .get(&key(path))
+            .map(|n| (n.entry.file_id, n.entry.logical))
+        else {
             return;
         };
         let k = key(path);
@@ -342,12 +517,20 @@ impl FakeFs {
                 }
             }
         }
+        let reason = match logical.cmp(&old) {
+            std::cmp::Ordering::Greater => USN_REASON_DATA_EXTEND,
+            std::cmp::Ordering::Less => USN_REASON_DATA_TRUNCATION,
+            std::cmp::Ordering::Equal => USN_REASON_DATA_OVERWRITE,
+        };
+        g.log_change(path, reason);
     }
 
     pub fn touch(&self, path: &str, mtime_ms: i64) {
-        if let Some(n) = self.inner.lock().nodes.get_mut(&key(path)) {
+        let mut g = self.inner.lock();
+        if let Some(n) = g.nodes.get_mut(&key(path)) {
             n.entry.mtime_ms = mtime_ms;
         }
+        g.log_change(path, USN_REASON_BASIC_INFO_CHANGE);
     }
 
     pub fn file_id(&self, path: &str) -> Option<[u8; 16]> {
@@ -378,6 +561,39 @@ impl FakeFs {
 
     pub fn clear_hook(&self) {
         *self.hook.lock() = None;
+    }
+
+    // A recreated journal: new id, no records (`fsutil usn deletejournal` + createjournal).
+    pub fn journal_reset(&self) {
+        let mut g = self.inner.lock();
+        g.journal.id += 1;
+        g.journal.records.clear();
+        g.journal.first = g.journal.next;
+    }
+
+    // The journal overran its size: every record so far is gone, the id stays.
+    pub fn journal_wrap(&self) {
+        let mut g = self.inner.lock();
+        g.journal.records.clear();
+        g.journal.first = g.journal.next;
+    }
+
+    // Disabled acts like a volume without a journal (FAT, exFAT).
+    pub fn set_journal_enabled(&self, enabled: bool) {
+        self.inner.lock().journal.enabled = enabled;
+    }
+
+    pub fn set_journal_page(&self, records: usize) {
+        self.inner.lock().journal.page = records.max(1);
+    }
+
+    // Off by default: action patches never re-list a parent, so they cannot see these times change.
+    pub fn track_dir_times(&self, on: bool) {
+        self.inner.lock().dir_times = on;
+    }
+
+    pub fn journal_records(&self) -> usize {
+        self.inner.lock().journal.records.len()
     }
 }
 
@@ -429,6 +645,46 @@ impl DirLister for FakeFs {
     }
 }
 
+impl JournalSource for FakeFs {
+    fn query(&self) -> io::Result<UsnJournal> {
+        let g = self.inner.lock();
+        if !g.journal.enabled {
+            return Err(io::Error::from_raw_os_error(ERROR_JOURNAL_NOT_ACTIVE));
+        }
+        Ok(UsnJournal {
+            journal_id: g.journal.id,
+            first_usn: g.journal.first,
+            next_usn: g.journal.next,
+        })
+    }
+
+    fn read(&self, journal_id: u64, from: i64) -> io::Result<(Vec<UsnRecord>, i64)> {
+        let g = self.inner.lock();
+        let j = &g.journal;
+        if !j.enabled {
+            return Err(io::Error::from_raw_os_error(ERROR_JOURNAL_NOT_ACTIVE));
+        }
+        if journal_id != j.id || from < j.first {
+            return Err(io::Error::from_raw_os_error(ERROR_JOURNAL_ENTRY_DELETED));
+        }
+        let start = j.records.partition_point(|r| r.usn < from);
+        let page: Vec<UsnRecord> = j.records[start..].iter().take(j.page).cloned().collect();
+        let next = j.records.get(start + page.len()).map_or(j.next, |r| r.usn);
+        Ok((page, next))
+    }
+
+    fn path_by_file_id(&self, id: [u8; 16]) -> io::Result<String> {
+        let g = self.inner.lock();
+        let k = g
+            .nodes
+            .iter()
+            .find(|(_, n)| id != [0; 16] && n.entry.file_id == id)
+            .map(|(k, _)| k.clone())
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        Ok(g.real_path(&self.root, &k))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,5 +726,42 @@ mod tests {
             8000
         );
         assert_eq!(fs.file_id(r"C:\z.bin"), fs.file_id(r"C:\q\a2\b\y.bin"));
+    }
+
+    #[test]
+    fn journals_changes_with_parent_ids_and_pages() {
+        let fs = FakeFs::new(r"C:\");
+        fs.file(r"C:\a\Big.bin", 10);
+        let start = fs.query().unwrap();
+        fs.rename(r"C:\a", r"C:\q\A2");
+        fs.remove(r"C:\q\A2\Big.bin");
+        let j = fs.query().unwrap();
+        assert_eq!(j.journal_id, start.journal_id);
+        fs.set_journal_page(2);
+        let mut at = start.next_usn;
+        let mut recs = Vec::new();
+        while at < j.next_usn {
+            let (page, next) = fs.read(j.journal_id, at).unwrap();
+            assert!(page.len() <= 2);
+            recs.extend(page);
+            at = next;
+        }
+        let a2 = fs.file_id(r"C:\q\A2").unwrap();
+        let q = fs.file_id(r"C:\q").unwrap();
+        assert!(
+            recs.iter()
+                .any(|r| r.file_id == q && r.reason & USN_REASON_FILE_CREATE != 0)
+        );
+        let moved: Vec<&UsnRecord> = recs.iter().filter(|r| r.file_id == a2).collect();
+        assert_eq!(moved[0].reason, USN_REASON_RENAME_OLD_NAME);
+        assert_eq!(moved[0].parent_id, ntfs_id(5));
+        assert_eq!(moved[1].parent_id, q);
+        assert!(
+            recs.iter()
+                .any(|r| r.parent_id == a2 && r.reason & USN_REASON_FILE_DELETE != 0)
+        );
+        assert_eq!(fs.path_by_file_id(a2).unwrap(), r"C:\q\A2");
+        fs.journal_wrap();
+        assert!(fs.read(j.journal_id, start.next_usn).is_err());
     }
 }

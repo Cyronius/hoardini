@@ -9,6 +9,8 @@ use hoardini_core::index::{
 };
 use hoardini_core::store::Db;
 
+mod journal;
+
 const KIB: u64 = 1 << 10;
 const MIB: u64 = 1 << 20;
 const GIB: u64 = 1 << 30;

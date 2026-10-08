@@ -488,6 +488,35 @@ impl<'c> Writer<'c> {
         listing: io::Result<Vec<DirEntry>>,
         push: &mut Vec<Work>,
     ) -> Result<()> {
+        self.apply_listing_with(work, listing, push, None)
+    }
+
+    // Moved files keep their ids but change paths, and the smallest path owns a hard-link group.
+    pub fn regroup_links_under(&mut self, id: i64) -> Result<()> {
+        let conn = self.conn;
+        let mut st = conn.prepare_cached(
+            "WITH RECURSIVE sub(id) AS (SELECT ?1 UNION ALL \
+             SELECT n.id FROM node n JOIN sub ON n.parent_id = sub.id) \
+             SELECT n.file_id FROM node n JOIN sub ON n.id = sub.id \
+             WHERE n.kind = 1 AND n.file_id IS NOT NULL AND EXISTS (SELECT 1 FROM node m \
+             WHERE m.volume_id = n.volume_id AND m.file_id = n.file_id AND m.id <> n.id)",
+        )?;
+        for key in st.query_map([id], |r| r.get::<_, Vec<u8>>(0))? {
+            if let Ok(k) = <[u8; 16]>::try_from(key?.as_slice()) {
+                self.regroup.insert(k);
+            }
+        }
+        Ok(())
+    }
+
+    // small_fold: the caller derived the fold from the stored one, keeping its hard-link exclusions.
+    pub fn apply_listing_with(
+        &mut self,
+        work: &Work,
+        listing: io::Result<Vec<DirEntry>>,
+        push: &mut Vec<Work>,
+        small_fold: Option<Delta>,
+    ) -> Result<()> {
         self.ensure_tx()?;
         let Some((old_small, old_flags, old_seen)) = self.self_row(work.node_id)? else {
             return Ok(());
@@ -528,6 +557,7 @@ impl<'c> Writer<'c> {
             .collect();
         let mut small = Delta::default();
         let mut delta = Delta::default();
+        let mut small_links: HashSet<[u8; 16]> = HashSet::new();
         for e in entries {
             match classify(&e) {
                 KIND_DIR => {
@@ -581,6 +611,7 @@ impl<'c> Writer<'c> {
                                     && r.file_id.as_deref() == Some(&k[..])
                             })
                         }
+                        (Dedupe::Db, Some(k)) => !small_links.insert(k),
                         _ => false,
                     };
                     if !dup {
@@ -633,6 +664,11 @@ impl<'c> Writer<'c> {
                     .execute([row.id])?;
                 self.writes += 1;
             }
+        }
+        if let Some(s) = small_fold
+            && old_flags & FLAG_DENIED == 0
+        {
+            small = s;
         }
         delta = delta + small - old_small;
         let flags = old_flags & !FLAG_DENIED;

@@ -1,10 +1,10 @@
 # INDEX — persistent disk index
 
 Canonical spec for the indexer (`hoardini-core::index`, `hoardini index`). Design: `.claude/plans/hoardini-design.md` §5.1.
-INDEX-JOURNAL-EQUIV (M5, USN journal refresh) lives here too once M5 adds it.
 
-Tests: `specs/index/tests/index.rs` (`cargo test -p hoardini-specs --test index`). Most run against `index::FakeFs`, an
-in-memory volume; the `real_*` tests run the real lister (`index::WinLister`) on a temp directory.
+Tests: `specs/index/tests/index.rs` and its module `journal.rs` (`cargo test -p hoardini-specs --test index`). Most run
+against `index::FakeFs`, an in-memory volume with a fake change journal; the `real_*` tests run the real lister
+(`index::WinLister`) and, for the journal, the real C: change journal (`index::WinJournal`) on a temp directory.
 
 ## Terms
 
@@ -14,6 +14,8 @@ in-memory volume; the `real_*` tests run the real lister (`index::WinLister`) on
 - **Subtree totals** of a directory (`sub_alloc`, `sub_logical`, `sub_count`): its folded small files plus the counted
   size of every child file row plus the subtree totals of every child directory. Links count 0.
 - **Refresh**: one full walk of a volume (`index::refresh`). A first build is a refresh of an empty index.
+- **Journal refresh**: an update driven by the volume's NTFS change journal (`index::journal_refresh`), read without
+  admin rights; it re-lists only the directories the journal names.
 
 ## Requirements
 
@@ -117,6 +119,78 @@ directory's small totals hold its bytes may differ (their common ancestors' tota
   junction by a dir; a denied dir becoming readable and a new denied dir; a hard-link owner removed and a new link
   added; a WOF file's allocation changed; an mtime change — each refresh with 3 workers yields a snapshot equal to a
   fresh build. A further refresh with 1 worker does too.
+
+### INDEX-JOURNAL-EQUIV: A journal refresh equals a full refresh
+**Applies to:** hoardini
+**Verification:** test
+
+Every completed full refresh shall store the volume's change-journal ID and next USN, queried before its walk starts;
+a full refresh clears them when it starts, so an unfinished one leaves none. A journal refresh (`index::journal_refresh`,
+`hoardini index --kind journal`) shall read every record from the stored USN to the journal's current end and re-list
+only: the parent of each changed entry, every directory holding a row with a changed file's ID (hard-link siblings), a
+directory whose permissions changed, and the parent of each directory whose set of entries changed (so its own times
+update). A renamed or moved directory that stays inside the indexed root keeps its rows and is re-parented, with its
+subtree totals moved from the old ancestors to the new ones; a directory that is new to the index is walked. Hard-link
+ownership is re-resolved, and the new next USN is stored. The result shall equal a fresh build of the same tree under
+the rules and exceptions of INDEX-REFRESH-EQUIV.
+
+The journal refresh shall change nothing and report "needs a full refresh" when no position is stored, the volume has
+no journal, the journal ID changed (reset), or the stored USN is older than the journal's first USN (wrapped).
+`hoardini index --kind auto` (the default) then runs a full refresh; it also runs one when the threshold setting differs
+from the stored threshold, which only a full refresh can apply. Records whose parent is not indexed and resolves to a
+path outside the indexed root are ignored. A directory re-listed only for changes to rows, subdirectories, or links
+keeps its stored small-file fold, plus small files created since; otherwise its small files are recounted. An
+interrupted journal refresh keeps subtree totals consistent and clears the stored position, so the next refresh is
+full. A completed journal refresh records a `scan` row of kind `journal` with history summaries; journal refreshes
+within a day of the first one after a full refresh fold into one row.
+
+Exceptions, beyond INDEX-REFRESH-EQUIV's: a hard-linked file below the threshold whose other link sits in a directory
+that is not re-listed counts again when its own directory's small files are recounted, until the next full refresh. On
+a live volume, directory times and access times are not stable between two walks (listing updates a directory's access
+time, and NTFS refreshes a directory's times in its parent's entry lazily), so the real-volume test masks them.
+
+**Acceptance criteria:**
+- Fake volume, journal read 7 records per page, parent times updated on every entry change: from the INDEX-REFRESH-EQUIV
+  sample tree, its round one of changes plus a dir with a subtree moved under another existing dir, a dir moved into a
+  new dir, two sibling dirs swapped, a new four-level subtree, and a new small file beside two same-dir links — one
+  journal refresh yields a snapshot equal to a fresh build and totals verify; it read more than one page; the moved
+  dirs and their children are not listed; an untouched dir is not listed; no dir is listed twice.
+- Then round two of changes plus a dir mtime change, then denying and re-allowing a new dir: each journal refresh
+  equals a fresh build; afterwards a journal refresh with no new records lists nothing, and the history holds one
+  `journal` row after the `full` one.
+- A 100 KiB file linked from `C:\c` and `C:\d`: after new big files in both dirs, a new subdir, and a rename, both dirs
+  are re-listed and keep their small totals; a new 8 KiB file adds to `C:\d`; the root row equals a fresh build's.
+- Journal reset: `NeedsFull(JournalChanged)` and the snapshot is unchanged; auto runs a full refresh equal to a fresh
+  build. Journal wrapped: `--kind journal` reports `NeedsFull(Wrapped)` and indexes nothing; auto falls back and equals
+  a fresh build; the next auto run is a journal refresh. No journal: `NeedsFull(NoJournal)`. A full refresh without a
+  journal source: `NeedsFull(NoPosition)`. Threshold setting changed: a journal refresh still runs; auto falls back with
+  `ThresholdChanged` and equals a fresh build.
+- A journal refresh cancelled after 3 listings returns `completed = false` and no scan id, totals verify, the next
+  journal refresh returns `NeedsFull(NoPosition)`, and auto then equals a fresh build.
+- Real lister and the real C: journal on a temp dir: after a new big file, a small file grown past the threshold, a
+  rename, a subdir moved to another parent, a deleted file and dir tree, a new subtree, and a new hard link, a journal
+  refresh equals a fresh build of the temp dir (directory times and access times masked), and the moved subdir's child
+  was not listed.
+
+### INDEX-JOURNAL-UNPRIVILEGED: The unprivileged journal read sees what the index needs
+**Applies to:** hoardini
+**Verification:** manual
+
+The journal refresh reads with `FSCTL_READ_UNPRIVILEGED_USN_JOURNAL`, without admin rights. For a change to a file the
+user cannot open, inside a directory the user can list, the read shall still return a record, so the journal refresh
+re-lists that directory. If the read skips such records, the gap shall be recorded here; a full refresh corrects it.
+
+**Verification (manual):**
+1. Elevated prompt: `mkdir C:\jtest`, `fsutil file createnew C:\jtest\locked.bin 2000000`, then
+   `icacls C:\jtest\locked.bin /inheritance:r /grant:r Administrators:F` (the user can list `C:\jtest` but not open the file).
+2. As the user: `hoardini index --db %TEMP%\h-j.db --volume C:\jtest --kind full`.
+3. Elevated: `fsutil file seteof C:\jtest\locked.bin 6000000`.
+4. As the user: `hoardini index --db %TEMP%\h-j.db --volume C:\jtest --kind journal`; the `done` line shows
+   `"kind":"journal"` and `records` ≥ 1.
+5. `hoardini --db %TEMP%\h-j.db top --files --under C:\jtest` shows `locked.bin` at about 6 MB (5.7 MB). If it still
+   shows 1.9 MB, the unprivileged read skipped the record: note it here.
+6. Elevated, to compare: `fsutil usn readjournal C: csv | findstr /i locked.bin` lists the records an admin read sees.
+7. Clean up: elevated `rmdir /s /q C:\jtest`; delete `%TEMP%\h-j.db*`.
 
 ### INDEX-ACTION-PATCH: Executed actions patch the index at once
 **Applies to:** hoardini
