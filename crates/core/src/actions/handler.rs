@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::Connection;
 
+use crate::destinations::rclone::Endpoint;
 use crate::policy::PolicyEnv;
 use crate::proposals::{Proposal, ProposalKind, StoredItem};
 use crate::vault::SecretStore;
@@ -23,6 +24,7 @@ pub(crate) struct JobCx<'a> {
     pub secrets: &'a dyn SecretStore,
     pub env: &'a PolicyEnv,
     pub hook: Option<CopyHook>,
+    pub rc: Option<Endpoint>,
 }
 
 pub(crate) struct ItemCx<'a> {

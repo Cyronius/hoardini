@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::state::{ApiError, ApiResult, AppState, blocking, parse};
-use crate::{providers, status, stream};
+use crate::{providers, rclone, status, stream};
 
 pub struct Entry {
     pub method: &'static str,
@@ -107,6 +107,12 @@ fn entries() -> Vec<Entry> {
         put_("/api/destinations/{id}", destination_update),
         delete_("/api/destinations/{id}", destination_delete),
         post_("/api/destinations/{id}/test", destination_test),
+        post_(
+            "/api/destinations/rclone/authorize",
+            rclone::authorize_remote,
+        ),
+        get_("/api/runtime/rclone", rclone::status),
+        post_("/api/runtime/rclone/install", rclone::install),
         get_("/api/search/providers", providers::search_list),
         put_("/api/search/providers/{kind}", providers::search_put),
         post_(

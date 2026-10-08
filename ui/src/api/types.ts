@@ -113,6 +113,8 @@ export type Destination = {
 };
 export type DestinationInput = { name: string; kind: Destination["kind"]; config: Record<string, unknown> };
 export type DestinationTest = { ok: boolean; free_bytes?: number; error?: string };
+export type RcloneRuntime = { installed: boolean; version: string; size: number; license_url: string };
+export type RcloneAuthorizeInput = { type: string; client_id_ref?: string; client_secret_ref?: string };
 
 export type SearchKind = "tavily" | "brave" | "exa" | "serper" | "searxng";
 export type SearchProviderView = {

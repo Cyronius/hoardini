@@ -1,3 +1,5 @@
+pub mod rclone;
+
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -112,6 +114,7 @@ fn validate(new: &NewDestination) -> anyhow::Result<serde_json::Value> {
             }
             config["path"] = serde_json::Value::String(p);
         }
+        "rclone" => rclone::validate(&mut config)?,
         _ => {}
     }
     Ok(config)
@@ -180,11 +183,18 @@ pub fn root_path(dest: &Destination) -> anyhow::Result<PathBuf> {
         "local" | "smb" => config_path(&dest.config)
             .map(PathBuf::from)
             .ok_or_else(|| anyhow::anyhow!("destination {} has no path", dest.name)),
-        _ => anyhow::bail!(
-            "{} destinations are not available until wave 3 (rclone)",
-            dest.kind
-        ),
+        _ => anyhow::bail!("{} destinations have no local folder path", dest.kind),
     }
+}
+
+// The folder an archive writes into when it lives on this machine's disks; None for cloud remotes.
+pub fn local_root(dest: &Destination) -> anyhow::Result<Option<PathBuf>> {
+    if dest.kind == "rclone" {
+        let cfg = rclone::parse_config(&dest.config)?;
+        return Ok((cfg.kind == "local" && !cfg.path.is_empty())
+            .then(|| PathBuf::from(cfg.path.replace('/', "\\"))));
+    }
+    root_path(dest).map(Some)
 }
 
 pub fn connect(dest: &Destination, secrets: &dyn SecretStore) -> anyhow::Result<PathBuf> {
@@ -238,10 +248,10 @@ fn check_writable(dir: &Path) -> anyhow::Result<()> {
 }
 
 pub fn test(dest: &Destination, secrets: &dyn SecretStore) -> DestinationTest {
+    if dest.kind == "rclone" {
+        return rclone::test(dest, secrets);
+    }
     let run = || -> anyhow::Result<i64> {
-        if dest.kind == "rclone" {
-            anyhow::bail!("rclone destinations are not available until wave 3");
-        }
         let root = connect(dest, secrets)?;
         check_writable(&root)?;
         Ok(crate::index::to_i64(free_bytes(&root)?))

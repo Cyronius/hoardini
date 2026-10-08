@@ -62,7 +62,7 @@ fn hash_file(path: &Path, c: Option<&mut Copier<'_>>) -> anyhow::Result<(u64, St
     Ok((total, h.finalize().to_hex().to_string()))
 }
 
-fn with_suffix(p: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn with_suffix(p: &Path, suffix: &str) -> PathBuf {
     let mut s = p.as_os_str().to_os_string();
     s.push(suffix);
     PathBuf::from(s)
@@ -144,13 +144,13 @@ pub(crate) fn copy_verified(src: &Path, dst: &Path, c: &mut Copier<'_>) -> anyho
     result
 }
 
-struct Tree {
-    dirs: Vec<String>,
-    files: Vec<String>,
-    links: usize,
+pub(crate) struct Tree {
+    pub dirs: Vec<String>,
+    pub files: Vec<String>,
+    pub links: usize,
 }
 
-fn list_tree(root: &Path) -> anyhow::Result<Tree> {
+pub(crate) fn list_tree(root: &Path) -> anyhow::Result<Tree> {
     let mut t = Tree {
         dirs: Vec::new(),
         files: Vec::new(),
@@ -187,7 +187,7 @@ fn list_tree(root: &Path) -> anyhow::Result<Tree> {
     Ok(t)
 }
 
-fn manifest_hash(entries: &[(String, u64, String)]) -> String {
+pub(crate) fn manifest_hash(entries: &[(String, u64, String)]) -> String {
     let mut h = blake3::Hasher::new();
     for (rel, size, hash) in entries {
         h.update(format!("{rel}\t{size}\t{hash}\n").as_bytes());
@@ -265,6 +265,9 @@ impl Handler for ArchiveHandler {
             .ok_or_else(|| anyhow::anyhow!("archive proposal has no destination"))?;
         let dest = destinations::get(job.conn, &dref.id)?
             .ok_or_else(|| anyhow::anyhow!("destination {} was removed", dref.name))?;
+        if dest.kind == "rclone" {
+            return super::rclone::begin(job, &dest);
+        }
         let root = destinations::connect(&dest, job.secrets)?;
         if !root.is_dir() {
             anyhow::bail!("destination folder {} not found", root.display());
@@ -318,21 +321,52 @@ impl Runner for ArchiveRunner {
             ItemKind::Link => anyhow::bail!("a link holds no data; delete it instead"),
         };
         cx.check_cancel()?;
-        let category = self
-            .env
-            .catalog()
-            .lookup_match(&item.path)
-            .map(|m| m.category);
-        let stub =
-            (self.stubs && wants_stub(category)).then(|| format!("{}{STUB_SUFFIX}", item.path));
         let dest_uri = target.to_string_lossy().into_owned();
+        let to = Committed {
+            dest_id: &self.dest_id,
+            dest_uri: &dest_uri,
+            size,
+            hash: &hash,
+            links,
+        };
+        commit_archive(cx, &to, self.stubs, &self.env)
+    }
+}
+
+pub(crate) struct Committed<'a> {
+    pub dest_id: &'a str,
+    pub dest_uri: &'a str,
+    pub size: u64,
+    pub hash: &'a str,
+    pub links: usize,
+}
+
+// The journal learns where the copy is before the source goes away.
+pub(crate) fn commit_archive(
+    cx: &mut ItemCx<'_>,
+    to: &Committed<'_>,
+    stubs: bool,
+    env: &PolicyEnv,
+) -> anyhow::Result<Outcome> {
+    {
+        let item = cx.item;
+        let src = PathBuf::from(&item.path);
+        let Committed {
+            dest_id,
+            dest_uri,
+            size,
+            hash,
+            links,
+        } = *to;
+        let category = env.catalog().lookup_match(&item.path).map(|m| m.category);
+        let stub = (stubs && wants_stub(category)).then(|| format!("{}{STUB_SUFFIX}", item.path));
         cx.conn.execute(
             "INSERT INTO archive_entry(action_id, original_path, destination_id, dest_uri, kind, size, blake3, stub_path, archived_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 cx.action_id,
                 item.path,
-                self.dest_id,
+                dest_id,
                 dest_uri,
                 item.kind.to_db(),
                 crate::index::to_i64(size),
@@ -345,11 +379,11 @@ impl Runner for ArchiveRunner {
         let undo = serde_json::json!({
             "kind": "restore",
             "archive_entry_id": entry_id,
-            "destination_id": self.dest_id,
+            "destination_id": dest_id,
             "dest_uri": dest_uri,
             "blake3": hash,
         });
-        // The journal knows where the copy is before the source goes away.
+
         journal::set_undo(cx.conn, cx.action_id, &undo)?;
         if let Err(e) = remove_item(&src, item.kind) {
             if item.kind == ItemKind::Dir && src.exists() {
@@ -418,7 +452,7 @@ pub(crate) fn load_entry(conn: &Connection, id: i64) -> anyhow::Result<Option<En
         .optional()?)
 }
 
-fn remove_tmp(p: &Path) {
+pub(crate) fn remove_tmp(p: &Path) {
     if let Ok(md) = std::fs::symlink_metadata(p) {
         let _ = if md.is_dir() {
             std::fs::remove_dir_all(p)
@@ -464,6 +498,10 @@ pub(crate) fn restore_entry(
         remove_tmp(&tmp);
     }
     result?;
+    finish_restore(conn, e)
+}
+
+pub(crate) fn finish_restore(conn: &Connection, e: &EntryRow) -> anyhow::Result<()> {
     if let Some(stub) = &e.stub_path
         && std::fs::read_to_string(stub).is_ok_and(|t| t.starts_with(STUB_MARKER))
     {

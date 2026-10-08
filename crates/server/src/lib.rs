@@ -20,6 +20,7 @@ use serde_json::json;
 use tokio::sync::watch;
 
 mod providers;
+mod rclone;
 mod routes;
 mod state;
 mod status;
