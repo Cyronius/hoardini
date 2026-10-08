@@ -1,0 +1,98 @@
+[[entry]]
+id = "docker-vhdx"
+name = "Docker Desktop WSL disk"
+app = "Docker Desktop"
+category = "vm-disk"
+patterns = ['%LOCALAPPDATA%\Docker\wsl\**\*.vhdx']
+regenerable = false
+verdict_hint = "review"
+cap = "review"
+notes = "Virtual disk holding all Docker images, containers and volumes (ext4.vhdx / docker_data.vhdx). Deleting it wipes them all. It grows but does not shrink by itself: prune with `docker system prune`, then compact with `wsl --manage <distro> --resize` or Optimize-VHD."
+
+[[entry]]
+id = "wsl-distro-vhdx"
+name = "WSL distribution disk"
+app = "WSL"
+category = "vm-disk"
+patterns = ['%LOCALAPPDATA%\Packages\*\LocalState\ext4.vhdx', '%LOCALAPPDATA%\wsl\*\ext4.vhdx']
+regenerable = false
+verdict_hint = "review"
+cap = "review"
+safe_unit = "a whole distribution (`wsl --unregister` deletes it permanently)"
+notes = "The Linux filesystem of one WSL distro: home directories, packages, projects. Not regenerable. Free space inside the distro, then compact the disk with `wsl --shutdown` and Optimize-VHD."
+
+[[entry]]
+id = "vhdx-generic"
+name = "Virtual hard disk"
+app = "Hyper-V / VM"
+category = "vm-disk"
+patterns = ['**\*.vhdx', '**\*.vhd', '**\*.vmdk', '**\*.vdi', '**\*.qcow2']
+regenerable = false
+verdict_hint = "review"
+cap = "review"
+notes = "A virtual machine disk. Contains a full guest OS and its data; only the owner VM knows if it matters. Check which VM uses it before any action."
+
+[[entry]]
+id = "vm-folders"
+name = "VM folders"
+app = "VirtualBox / VMware"
+category = "vm-disk"
+patterns = ['~\VirtualBox VMs', '~\Documents\Virtual Machines', '%ProgramData%\Microsoft\Windows\Virtual Hard Disks']
+regenerable = false
+verdict_hint = "review"
+cap = "review"
+safe_unit = "one VM folder"
+notes = "Virtual machine definitions and disks."
+
+[[entry]]
+id = "steam-common"
+name = "Steam installed games"
+app = "Steam"
+category = "game-library"
+patterns = ['**\steamapps\common']
+regenerable = true
+verdict_hint = "redownload"
+safe_unit = "one game folder (uninstall via Steam so the manifest is removed)"
+notes = "Game installs under steamapps\\common, one folder per game. Re-downloadable through Steam; local save games usually live elsewhere (Documents, AppData, Steam cloud). Deleting a folder by hand leaves a stale appmanifest, so prefer Steam uninstall."
+
+[[entry]]
+id = "steam-workshop"
+name = "Steam Workshop content"
+app = "Steam"
+category = "game-library"
+patterns = ['**\steamapps\workshop']
+regenerable = true
+verdict_hint = "redownload"
+notes = "Subscribed Workshop mods. Steam re-downloads them while the subscription lasts."
+
+[[entry]]
+id = "steam-library"
+name = "Steam library"
+app = "Steam"
+category = "game-library"
+patterns = ['**\steamapps', '%ProgramFiles(x86)%\Steam', '**\SteamLibrary']
+regenerable = true
+verdict_hint = "redownload"
+notes = "Steam client and game libraries. userdata\\ under the Steam folder holds local configs and some saves."
+
+[[entry]]
+id = "epic-games"
+name = "Epic Games library"
+app = "Epic Games Launcher"
+category = "game-library"
+patterns = ['%ProgramFiles%\Epic Games', '%ProgramData%\Epic', '?:\Epic Games']
+regenerable = true
+verdict_hint = "redownload"
+safe_unit = "one game folder"
+notes = "Epic-installed games and launcher data. Re-downloadable; uninstall via the launcher."
+
+[[entry]]
+id = "other-game-libraries"
+name = "Other game libraries"
+app = "game launchers"
+category = "game-library"
+patterns = ['?:\XboxGames', '?:\GOG Games', '%ProgramFiles%\Ubisoft', '%ProgramFiles(x86)%\Ubisoft', '%ProgramFiles%\EA Games', '%ProgramFiles%\Battle.net']
+regenerable = true
+verdict_hint = "redownload"
+safe_unit = "one game folder"
+notes = "Games installed via Xbox, GOG, Ubisoft Connect, EA, Battle.net. Re-downloadable; uninstall via the launcher."
