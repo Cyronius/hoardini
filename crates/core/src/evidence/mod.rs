@@ -1,8 +1,13 @@
+pub mod cache;
 pub mod gguf;
 pub mod identify;
 pub mod inspect;
+pub mod inuse;
+pub mod owner;
 pub mod pe;
 pub mod safetensors;
+pub mod summary;
+pub mod usage;
 
 use serde::{Deserialize, Serialize};
 
