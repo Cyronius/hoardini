@@ -302,9 +302,10 @@ pub fn top_files(conn: &Connection, q: &TopFilesQuery) -> Result<Ranked<FileItem
         Scope::All => {}
         Scope::Volume(v) => filters.push(format!("f.volume_id = {v}")),
         Scope::Subtree(id) => {
+            // `+n.kind` keeps SQLite on the parent_id index; the kind index made each step scan every dir.
             prefix = format!(
                 "WITH RECURSIVE d(id) AS (SELECT {id} UNION ALL \
-                 SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE n.kind = 0) "
+                 SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE +n.kind = 0) "
             );
             filters.push("f.parent_id IN (SELECT id FROM d)".into());
         }
@@ -395,7 +396,7 @@ pub fn top_dirs(
     let cte = format!(
         "WITH RECURSIVE d(id, depth) AS ({seed} UNION ALL \
          SELECT n.id, d.depth + 1 FROM node n JOIN d ON n.parent_id = d.id \
-         WHERE n.kind = 0 AND d.depth < {depth}) "
+         WHERE +n.kind = 0 AND d.depth < {depth}) "
     );
     let (total, depth1_bytes): (i64, i64) = conn.query_row(
         &format!(

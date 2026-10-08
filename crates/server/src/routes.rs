@@ -346,7 +346,7 @@ async fn proposal_decline(State(s): State<AppState>, Path(id): Path<String>) -> 
 }
 
 async fn jobs_list(State(s): State<AppState>) -> ApiResult {
-    let jobs: Vec<Job> = s.exec.jobs();
+    let jobs: Vec<Job> = s.exec.jobs().into_iter().map(status::display_job).collect();
     Ok(Json(json!(jobs)))
 }
 
@@ -607,7 +607,7 @@ async fn archive_list(State(s): State<AppState>, Query(q): Query<QueryQ>) -> Api
                     "id": r.get::<_, i64>(0)?,
                     "original_path": redact(&r.get::<_, String>(1)?),
                     "destination_id": r.get::<_, String>(2)?,
-                    "dest_uri": r.get::<_, String>(3)?,
+                    "dest_uri": redact(&r.get::<_, String>(3)?),
                     "size": r.get::<_, i64>(4)?,
                     "archived_ms": r.get::<_, i64>(5)?,
                     "restored_ms": r.get::<_, Option<i64>>(6)?,

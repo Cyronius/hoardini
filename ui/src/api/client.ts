@@ -103,6 +103,8 @@ export const routes = {
   deleteDestination: (id: string) => del(`/api/destinations/${enc(id)}`),
   testDestination: (id: string) => api<T.DestinationTest>(`/api/destinations/${enc(id)}/test`, { body: {} }),
   pickFolder: () => api<{ path: string | null }>("/api/dialog/pick-folder", { body: {} }),
+  archive: (q?: string) => api<T.ArchiveEntry[]>(`/api/archive${q ? `?q=${enc(q)}` : ""}`),
+  restoreArchive: (id: number) => api<{ job_id: string }>(`/api/archive/${id}/restore`, { body: {} }),
 
   searchProviders: () => api<T.SearchProviderView[]>("/api/search/providers"),
   putSearchProvider: (kind: T.SearchKind, p: T.SearchProviderInput) => put<{ ok: true }>(`/api/search/providers/${kind}`, p),

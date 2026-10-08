@@ -4,6 +4,7 @@ import { useStore } from "../store";
 
 let runId: string | null = null;
 export const currentRunId = () => runId;
+let runCalls: string[] = [];
 
 function handle(data: string): void {
   let ev: { type?: string; [k: string]: unknown };
@@ -16,8 +17,14 @@ function handle(data: string): void {
   switch (ev.type) {
     case "RUN_STARTED":
       runId = String(ev.runId ?? "") || null;
+      runCalls = [];
+      useStore.setState({ limitHit: false });
+      break;
+    case "TEXT_MESSAGE_START":
+      if (runCalls.length) s.markCallsBefore(String(ev.messageId), runCalls);
       break;
     case "TOOL_CALL_START":
+      runCalls = [...runCalls, String(ev.toolCallId)];
       s.markToolStart(String(ev.toolCallId));
       break;
     case "TOOL_CALL_RESULT":
@@ -31,6 +38,7 @@ function handle(data: string): void {
       } else if (ev.name === "run_stats" && runId) {
         useStore.setState((st) => ({
           runStats: { ...st.runStats, [runId!]: { elapsed_ms: Number(v.elapsed_ms), steps: Number(v.steps) } },
+          limitHit: v.limit_reached === true,
         }));
       }
       break;

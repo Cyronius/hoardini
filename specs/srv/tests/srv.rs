@@ -494,6 +494,86 @@ async fn status_stream_sends_an_initial_status_frame() {
     let _ = f.h.shutdown.send(());
 }
 
+// An OpenAI-compatible stream that sends one text chunk and then hangs.
+async fn stalled_llm() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 65536];
+                let _ = s.read(&mut buf).await;
+                let chunk =
+                    json!({"choices": [{"index": 0, "delta": {"content": "Thinking about"}}]});
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+                let _ = s
+                    .write_all(format!("{head}data: {chunk}\n\n").as_bytes())
+                    .await;
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            });
+        }
+    });
+    format!("http://{addr}/v1")
+}
+
+// Traces: SRV-RUN-CANCEL
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_closes_the_open_message_and_ends_with_run_finished() {
+    let f = Fixture::new().await;
+    let base = stalled_llm().await;
+    let (_, p) = f
+        .call(
+            "POST",
+            "/api/providers",
+            Some(json!({"name": "stall", "base_url": base, "model": "m"})),
+        )
+        .await;
+    let id = p["id"].as_str().unwrap();
+    f.call("POST", &format!("/api/providers/{id}/activate"), None)
+        .await;
+    let mut resp = f
+        .authed("POST", "/api/agent/run")
+        .json(&json!({"threadId": "t-cancel", "runId": "r-cancel", "messages": [{"id": "u1", "role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    let mut text = String::new();
+    let mut cancelled = false;
+    while let Ok(Some(chunk)) = tokio::time::timeout(Duration::from_secs(10), resp.chunk())
+        .await
+        .unwrap()
+    {
+        text.push_str(&String::from_utf8_lossy(&chunk));
+        if !cancelled && text.contains("TEXT_MESSAGE_CONTENT") {
+            let (_, st) = f.call("GET", "/api/status", None).await;
+            assert_eq!(st["running_runs"], 1);
+            f.call("POST", "/api/agent/runs/r-cancel/cancel", None)
+                .await;
+            cancelled = true;
+        }
+    }
+    let types: Vec<String> = text
+        .split("\n\n")
+        .filter_map(|f| f.strip_prefix("data: "))
+        .map(|d| {
+            serde_json::from_str::<Value>(d).unwrap()["type"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert!(cancelled);
+    assert_eq!(
+        types[types.len() - 2..],
+        ["TEXT_MESSAGE_END", "RUN_FINISHED"],
+        "{types:?}"
+    );
+    let (_, st) = f.call("GET", "/api/status", None).await;
+    assert_eq!(st["running_runs"], 0);
+    let _ = f.h.shutdown.send(());
+}
+
 fn journal_fake_indexer(dir: &Path) -> PathBuf {
     let log = dir.join("kinds.txt");
     let script = dir.join("journal-indexer.cmd");

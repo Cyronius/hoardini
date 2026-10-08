@@ -2,10 +2,19 @@ use std::path::Path;
 
 use axum::Json;
 use axum::extract::State;
+use hoardini_core::actions::Job;
+use hoardini_core::paths::redact;
 use serde_json::{Value, json};
 
 use crate::state::{ApiResult, AppState};
 use crate::supervisor::indexed_volumes;
+
+// Paths shown to the UI use `~` for the profile, like proposals do.
+pub fn display_job(mut job: Job) -> Job {
+    job.progress.current = job.progress.current.as_deref().map(redact);
+    job.error = job.error.as_deref().map(redact);
+    job
+}
 
 fn build_sync(s: &AppState) -> Value {
     let mut volumes: Vec<Value> = Vec::new();
@@ -27,7 +36,7 @@ fn build_sync(s: &AppState) -> Value {
     json!({
         "volumes": volumes,
         "index": s.supervisor.snapshot(),
-        "jobs": s.exec.jobs(),
+        "jobs": s.exec.jobs().into_iter().map(display_job).collect::<Vec<_>>(),
         "vanished_total_bytes": s.exec.vanished_total(),
         "active_provider": active,
         "running_runs": running,

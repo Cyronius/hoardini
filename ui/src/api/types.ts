@@ -113,6 +113,15 @@ export type Destination = {
 };
 export type DestinationInput = { name: string; kind: Destination["kind"]; config: Record<string, unknown> };
 export type DestinationTest = { ok: boolean; free_bytes?: number; error?: string };
+export type ArchiveEntry = {
+  id: number;
+  original_path: string;
+  destination_id: string;
+  dest_uri: string;
+  size: number;
+  archived_ms: number;
+  restored_ms: number | null;
+};
 
 export type SearchKind = "tavily" | "brave" | "exa" | "serper" | "searxng";
 export type SearchProviderView = {

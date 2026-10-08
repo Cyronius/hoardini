@@ -314,7 +314,7 @@ pub fn in_use_reason(conn: &Connection, path: &str, kind: ItemKind) -> Option<St
 
 fn dir_has_placeholder(conn: &Connection, node_id: i64) -> anyhow::Result<bool> {
     Ok(conn.query_row(
-        "WITH RECURSIVE d(id) AS (SELECT ?1 UNION ALL SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE n.kind = 0) \
+        "WITH RECURSIVE d(id) AS (SELECT ?1 UNION ALL SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE +n.kind = 0) \
          SELECT EXISTS(SELECT 1 FROM node f WHERE f.parent_id IN (SELECT id FROM d) AND (f.flags & ?2) != 0)",
         rusqlite::params![node_id, index::FLAG_PLACEHOLDER],
         |r| r.get(0),

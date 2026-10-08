@@ -78,6 +78,8 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   const [input, setInput] = useState("");
   const [lastTurnMs, setLastTurnMs] = useState<number | null>(null);
   const sendingRef = useRef(false);
+  const askedRef = useRef<Message | null>(null);
+  const stoppedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const stuckRef = useRef(true);
@@ -103,10 +105,12 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   const sendText = async (text: string) => {
     if (isStreaming || sendingRef.current) return;
     sendingRef.current = true;
+    stoppedRef.current = false;
     setLastTurnMs(null);
     const startedAt = performance.now();
     try {
       const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: text };
+      askedRef.current = userMsg;
       stuckRef.current = true;
       addMessage(userMsg);
       useActivity.getState().clear();
@@ -117,7 +121,8 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
         agentSubscriber,
         getForwardedProps(),
       );
-      setLastTurnMs(performance.now() - startedAt);
+      // A stopped run ends with the question unanswered on purpose; that is not "no output".
+      if (!stoppedRef.current) setLastTurnMs(performance.now() - startedAt);
     } catch (err) {
       // A run that dies before the stream opens rejects instead of emitting RUN_ERROR.
       if (!isAbortError(err)) {
@@ -137,7 +142,11 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
 
   const stop = () => {
     const id = currentRunId();
+    const asked = sendingRef.current ? askedRef.current : null;
+    stoppedRef.current = true;
     terminateRun();
+    // lm-ag-ui drops the run's question on terminate, but the server already stored it; keep the view in step.
+    if (asked) addMessage(asked);
     if (id) void routes.cancelRun(id).catch(() => {});
   };
 
@@ -157,9 +166,31 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   const turnEnd = classifySettledTurn(messages);
   const endedOnToolCalls = !isStreaming && turnEnd === "tool-calls" && !waitingOnCard;
   const producedNothing = !isStreaming && lastTurnMs != null && turnEnd === "no-output";
+  const limitHit = useStore((s) => s.limitHit) && !isStreaming;
   const [dismissedId, setDismissedId] = useState<string | null>(null);
-  const showContinue = (endedOnToolCalls || producedNothing) && dismissedId !== lastNonTool?.id;
+  const showContinue = (endedOnToolCalls || producedNothing || limitHit) && dismissedId !== lastNonTool?.id;
   const lastUserText = lastNonTool?.role === "user" && typeof lastNonTool.content === "string" ? lastNonTool.content : null;
+
+  const callsBefore = useStore((s) => s.callsBefore);
+  const renderCall = (tc: ToolCallLike) => {
+    const name = tc.function?.name ?? getToolNameFromCallId(tc.id);
+    const tool = name ? toolDefs[name] : undefined;
+    let args: Record<string, unknown> = {};
+    try {
+      args = JSON.parse(tc.function?.arguments || "{}");
+    } catch {
+      // partial args while streaming
+    }
+    const resultMsg = messages.find((x) => x.role === "tool" && (x as unknown as { toolCallId?: string }).toolCallId === tc.id);
+    const result = typeof resultMsg?.content === "string" ? resultMsg.content : "";
+    return (
+      <div key={tc.id}>
+        {tool?.renderer
+          ? ((tool.renderer(args, result, () => {}, () => undefined, tool.configJson) as unknown as ReactNode) ?? null)
+          : name && <ToolChip id={tc.id} name={name} args={args} result={result} />}
+      </div>
+    );
+  };
 
   // Server ids are unique, but a restored or replayed thread must not crash React on a repeat.
   const rendered = useMemo(() => {
@@ -179,32 +210,16 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
           {rendered.map(({ m, key }) => {
             const toolCalls = (m as unknown as { toolCalls?: ToolCallLike[] }).toolCalls;
             if (m.role === "assistant" && toolCalls?.length) {
+              const before = callsBefore[m.id] ?? [];
               return (
                 <div key={key} className="fade-up">
+                  {toolCalls.filter((tc) => before.includes(tc.id)).map(renderCall)}
                   {typeof m.content === "string" && m.content && (
                     <div className="break-words leading-relaxed">
                       <Markdown text={m.content} />
                     </div>
                   )}
-                  {toolCalls.map((tc) => {
-                    const name = tc.function?.name ?? getToolNameFromCallId(tc.id);
-                    const tool = name ? toolDefs[name] : undefined;
-                    let args: Record<string, unknown> = {};
-                    try {
-                      args = JSON.parse(tc.function?.arguments || "{}");
-                    } catch {
-                      // partial args while streaming
-                    }
-                    const resultMsg = messages.find((x) => x.role === "tool" && (x as unknown as { toolCallId?: string }).toolCallId === tc.id);
-                    const result = typeof resultMsg?.content === "string" ? resultMsg.content : "";
-                    return (
-                      <div key={tc.id}>
-                        {tool?.renderer
-                          ? ((tool.renderer(args, result, () => {}, () => undefined, tool.configJson) as unknown as ReactNode) ?? null)
-                          : name && <ToolChip id={tc.id} name={name} args={args} result={result} />}
-                      </div>
-                    );
-                  })}
+                  {toolCalls.filter((tc) => !before.includes(tc.id)).map(renderCall)}
                 </div>
               );
             }
@@ -270,7 +285,9 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
             >
               {producedNothing
                 ? "The model replied with no content. Check the provider's base URL and that its server is reachable (Settings, Providers)."
-                : `Hoardini stopped without a final answer. It may have hit the tool call limit (${limits.maxSteps}).`}
+                : limitHit
+                  ? `Hoardini used its ${limits.maxSteps} tool steps for this turn before finishing.`
+                  : `Hoardini stopped without a final answer. It may have hit the tool call limit (${limits.maxSteps}).`}
             </Prompt>
           )}
         </div>

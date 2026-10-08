@@ -111,3 +111,13 @@ Aborting the `POST /api/agent/run` request, `POST /api/agent/runs/{id}/cancel`, 
 2. `GET /api/status` shows `running_runs: 1`; press Ctrl+C in curl.
 3. Within a second `running_runs` is 0 and the model server shows the request cancelled.
 4. Repeat, ending with `POST /api/agent/runs/{runId}/cancel`: the stream ends with `RUN_FINISHED`.
+5. In the UI, ask something that streams for a while and press Stop: the stream closes at once, the question stays on screen (it is stored in the thread), `running_runs` returns to 0, the model server logs a client disconnect, and a new question in the same chat answers normally. (2026-10-08, scripted mock model: all as described.)
+
+### SRV-RUN-CANCEL: A cancelled run ends with a valid event sequence
+**Applies to:** hoardini-server
+**Verification:** test
+
+`POST /api/agent/runs/{runId}/cancel` shall end that run's stream with `RUN_FINISHED`, after closing whatever the aborted agent task left open (`TEXT_MESSAGE_END` for an open text message, the thinking end events, `TOOL_CALL_END` for an open call), so a client that checks AG-UI ordering accepts it. `running_runs` drops back.
+
+**Acceptance criteria:**
+- Against a model that streams one text chunk and then stalls: `running_runs` is 1 after the first `TEXT_MESSAGE_CONTENT`; after the cancel the stream ends with `TEXT_MESSAGE_END`, `RUN_FINISHED`, and `running_runs` is 0.
