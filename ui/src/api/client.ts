@@ -102,6 +102,9 @@ export const routes = {
   updateDestination: (id: string, d: T.DestinationInput) => put<T.Destination>(`/api/destinations/${enc(id)}`, d),
   deleteDestination: (id: string) => del(`/api/destinations/${enc(id)}`),
   testDestination: (id: string) => api<T.DestinationTest>(`/api/destinations/${enc(id)}/test`, { body: {} }),
+  rcloneRuntime: () => api<T.RcloneRuntime>("/api/runtime/rclone"),
+  installRclone: () => api<T.Job>("/api/runtime/rclone/install", { body: {} }),
+  authorizeRclone: (b: T.RcloneAuthorizeInput) => api<{ token_ref: string }>("/api/destinations/rclone/authorize", { body: b }),
   pickFolder: () => api<{ path: string | null }>("/api/dialog/pick-folder", { body: {} }),
 
   searchProviders: () => api<T.SearchProviderView[]>("/api/search/providers"),

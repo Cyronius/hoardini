@@ -197,8 +197,8 @@ pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result
         let dest = destinations::get(&conn, id)?.ok_or_else(|| {
             anyhow::anyhow!("unknown destination {id}; call destinations() to list registered ones")
         })?;
-        let root = destinations::root_path(&dest)?;
-        dest_root = Some(crate::index::normalize_path(&root.to_string_lossy()));
+        dest_root = destinations::local_root(&dest)?
+            .map(|root| crate::index::normalize_path(&root.to_string_lossy()));
     }
 
     let mut dropped: Vec<DroppedItem> = Vec::new();

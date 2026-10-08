@@ -3,7 +3,9 @@ mod compress;
 mod dedupe;
 mod delete;
 mod handler;
+mod install;
 mod journal;
+mod rclone;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -15,6 +17,7 @@ use parking_lot::Mutex;
 use rusqlite::{Connection, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
+use crate::destinations::rclone::Endpoint;
 use crate::index::{self, WinLister};
 use crate::policy::{self, PolicyEnv};
 use crate::proposals::{self, StoredItem};
@@ -76,6 +79,7 @@ struct Shared {
     // Jobs run one at a time; a second approval waits as "queued".
     run_lock: Mutex<()>,
     hook: Mutex<Option<CopyHook>>,
+    rclone: Mutex<Option<Endpoint>>,
 }
 
 // Process-wide so a second Executor's startup recovery never fails a job that is still running here.
@@ -234,6 +238,7 @@ impl Executor {
                 live: Mutex::new(HashMap::new()),
                 run_lock: Mutex::new(()),
                 hook: Mutex::new(None),
+                rclone: Mutex::new(None),
             }),
         }
     }
@@ -251,6 +256,12 @@ impl Executor {
     // Fault injection for ACT-ARCHIVE-VERIFY: runs on each finished copy just before it is verified.
     pub fn set_copy_hook(&self, hook: Option<CopyHook>) {
         *self.shared.hook.lock() = hook;
+    }
+
+    #[doc(hidden)]
+    // Points rclone work at a fake rc server instead of launching the daemon.
+    pub fn set_rclone_endpoint(&self, ep: Option<Endpoint>) {
+        *self.shared.rclone.lock() = ep;
     }
 
     // The only entry point that changes the filesystem: revalidates, then starts a job.
@@ -410,10 +421,15 @@ impl Executor {
                 entry.original_path
             );
         }
-        if let Some(dest) = crate::destinations::get(&conn, &entry.destination_id)? {
+        let remote = entry
+            .dest_uri
+            .starts_with(crate::destinations::rclone::URI_PREFIX);
+        if let Some(dest) = crate::destinations::get(&conn, &entry.destination_id)?
+            && !remote
+        {
             crate::destinations::connect(&dest, &*self.secrets)?;
         }
-        if !Path::new(&entry.dest_uri).exists() {
+        if !remote && !Path::new(&entry.dest_uri).exists() {
             anyhow::bail!("the archived copy at {} is not reachable", entry.dest_uri);
         }
         let mut job = new_job("restore", None);
@@ -588,6 +604,7 @@ fn run_items(
         secrets: &*ctx.secrets,
         env,
         hook,
+        rc: ctx.shared.rclone.lock().clone(),
     };
     let mut runner = match handler.begin(&jcx) {
         Ok(r) => r,
@@ -747,7 +764,15 @@ fn run_restore_job(
                 progress: &mut on_bytes,
                 hook: None,
             };
-            archive::restore_entry(&conn, &entry, &mut copier)
+            if entry
+                .dest_uri
+                .starts_with(crate::destinations::rclone::URI_PREFIX)
+            {
+                let rc = ctx.shared.rclone.lock().clone();
+                rclone::restore(&conn, &entry, &mut copier, &*ctx.secrets, rc.as_ref())
+            } else {
+                archive::restore_entry(&conn, &entry, &mut copier)
+            }
         };
         match res {
             Ok(()) => {

@@ -4,6 +4,7 @@ import type { Destination, DestinationInput, DestinationTest } from "../api/type
 import { humanBytes } from "../format";
 import { EditIcon, FolderIcon, PlusIcon, TrashIcon } from "../components/icons";
 import { IconButton } from "../components/IconButton";
+import { blankRc, RcloneFields, rcFromConfig, rcloneConfig, rcValid, type RcDraft } from "./RcloneForm";
 import { btnDanger, btnPrimary, btnSecondary, ErrorLine, errMsg, field, Field } from "./ui";
 
 type Draft = {
@@ -16,9 +17,10 @@ type Draft = {
   password: string;
   remote: string;
   remotePath: string;
+  rc: RcDraft;
 };
 
-const blank = (): Draft => ({ name: "", kind: "local", path: "", unc: "", user: "", password: "", remote: "", remotePath: "" });
+const blank = (): Draft => ({ name: "", kind: "local", path: "", unc: "", user: "", password: "", remote: "", remotePath: "", rc: blankRc() });
 
 function toDraft(d: Destination): Draft {
   const c = d.config as Record<string, string | undefined>;
@@ -32,6 +34,7 @@ function toDraft(d: Destination): Draft {
     password: "",
     remote: c.remote ?? "",
     remotePath: c.path ?? "",
+    rc: d.kind === "rclone" ? rcFromConfig(d.config) : blankRc(),
   };
 }
 
@@ -48,7 +51,7 @@ function DestForm({ draft, setDraft, onSave, onCancel, error }: { draft: Draft; 
       setPickErr(errMsg(e).includes("501") || /not implemented/i.test(errMsg(e)) ? "No folder dialog in headless mode; type the path." : errMsg(e));
     }
   };
-  const valid = draft.name.trim() && (draft.kind === "local" ? draft.path.trim() : draft.kind === "smb" ? draft.unc.trim().startsWith("\\\\") : draft.remote.trim());
+  const valid = draft.name.trim() && (draft.kind === "local" ? draft.path.trim() : draft.kind === "smb" ? draft.unc.trim().startsWith("\\\\") : draft.remote.trim() && rcValid(draft.rc));
   return (
     <div className="space-y-2 rounded-xl border border-brass/40 bg-ink-850 p-3">
       <div className="grid grid-cols-2 gap-2">
@@ -90,19 +93,15 @@ function DestForm({ draft, setDraft, onSave, onCancel, error }: { draft: Draft; 
         </>
       )}
       {draft.kind === "rclone" && (
-        <>
-          <p className="rounded-lg bg-ink-800 px-2.5 py-1.5 text-[length:var(--fs-sm)] text-muted">
-            Cloud transfers use rclone, which is not wired up yet. You can save the remote name now.
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Remote">
-              <input className={field} value={draft.remote} placeholder="gdrive" onChange={(e) => setDraft({ ...draft, remote: e.target.value })} />
-            </Field>
-            <Field label="Path">
-              <input className={field} value={draft.remotePath} placeholder="hoardini" onChange={(e) => setDraft({ ...draft, remotePath: e.target.value })} />
-            </Field>
-          </div>
-        </>
+        <RcloneFields
+          rc={draft.rc}
+          setRc={(rc) => setDraft({ ...draft, rc })}
+          remote={draft.remote}
+          setRemote={(remote) => setDraft({ ...draft, remote })}
+          path={draft.remotePath}
+          setPath={(remotePath) => setDraft({ ...draft, remotePath })}
+          slug={slug(draft.remote || draft.name)}
+        />
       )}
       <ErrorLine error={error} />
       <div className="flex justify-end gap-2">
@@ -137,7 +136,7 @@ export function DestinationsTab() {
           ? { path: draft.path.trim() }
           : draft.kind === "smb"
             ? { unc: draft.unc.trim(), user: draft.user.trim() || undefined }
-            : { remote: draft.remote.trim(), path: draft.remotePath.trim() };
+            : await rcloneConfig(draft.rc, slug(draft.remote || draft.name), draft.remotePath.trim(), slug(draft.remote || draft.name));
       if (draft.kind === "smb" && draft.password) {
         const ref = `secret://destination/${slug(draft.name)}/password`;
         await routes.putSecret(ref, draft.password);
@@ -185,7 +184,7 @@ export function DestinationsTab() {
             );
           }
           const t = tests[d.id];
-          const where = (d.config.path ?? d.config.unc ?? d.config.remote ?? "") as string;
+          const where = (d.kind === "rclone" ? `${d.config.remote}:${d.config.path ?? ""}` : (d.config.path ?? d.config.unc ?? d.config.remote ?? "")) as string;
           return (
             <li key={d.id} className="rounded-xl border border-line-soft bg-ink-850 p-2.5">
               <div className="flex items-center gap-2">

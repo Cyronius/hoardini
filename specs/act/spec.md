@@ -38,9 +38,20 @@ SMB UNC path), compress, dedupe.
 - **Restore**: `Executor::restore(archive_entry_id)` copies the archive back to a sibling temp name, checks it against
   the recorded BLAKE3, renames it to the original path, removes the stub, sets `restored_ms`, and keeps the archived copy.
 - **Destinations**: `local` (`config.path`), `smb` (`config.path` = UNC, optional `username`, password from the vault
-  at `config.password` or `secret://destination/<id>/password`, else the current Windows session), `rclone` (wave 3).
-  Config values under keys that look secret must be `secret://` refs. `destinations::test` checks reachability,
-  writability, and free space.
+  at `config.password` or `secret://destination/<id>/password`, else the current Windows session), `rclone`
+  (`config` = `{remote, type, path, params}`; see below). Config values under keys that look secret must be
+  `secret://` refs. `destinations::test` checks reachability, writability, and free space.
+- **rclone**: one pinned `rclone.exe` (`core::runtime::RCLONE`, downloaded on demand, SHA-256 checked before every
+  launch, never from PATH) runs as `rclone rcd` on `127.0.0.1:<random port>` with random rc credentials and an
+  encrypted `rclone.conf` in the data dir whose password lives in the vault (`secret://rclone/config-pass`, child
+  environment only). The daemon starts on first use, restarts if it dies, stops after 10 idle minutes, and dies with the
+  app (job object). Remotes are created through `config/create` the first time a destination is used, with vault refs
+  in `config.params` resolved at that moment; an existing remote is left alone so refreshed OAuth tokens survive.
+  Google Drive requires the user's own client ID and secret and is pinned to scope `drive.file`. Archive copies with
+  `_async` rc jobs (`_group` per item), reports bytes from `core/stats`, and cancels with `job/stop`; the copy lands at
+  `<path>/<yyyy-mm-dd>/<original path without the drive colon>` and `archive_entry.dest_uri` is
+  `rclone:<remote>:<path>`. Server routes: `GET /api/runtime/rclone`, `POST /api/runtime/rclone/install` (a job),
+  `POST /api/destinations/rclone/authorize`.
 
 ### ACT-ARCHIVE-VERIFY: Archive deletes the source only after the copy verifies
 **Applies to:** hoardini
@@ -137,6 +148,92 @@ shall never be modified or deleted, and a proposal that lists the kept copy for 
 `hardlink` shall leave the extra's path readable with the kept content; `delete` shall remove only verified extras.
 
 **Acceptance criteria:**
-- Keep `a\keep.bin`, extras `b	win.bin` and `c\lookalike.bin` (the latter changed after proposing, same size and mtime): in hardlink mode the twin has keep's `file_id` and bytes, the lookalike is `failed` ("differs"), unchanged, and not linked; keep is byte- and `file_id`-identical; freed bytes are at least the file size; the journaled undo says "break the link".
+- Keep `a\keep.bin`, extras `b\twin.bin` and `c\lookalike.bin` (the latter changed after proposing, same size and mtime): in hardlink mode the twin has keep's `file_id` and bytes, the lookalike is `failed` ("differs"), unchanged, and not linked; keep is byte- and `file_id`-identical; freed bytes are at least the file size; the journaled undo says "break the link".
 - In delete mode the twin is gone, the lookalike remains, keep is unchanged.
 - A proposal listing keep among the items fails the job and leaves every file in place.
+
+### ACT-RCLONE-VERIFY: An rclone archive deletes the source only after the remote copy verifies
+**Applies to:** hoardini
+**Verification:** test
+
+For an rclone destination, every file's size shall match at the remote and so shall a hash the remote supports
+(strongest of SHA-256, SHA-1, MD5, Dropbox content hash) against the same hash computed locally while the source is
+read without touching its access time. When the remote offers none of those, or leaves one blank, rclone shall stream
+the files back (`operations/hashsum`, `blake3`, `download`) and the BLAKE3 must equal the source's. The source is also
+re-checked for size and mtime changes after verification. Any failure shall fail the item, keep the source, remove the
+bad remote copy, and write no `archive_entry`. Restore copies back, checks BLAKE3 against the archived hash, and only
+then renames into place.
+
+**Acceptance criteria:**
+- With a remote that lists SHA-256, a 3 MiB file and a nested folder are archived, both sources are removed, `archive_entry.dest_uri` starts with `rclone:fake:hoardini/`, the remote bytes equal the originals, `archive_entry.blake3` equals the file's BLAKE3, every copy was an `_async` call with a `hoardini-a...` group, and the listing asked for `sha256`.
+- With a remote that lists no hashes, the same archive succeeds using `operations/hashsum` and no hashed listing.
+- When the remote's copy of each file is altered, the file and the folder items fail with "verification failed" (with or without remote hashes), both sources are byte-identical to before, no `archive_entry` exists, the remote holds no files, and 0 bytes are freed.
+- When the source file grows after it was hashed, the item fails with "changed while", the source stays, and no `archive_entry` exists.
+- Restoring both entries brings back identical bytes and keeps the remote copy.
+
+### ACT-RCLONE-PROGRESS: Archive progress comes from the rclone job group, and cancel stops the job
+**Applies to:** hoardini
+**Verification:** test
+
+While an rclone copy runs, the executor shall poll `job/status` and `core/stats` for the item's `_group` and add the
+byte delta to the Job's progress. Cancelling the executor job shall call `job/stop` and leave the source in place.
+
+**Acceptance criteria:**
+- A slow fake job (8 polls) produces Job updates with `0 < done_bytes < total_bytes` before the job finishes, and every `core/stats` call names a `hoardini-a...` group.
+- Cancelling after two status polls ends the job as `cancelled`, calls `job/stop` once, keeps the source, and writes no `archive_entry`.
+
+### ACT-RCLONE-SECRETS: Cloud credentials live in the vault and reach rclone only when a remote is created
+**Applies to:** hoardini
+**Verification:** test
+
+A destination config shall hold only `secret://` references for secret-looking fields. The values are read from the
+vault when `config/create` is called and never stored in the destination row. A Google Drive destination without a
+client ID and secret, or with a scope other than `drive.file`, shall be refused.
+
+**Acceptance criteria:**
+- Creating an S3 destination with a plaintext `secret_access_key` fails mentioning `secret://`.
+- With vault refs for `secret_access_key` and `access_key_id`, the stored config contains the refs but neither value; testing the destination makes exactly one `config/create` whose parameters carry the vault values and the plain `region`.
+- A `drive` destination without client credentials is refused with a message naming the OAuth client.
+
+### ACT-RCLONE-TEST: Testing an rclone destination reports free space or probes with a write
+**Applies to:** hoardini
+**Verification:** test
+
+`destinations::test` for rclone shall create the remote if needed, report `operations/about` free space when the
+backend supports it, and always prove writability by copying a probe file and deleting it. Bad rc credentials fail.
+
+**Acceptance criteria:**
+- With `about` available the result is ok with that free space.
+- With `about` unsupported the result is ok with no free space, the probe is copied then deleted, and the remote holds no files afterwards.
+- Wrong rc credentials give a failed result and the fake sees the rejected request.
+
+### ACT-RCLONE-DAEMON: The rclone daemon is loopback-only, authenticated, and launched only from a verified binary
+**Applies to:** hoardini
+**Verification:** test
+
+The daemon command line shall bind `127.0.0.1:<port>`, carry a random `--rc-user` and `--rc-pass` (different on every
+start), name the config file, and never include `--rc-no-auth`. A binary that fails `verify_before_run` shall not be
+launched, and nothing (no config, no vault secret) is created for it.
+
+**Acceptance criteria:**
+- Two generated endpoints differ in user and password; the arguments hold `--rc-addr 127.0.0.1:40123`, the user, the password, `--config`, and no `--rc-no-auth`; the endpoint's Debug output omits the password.
+- A garbage `rclone.exe` in the runtime folder makes `RcloneDaemon::client` fail with an install-record or SHA-256 error, leaves the daemon not running, and creates neither `rclone.conf` nor the config-password secret.
+
+### ACT-ARCHIVE-RCLONE: Archive and restore through a real rclone
+**Applies to:** hoardini
+**Verification:** manual
+
+The pinned rclone downloads, runs, and carries an archive and a restore end to end. Last run (2026-10-08, rclone
+1.75.1, `local` backend): download of 31,488,864 bytes and its SHA-256 check passed, destination test ok, a 3 MiB file
+and a folder archived with SHA-256 verification and again with the read-back BLAKE3 path, sources removed, both
+restored byte-identical, no `rclone.exe` left running.
+
+**Verification (manual):**
+1. Use an empty scratch data dir: `$env:HOARDINI_DATA_DIR = "D:\scratch\hoardini-data"`; start the app or `hoardini serve`.
+2. Open Destinations and add a Cloud destination. The runtime panel shows rclone 1.75.1 (about 30 MB) as not installed. Click Install; the bar fills, then the panel says installed (`GET /api/runtime/rclone` returns `installed: true`).
+3. Save a destination with remote `loc`, backend type `local`, folder `D:/scratch/remote-store` (via the API: `POST /api/destinations` with `{"name":"loc","kind":"rclone","config":{"remote":"loc","type":"local","path":"D:/scratch/remote-store"}}`). Press Test: it reports reachable with free space.
+4. Create `D:\scratch\src\a.bin` (3 MiB) and a folder `D:\scratch\proj` with a nested subfolder. Ask the agent to archive both to the destination and approve.
+5. Both sources disappear (stubs may appear), the job reaches done, and `D:\scratch\remote-store\<yyyy-mm-dd>\D\scratch\...` holds the copies. The archive list shows `rclone:loc:...` addresses.
+6. Restore each entry from the archive list: the originals come back byte-identical (`Get-FileHash`), the remote copies stay.
+7. While rclone runs, `tasklist | findstr rclone` shows one process; ten idle minutes after the last job, or after quitting the app, none. `D:\scratch\hoardini-data\rclone.conf` starts with `# Encrypted rclone configuration File`.
+8. Cloud accounts (Google Drive, Dropbox, OneDrive, S3, B2, R2, SFTP) are not covered by this procedure; for each, Authorize (OAuth types) or enter keys, Test, archive a small file, restore it.

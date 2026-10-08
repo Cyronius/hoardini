@@ -1,3 +1,5 @@
+mod fake_rc;
+mod rclone;
 #[path = "../../policy/tests/support.rs"]
 mod support;
 

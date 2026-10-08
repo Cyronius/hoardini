@@ -416,7 +416,10 @@ async function route(req: Request): Promise<Response> {
       secrets.add(ref);
       return json({ ok: true });
     }
+    case "runtime":
+      return json({ installed: true, version: "1.75.1", size: 31_488_864, license_url: "https://github.com/rclone/rclone/blob/v1.75.1/COPYING" });
     case "destinations": {
+      if (seg[1] === "rclone" && seg[2] === "authorize") return json({ token_ref: `secret://rclone/token/${uuid().slice(0, 8)}` });
       if (!seg[1]) {
         if (method === "POST") {
           const b = await body<T.DestinationInput>();
