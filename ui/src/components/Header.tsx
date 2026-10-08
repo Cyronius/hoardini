@@ -6,6 +6,7 @@ import { useStore } from "../store";
 import { GearIcon, HistoryIcon, LeafIcon, NewChatIcon, RefreshIcon, TrashIcon } from "./icons";
 import { IconButton } from "./IconButton";
 import { Mascot, type MascotState } from "./Mascot";
+import { systemVolume } from "./mascot/girth";
 
 function useMascotState(): MascotState {
   const tadaUntil = useStore((s) => s.tadaUntil);
@@ -149,7 +150,7 @@ export function Header() {
     <header className="border-b border-line-soft bg-ink-950 px-4 py-2">
       <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-5 gap-y-1">
         <div className="flex items-center gap-2.5">
-          <Mascot state={mood} className="h-14 w-14 shrink-0" />
+          <Mascot state={mood} volume={systemVolume(status?.volumes)} className="h-14 w-14 shrink-0" />
           <div className="leading-tight">
             <div className="font-[family-name:var(--font-display)] text-[17px] font-extrabold tracking-tight">Hoardini</div>
             <div className="text-[length:var(--fs-xs)] text-muted" title="Total space freed by approved jobs">
