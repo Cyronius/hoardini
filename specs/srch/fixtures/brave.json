@@ -1,0 +1,4 @@
+{"type":"search","query":{"original":"unsloth_compiled_cache folder safe to delete","show_strict_warning":false},"web":{"type":"search","results":[
+{"title":"Is unsloth_compiled_cache safe to remove?","url":"https://github.com/unslothai/unsloth/discussions/55","is_source_local":false,"description":"Yes, the unsloth_compiled_cache directory only holds generated code.","profile":{"name":"GitHub"}},
+{"title":"Unsloth FAQ","url":"https://docs.unsloth.ai/faq","description":"Frequently asked questions."}
+]}}
