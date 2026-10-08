@@ -12,7 +12,8 @@ pub struct Key {
 pub fn key_for(conn: &Connection, node_id: i64, mtime: Option<i64>) -> Key {
     let file_id = conn
         .query_row("SELECT file_id FROM node WHERE id = ?1", [node_id], |r| {
-            r.get::<_, Option<Vec<u8>>>(0)
+            r.get::<_, Option<crate::index::FileId>>(0)
+                .map(|f| f.map(|f| f.0.to_vec()))
         })
         .optional()
         .ok()

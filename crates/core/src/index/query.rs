@@ -300,7 +300,8 @@ pub fn top_files(conn: &Connection, q: &TopFilesQuery) -> Result<Ranked<FileItem
     ];
     match scope_of(conn, q.under.as_deref())? {
         Scope::All => {}
-        Scope::Volume(v) => filters.push(format!("f.volume_id = {v}")),
+        // Unary + keeps the planner on node_file_alloc instead of node_file_id.
+        Scope::Volume(v) => filters.push(format!("+f.volume_id = {v}")),
         Scope::Subtree(id) => {
             // `+n.kind` keeps SQLite on the parent_id index; the kind index made each step scan every dir.
             prefix = format!(

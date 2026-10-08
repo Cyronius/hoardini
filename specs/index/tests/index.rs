@@ -9,6 +9,7 @@ use hoardini_core::index::{
 };
 use hoardini_core::store::Db;
 
+mod compact;
 mod journal;
 
 const KIB: u64 = 1 << 10;

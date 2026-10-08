@@ -13,6 +13,8 @@ use crate::store::{Db, get_meta};
 const USAGE: &str = "usage: hoardini index [--db <path>] [--volume C:\\] [--mode background|fast] \
 [--kind auto|full|journal] [--threshold <bytes>] [--workers N] [--memory-cap-mb N]";
 
+const FAST_MAX_WORKERS: usize = 12;
+
 #[derive(Debug, PartialEq)]
 struct ChildArgs {
     db: PathBuf,
@@ -113,8 +115,9 @@ fn run(a: ChildArgs) -> Result<i32> {
         (None, Mode::Background) => meta_num(&conn, "indexer_workers")
             .and_then(|n| usize::try_from(n).ok())
             .unwrap_or(2),
+        // The single writer caps throughput; more listers only add kernel lock contention (measured).
         (None, Mode::Fast) => std::thread::available_parallelism()
-            .map(|n| n.get())
+            .map(|n| (n.get() / 2).clamp(2, FAST_MAX_WORKERS))
             .unwrap_or(4),
     };
     let on_event = |ev: Event<'_>| match ev {

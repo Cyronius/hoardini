@@ -43,6 +43,7 @@ pub(crate) fn list_fixed(lister: &dyn DirLister, dir: &str) -> io::Result<Vec<Di
     let mut entries = lister.list_dir(Path::new(dir))?;
     for e in entries.iter_mut().filter(|e| needs_alloc_by_open(e)) {
         let path = join_path(dir, &e.name);
+        let _s = super::prof::span(super::prof::Phase::Wof);
         e.alloc = match lister.alloc_size_by_open(Path::new(&path)) {
             Ok(a) => a,
             Err(err) => {

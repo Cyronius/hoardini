@@ -15,7 +15,7 @@ use super::lister::{DirLister, list_fixed};
 use super::walk::root_alloc;
 use super::writer::{Chain, Dedupe, Delta, Work, Writer, classify, load_chain};
 use super::{
-    Event, FLAG_DENIED, KIND_DIR, KIND_FILE, Progress, RefreshOptions, RefreshOutcome,
+    Event, FLAG_DENIED, FileId, KIND_DIR, KIND_FILE, Progress, RefreshOptions, RefreshOutcome,
     is_ancestor_path, join_path, normalize_path, path_of, refresh, split_parent, threshold_setting,
     to_i64, to_u64,
 };
@@ -428,7 +428,7 @@ impl Run<'_> {
             .prepare_cached(
                 "SELECT id FROM node WHERE volume_id = ?1 AND file_id = ?2 AND kind = 0 LIMIT 1",
             )?
-            .query_row(params![volume_id, &fid[..]], |r| r.get(0))
+            .query_row(params![volume_id, FileId(*fid)], |r| r.get(0))
             .optional()?)
     }
 
@@ -436,7 +436,9 @@ impl Run<'_> {
         let mut st = self.conn.prepare_cached(
             "SELECT parent_id, kind FROM node WHERE volume_id = ?1 AND file_id = ?2",
         )?;
-        let rows = st.query_map(params![volume_id, &fid[..]], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let rows = st.query_map(params![volume_id, FileId(*fid)], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -686,12 +688,12 @@ impl Run<'_> {
         if flags & FLAG_DENIED != 0 {
             return Ok(None);
         }
-        let rows: HashSet<Vec<u8>> = self
+        let rows: HashSet<[u8; 16]> = self
             .conn
             .prepare_cached(
                 "SELECT file_id FROM node WHERE parent_id = ?1 AND kind = 1 AND file_id IS NOT NULL",
             )?
-            .query_map([id], |r| r.get(0))?
+            .query_map([id], |r| r.get::<_, FileId>(0).map(|f| f.0))?
             .collect::<rusqlite::Result<_>>()?;
         let created = |s: Option<&Seen>| s.is_some_and(|s| s.reasons & USN_REASON_FILE_CREATE != 0);
         let mut listed: HashSet<[u8; 16]> = HashSet::new();
@@ -720,7 +722,7 @@ impl Run<'_> {
                 }
                 continue;
             }
-            if small || !rows.contains(&e.file_id[..]) {
+            if small || !rows.contains(&e.file_id) {
                 return Ok(None);
             }
         }
@@ -815,13 +817,8 @@ impl Run<'_> {
                 Ok(entries) => self.small_fold(id, entries, w)?,
                 Err(_) => None,
             };
-            let work = Work {
-                node_id: id,
-                path,
-                chain: load_chain(self.conn, id)?,
-                is_new: false,
-            };
-            w.apply_listing_with(&work, listing, &mut sub, fold)?;
+            let mut work = Work::existing(id, path, load_chain(self.conn, id)?);
+            w.apply_listing_with(&mut work, listing, &mut sub, fold)?;
             let fresh: Vec<Work> = sub.drain(..).filter(|s| s.is_new).collect();
             for s in fresh {
                 if !self.walk_new(w, s)? {
@@ -836,12 +833,12 @@ impl Run<'_> {
     fn walk_new(&mut self, w: &mut Writer, start: Work) -> Result<bool> {
         let mut stack = vec![start];
         let mut sub = Vec::new();
-        while let Some(work) = stack.pop() {
+        while let Some(mut work) = stack.pop() {
             if self.cancel.load(Ordering::Relaxed) {
                 return Ok(false);
             }
             let listing = list_fixed(self.lister, &work.path);
-            w.apply_listing(&work, listing, &mut sub)?;
+            w.apply_listing(&mut work, listing, &mut sub)?;
             self.new_dirs += 1;
             stack.append(&mut sub);
             self.tick(w)?;
@@ -862,6 +859,7 @@ pub fn journal_refresh(
     let Some(v) = load_volume(conn, &normalize_path(volume))? else {
         return Ok(JournalOutcome::NeedsFull(NeedsFull::NoPosition));
     };
+    super::bulk_indexes(conn, false)?;
     let Ok(j) = source.query() else {
         return Ok(JournalOutcome::NeedsFull(NeedsFull::NoJournal));
     };

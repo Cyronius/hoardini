@@ -4,6 +4,7 @@ mod fake;
 mod journal;
 mod lister;
 mod patch;
+mod prof;
 mod query;
 mod verify;
 mod walk;
@@ -29,6 +30,7 @@ pub(crate) use query::PathCache;
 
 use anyhow::Result;
 use rusqlite::Connection;
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 
 pub const KIND_DIR: i64 = 0;
 pub const KIND_FILE: i64 = 1;
@@ -39,6 +41,57 @@ pub const FLAG_PLACEHOLDER: i64 = 2;
 pub const FLAG_HARDLINK_DUP: i64 = 4;
 
 pub const DEFAULT_THRESHOLD: u64 = 1 << 20;
+
+// A first build inserts in random key order, so it builds these lookup indexes sorted at its end.
+const BULK_INDEXES: &str = "DROP INDEX IF EXISTS node_file_id; \
+     DROP INDEX IF EXISTS node_parent_name; \
+     CREATE INDEX IF NOT EXISTS node_parent_bulk ON node(parent_id);";
+const LOOKUP_INDEXES: &str = "DROP INDEX IF EXISTS node_parent_bulk; \
+     CREATE INDEX IF NOT EXISTS node_parent_name ON node(parent_id, name COLLATE NOCASE); \
+     CREATE INDEX IF NOT EXISTS node_file_id ON node(volume_id, file_id);";
+
+pub(crate) fn bulk_indexes(conn: &Connection, bulk: bool) -> Result<()> {
+    conn.execute_batch(if bulk { BULK_INDEXES } else { LOOKUP_INDEXES })?;
+    Ok(())
+}
+
+// NTFS ids fit in 8 bytes and are stored as an INTEGER; wider ids (ReFS) stay a 16-byte BLOB.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FileId(pub [u8; 16]);
+
+impl ToSql for FileId {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let (low, high) = self.0.split_at(8);
+        Ok(if high == [0; 8] {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(low);
+            ToSqlOutput::from(i64::from_le_bytes(b))
+        } else {
+            ToSqlOutput::from(self.0.to_vec())
+        })
+    }
+}
+
+impl FromSql for FileId {
+    fn column_result(v: ValueRef<'_>) -> FromSqlResult<Self> {
+        match v {
+            ValueRef::Integer(i) => {
+                let mut id = [0u8; 16];
+                id[..8].copy_from_slice(&i.to_le_bytes());
+                Ok(FileId(id))
+            }
+            ValueRef::Blob(b) => {
+                <[u8; 16]>::try_from(b)
+                    .map(FileId)
+                    .map_err(|_| FromSqlError::InvalidBlobSize {
+                        expected_size: 16,
+                        blob_size: b.len(),
+                    })
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
 
 pub fn threshold_setting(conn: &Connection) -> Result<u64> {
     Ok(crate::store::get_meta(conn, "threshold_bytes")?

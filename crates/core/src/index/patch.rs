@@ -120,19 +120,11 @@ pub fn patch_rescan(
     let t = target_of(conn, start_id)?;
     with_writer(conn, &t, |w| {
         let chain = load_chain(conn, start_id)?;
-        let mut stack = vec![(
-            Work {
-                node_id: start_id,
-                path: start_path,
-                chain,
-                is_new: false,
-            },
-            only,
-        )];
+        let mut stack = vec![(Work::existing(start_id, start_path, chain), only)];
         let mut sub = Vec::new();
-        while let Some((work, only)) = stack.pop() {
+        while let Some((mut work, only)) = stack.pop() {
             let listing = list_fixed(lister, &work.path);
-            w.apply_listing(&work, listing, &mut sub)?;
+            w.apply_listing(&mut work, listing, &mut sub)?;
             for s in sub.drain(..) {
                 let keep = match &only {
                     None => true,

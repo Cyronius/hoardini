@@ -2,14 +2,14 @@
 
 Canonical spec for the indexer (`hoardini-core::index`, `hoardini index`). Design: `.claude/plans/hoardini-design.md` §5.1.
 
-Tests: `specs/index/tests/index.rs` and its module `journal.rs` (`cargo test -p hoardini-specs --test index`). Most run
+Tests: `specs/index/tests/index.rs` and its modules `journal.rs` and `compact.rs` (`cargo test -p hoardini-specs --test index`). Most run
 against `index::FakeFs`, an in-memory volume with a fake change journal; the `real_*` tests run the real lister
 (`index::WinLister`) and, for the journal, the real C: change journal (`index::WinJournal`) on a temp directory.
 
 ## Terms
 
 - **Row**: a `node` table entry. Every directory and every link has one; a file has one when
-  `max(allocated, logical) >= threshold`.
+  `max(allocated, logical) >= threshold`. A directory row keeps its modification time only (INDEX-COMPACT).
 - **Counted size** of a file: its allocated bytes, or 0 when it is a hard-link duplicate (see INDEX-HARDLINK-ONCE).
 - **Subtree totals** of a directory (`sub_alloc`, `sub_logical`, `sub_count`): its folded small files plus the counted
   size of every child file row plus the subtree totals of every child directory. Links count 0.
@@ -212,6 +212,28 @@ subtree totals in one transaction, and re-resolve hard-link ownership.
 - `patch_rescan` of a removed directory returns `None`; of a new directory indexes its contents.
 - After every step the snapshot equals a fresh build and totals verify.
 
+### INDEX-COMPACT: The index stores only what is read
+**Applies to:** hoardini
+**Verification:** test
+
+To keep the index small (INDEX-MEMORY-CAP), a directory row shall store its modification time but no access or
+creation time; nothing reads them, and listing a directory moves its access time. A file ID whose high 8 bytes are
+zero (NTFS) shall be stored as an 8-byte integer, a wider ID (ReFS) as its 16 bytes; both read back as the same
+128-bit ID (`index::FileId`). The size index holds file rows only, and the subtree-size index only directories of at
+least 256 MiB (the history summary floor). A first build of an empty index walks with a narrow parent index in place
+of the parent/name and file-ID indexes and builds both, sorted, when it completes, so their pages are packed. Upgrading an index written under schema v1 converts it in
+place.
+
+**Acceptance criteria:**
+- After a build, every directory row has a modification time and no access or creation time; a file row keeps all
+  three.
+- A file and a directory with NTFS-style IDs, including one whose low half has the sign bit set, are stored as
+  integers and read back equal to their listed IDs; a hard-linked file with a 128-bit ID is stored as a 16-byte blob
+  and counts once.
+- A schema v1 index of the same tree (16-byte blob IDs, directory access and creation times) opens as v2 with a
+  snapshot equal to a fresh build, only the wide IDs left as blobs; a refresh then deletes nothing and still equals
+  a fresh build.
+
 ### INDEX-INTERRUPT-SAFE: An interrupted refresh leaves a valid index
 **Applies to:** hoardini
 **Verification:** test
@@ -264,8 +286,9 @@ volume space is unknown.
 **Verification:** manual
 
 In background mode the indexer shall run with process background mode (low CPU, very low I/O and memory priority) and
-EcoQoS, with 2 workers by default (`meta.indexer_workers`). Fast mode uses all cores at normal priority. If the OS calls
-fail, the refresh logs a warning and continues.
+EcoQoS, with 2 workers by default (`meta.indexer_workers`). Fast mode runs at normal priority with one lister per two
+logical CPUs, at most 12: a single writer applies every listing, and more listers only add kernel contention. If the
+OS calls fail, the refresh logs a warning and continues.
 
 **Verification (manual):**
 1. Start `hoardini index --db %TEMP%\h-polite.db --volume C:\ --mode background`.
@@ -278,7 +301,8 @@ fail, the refresh logs a warning and continues.
 **Applies to:** hoardini
 **Verification:** manual
 
-A background refresh of C: shall keep the indexer's working set under 100 MB. A Job Object caps the process at
+A background refresh of C: shall keep the indexer's working set under 100 MB, and the index database of C: at the
+default 1 MiB threshold shall stay under 150 MB on disk. A Job Object caps the process at
 `meta.indexer_memory_cap_mb` (default 256 MB, `--memory-cap-mb`) as a backstop. Bounded channels and a depth-first
 work stack keep the pending tree small; the SQLite page cache is 16 MB.
 
@@ -286,7 +310,8 @@ work stack keep the pending tree small; the SQLite page cache is 16 MB.
 1. Start `hoardini index --db %TEMP%\h-mem.db --volume C:\ --mode background`.
 2. In PowerShell, sample every 2 s until it exits:
    `while ($p = Get-Process hoardini -ErrorAction SilentlyContinue) { $p.WorkingSet64 / 1MB; Start-Sleep 2 }`.
-3. The peak stays under 100 MB. Record the peak, the duration, `dirs`/`files` from the `done` line, and the DB size.
+3. The peak stays under 100 MB. Record the peak, the duration, `dirs`/`files` from the `done` line, and the DB size;
+   the DB (`h-mem.db`, after the run) is under 150 MB.
 4. Delete `%TEMP%\h-mem.db*`.
 
 ### INDEX-STALE-AGE: Answers from the stored index state its age

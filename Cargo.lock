@@ -1665,6 +1665,7 @@ dependencies = [
  "hoardini-win",
  "parking_lot",
  "reqwest",
+ "rusqlite",
  "secrecy",
  "serde_json",
  "sha2",

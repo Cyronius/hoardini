@@ -53,7 +53,7 @@ pub fn snapshot(conn: &Connection, root: &str) -> Result<Vec<SnapRow>> {
                     ctime: r.get(12)?,
                     attrs: r.get(13)?,
                     reparse_tag: r.get(14)?,
-                    file_id: r.get(15)?,
+                    file_id: r.get::<_, Option<super::FileId>>(15)?.map(|f| f.0.to_vec()),
                     flags: r.get(16)?,
                 },
             ))

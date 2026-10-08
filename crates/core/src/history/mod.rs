@@ -146,13 +146,13 @@ fn collect_summary(
     volume_id: i64,
 ) -> Result<(Vec<SummaryDir>, Vec<SummaryFile>)> {
     let mut paths = PathCache::default();
+    // The literal bound matches the partial index node_sub_alloc; `+volume_id` keeps node_file_id out.
     let dir_rows: Vec<(i64, i64, i64)> = conn
-        .prepare(
-            "SELECT id, sub_alloc, sub_count FROM node WHERE kind = 0 AND sub_alloc >= ?1 AND volume_id = ?2",
-        )?
-        .query_map(params![to_i64(DIR_MIN_BYTES), volume_id], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })?
+        .prepare(&format!(
+            "SELECT id, sub_alloc, sub_count FROM node \
+             WHERE kind = 0 AND sub_alloc >= {DIR_MIN_BYTES} AND +volume_id = ?1"
+        ))?
+        .query_map([volume_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<_>>()?;
     let mut dirs = Vec::with_capacity(dir_rows.len());
     for (id, alloc, count) in dir_rows {
@@ -166,7 +166,7 @@ fn collect_summary(
     }
     let file_rows: Vec<(i64, i64, Option<i64>)> = conn
         .prepare(
-            "SELECT id, alloc, mtime FROM node WHERE kind = 1 AND alloc >= ?1 AND volume_id = ?2 \
+            "SELECT id, alloc, mtime FROM node WHERE kind = 1 AND alloc >= ?1 AND +volume_id = ?2 \
              AND (flags & 4) = 0",
         )?
         .query_map(params![to_i64(FILE_MIN_BYTES), volume_id], |r| {

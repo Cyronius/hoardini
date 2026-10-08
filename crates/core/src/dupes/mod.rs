@@ -95,7 +95,8 @@ fn candidates(conn: &Connection, opts: &DupOptions) -> Result<Vec<Cand>> {
                     r.get::<_, i64>(0)?,
                     r.get::<_, i64>(1)?,
                     r.get::<_, Option<i64>>(2)?,
-                    r.get::<_, Option<Vec<u8>>>(3)?,
+                    r.get::<_, Option<crate::index::FileId>>(3)?
+                        .map(|f| f.0.to_vec()),
                 ))
             },
         )?
