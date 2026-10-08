@@ -1,0 +1,5 @@
+{"query":"unsloth_compiled_cache folder safe to delete","follow_up_questions":null,"answer":null,"images":[],"results":[
+{"title":"Unsloth compiled cache - GitHub Issue 1234","url":"https://github.com/unslothai/unsloth/issues/1234","content":"The unsloth_compiled_cache folder is regenerated on every run and is safe to delete.\n\nDeleting it only costs a recompile.","score":0.91,"raw_content":null},
+{"title":"Where does Unsloth store its cache?","url":"https://docs.unsloth.ai/basics/cache","content":"Compiled kernels are written next to your training script.","score":0.77,"raw_content":null},
+{"title":"No url entry","url":"","content":"dropped","score":0.1}
+],"response_time":1.2,"request_id":"123e4567-e89b-12d3-a456-426614174111"}

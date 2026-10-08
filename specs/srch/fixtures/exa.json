@@ -1,0 +1,4 @@
+{"requestId":"b5947044c4b6f656c295bbb6ff3e5bf6","resolvedSearchType":"neural","results":[
+{"id":"https://github.com/unslothai/unsloth/issues/1234","title":"Unsloth compiled cache","url":"https://github.com/unslothai/unsloth/issues/1234","publishedDate":"2025-03-01T00:00:00.000Z","author":null,"text":"The folder is regenerated automatically; delete it freely to reclaim space."},
+{"id":"https://example.com/b","title":"Highlights only","url":"https://example.com/b","highlights":["first highlight","second highlight"],"highlightScores":[0.5,0.4]}
+],"costDollars":{"total":0.005}}
