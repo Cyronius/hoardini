@@ -62,5 +62,8 @@ hoardini-core = { path = "../crates/core" }
 hoardini-server = { path = "../crates/server" }
 hoardini-win = { path = "../crates/win" }
 serde_json = "1.0.151"
+anyhow = "1.0.104"
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+secrecy = "0.10.3"
 tempfile = "3.27.0"
 tokio = { version = "1.53.2", features = ["full"] }

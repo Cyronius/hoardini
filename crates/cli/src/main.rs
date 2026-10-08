@@ -36,6 +36,23 @@ enum Cmd {
     Top(TopArgs),
     #[command(about = "What grew, shrank, appeared, or vanished between refreshes")]
     Changes(ChangesArgs),
+    #[command(about = "Serve the UI and API on loopback")]
+    Serve(ServeArgs),
+}
+
+#[derive(Args)]
+struct ServeArgs {
+    #[arg(long, default_value_t = 7043)]
+    port: u16,
+    #[arg(long, help = "Bearer token [default: random per launch]")]
+    token: Option<String>,
+    #[arg(
+        long,
+        help = "Serve the UI from this folder instead of the embedded build"
+    )]
+    ui_dir: Option<PathBuf>,
+    #[arg(long, help = "Skip the background refresh at startup")]
+    no_refresh: bool,
 }
 
 #[derive(Args)]
@@ -242,14 +259,38 @@ fn changes(db: Db, a: ChangesArgs) -> Result<()> {
     Ok(())
 }
 
+fn serve(db: Option<PathBuf>, a: ServeArgs) -> Result<()> {
+    let _log = hoardini_server::init_logging(&hoardini_server::default_log_dir(), true)?;
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let handle = hoardini_server::start(hoardini_server::ServerOptions {
+            port: a.port,
+            token: a.token,
+            db_path: db.unwrap_or_else(hoardini_core::paths::db_path),
+            ui_dir: a.ui_dir,
+            dialogs: None,
+            refresh_on_start: !a.no_refresh,
+            indexer_exe: None,
+        })
+        .await?;
+        println!("{}", handle.url());
+        tokio::signal::ctrl_c().await?;
+        let _ = handle.shutdown.send(());
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        Ok(())
+    })
+}
+
 fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_max_level(tracing::Level::INFO)
-        .with_target(false)
-        .with_ansi(std::io::stderr().is_terminal())
-        .init();
     let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).is_none_or(|a| a != "serve") {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .with_ansi(std::io::stderr().is_terminal())
+            .init();
+    }
     // The app spawns `<exe> index ...`; keep that path free of clap's global-flag parsing.
     if argv.get(1).is_some_and(|a| a == "index") {
         return ExitCode::from(index::run_child(&argv[2..]).clamp(0, 255) as u8);
@@ -265,6 +306,7 @@ fn main() -> ExitCode {
         }
         Cmd::Top(a) => open_db(cli.db).and_then(|db| top(db, a)),
         Cmd::Changes(a) => open_db(cli.db).and_then(|db| changes(db, a)),
+        Cmd::Serve(a) => serve(cli.db, a),
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,
