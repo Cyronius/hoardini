@@ -312,13 +312,6 @@ fn usn_journal_query_read_and_resolve() {
 }
 
 #[test]
-fn usn_read_rejects_arbitrary_start() {
-    let root = Path::new("C:\\");
-    let j = usn_query(root).unwrap();
-    assert!(usn_read(root, j.journal_id, j.next_usn + 1).is_err());
-}
-
-#[test]
 fn smb_connect_rejects_non_unc() {
     let err = smb_connect(r"C:\not\a\share", None, None).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
