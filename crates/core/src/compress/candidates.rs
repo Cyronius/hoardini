@@ -322,7 +322,6 @@ fn cached(
         .optional()?)
 }
 
-// Estimates the biggest `limit` candidates that have no current estimate; returns how many ran.
 pub fn estimate_top(db: &Db, cands: &[CompressCandidate], limit: usize) -> anyhow::Result<usize> {
     let conn = db.conn()?;
     let mut ran = 0;

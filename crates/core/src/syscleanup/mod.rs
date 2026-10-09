@@ -111,7 +111,6 @@ impl SystemOp {
         }
     }
 
-    // The volume whose free space measures what this op freed.
     pub fn volume(&self, system_drive: &str) -> String {
         match self {
             SystemOp::RestorePoints { volume } => format!("{}\\", volume.trim_end_matches('\\')),
@@ -121,7 +120,6 @@ impl SystemOp {
     }
 }
 
-// What the card shows for one operation row.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OpView {
     #[serde(flatten)]

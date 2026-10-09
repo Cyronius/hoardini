@@ -46,7 +46,6 @@ fn quote(arg: &str) -> anyhow::Result<String> {
     Ok(format!("\"{arg}\""))
 }
 
-// The command line of the elevated child: `system-cleanup --result <file> <op>...`.
 pub fn helper_params(result: &Path, ops: &[SystemOp]) -> anyhow::Result<String> {
     let mut parts = vec![
         "system-cleanup".to_string(),
@@ -261,7 +260,6 @@ fn run_op(op: &SystemOp, system_drive: &str) -> OpResult {
     }
 }
 
-// Entry point of `<exe> system-cleanup ...`, run elevated; one JSON line per operation as it ends.
 pub fn run_helper(args: &[String]) -> i32 {
     let (result, ops) = match parse_helper_args(args) {
         Ok(v) => v,

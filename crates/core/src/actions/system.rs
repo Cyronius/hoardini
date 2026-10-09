@@ -16,9 +16,8 @@ const ERROR_CANCELLED: i32 = 1223;
 const WSL_SHUTDOWN_WAIT: Duration = Duration::from_secs(60);
 
 pub trait SystemRunner: Send + Sync {
-    // Operations that run as the user (the Recycle Bin).
     fn local(&self, op: &SystemOp) -> anyhow::Result<OpResult>;
-    // Every other operation, behind one administrator prompt; `done(n)` reports how many have ended.
+    // All elevated operations behind one administrator prompt; `done(n)` reports how many have ended.
     fn elevated(
         &self,
         ops: &[SystemOp],

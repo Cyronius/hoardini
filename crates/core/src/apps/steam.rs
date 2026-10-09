@@ -64,7 +64,7 @@ fn tokens(text: &str) -> Vec<Tok> {
     out
 }
 
-// (depth, key, value) for every leaf pair; depth 1 is inside the root object.
+// Depth 1 is inside the root object.
 fn pairs(text: &str) -> Vec<(usize, String, String)> {
     let toks = tokens(text);
     let mut out = Vec::new();
