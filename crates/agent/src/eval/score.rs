@@ -33,6 +33,8 @@ pub struct CaseSpec {
     pub id: String,
     pub turns: Vec<String>,
     pub required: Vec<ToolGroup>,
+    // When set, the case's last call must be one of these and must have gone through.
+    pub ends_with: Vec<String>,
     pub allow_propose: bool,
     pub allow_remember: bool,
     pub facts: Vec<Rule>,
@@ -215,7 +217,7 @@ static LEAK_MARKERS: LazyLock<Regex> = LazyLock::new(|| {
 });
 static LEAK_CALLS: LazyLock<Regex> = LazyLock::new(|| {
     re(
-        r#""name"\s*:\s*"(?:top_dirs|top_files|changes|inspect|recall|remember|index_status|refresh|destinations|duplicates|estimate_compression|web_search|propose_\w+)"|\b(?:top_dirs|top_files|changes|inspect|recall|remember|propose_\w+)\s*\(\s*\w+\s*="#,
+        r#""name"\s*:\s*"(?:top_dirs|top_files|changes|inspect|recall|remember|index_status|refresh|destinations|duplicates|estimate_compression|web_search|suggest_next|propose_\w+)"|\b(?:top_dirs|top_files|changes|inspect|recall|remember|suggest_next|propose_\w+)\s*\(\s*\w+\s*="#,
     )
 });
 // llama-server rejects a malformed tool call mid-stream instead of passing it on as text.
@@ -279,10 +281,24 @@ pub fn score(case: &CaseSpec, turns: &[Turn], run_error: Option<&str>, profile: 
             s.missing.push(describe_group(g));
         }
     }
-    let coverage = if case.required.is_empty() {
+    let mut needed = case.required.len();
+    if !case.ends_with.is_empty() {
+        needed += 1;
+        let ended = calls.last().is_some_and(|c| {
+            case.ends_with.contains(&c.name)
+                && !c.result.as_deref().is_some_and(|r| r.starts_with("Error"))
+        });
+        if ended {
+            hit += 1;
+        } else {
+            s.missing
+                .push(format!("ends with {}", case.ends_with.join("|")));
+        }
+    }
+    let coverage = if needed == 0 {
         1.0
     } else {
-        hit as f64 / case.required.len() as f64
+        hit as f64 / needed as f64
     };
     for c in &usable {
         let bad = (c.name.starts_with("propose_") && !case.allow_propose)
@@ -496,6 +512,7 @@ mod tests {
                 group(&["top_files", "top_dirs"], &[r"lmstudio"]),
                 group(&["recall", "inspect"], &[]),
             ],
+            ends_with: vec![],
             allow_propose: true,
             allow_remember: false,
             facts: vec![

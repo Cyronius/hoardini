@@ -43,3 +43,30 @@ export function fileName(p: string): string {
 export function friendlyToolName(name: string): string {
   return name.replace(/[_-]+/g, " ").trim();
 }
+
+export function shortDate(ms: number | null | undefined): string {
+  if (!ms) return "";
+  const d = new Date(ms);
+  const thisYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, thisYear ? { month: "short", day: "numeric" } : { month: "short", year: "numeric" });
+}
+
+// A time of day reads better than a date for a refresh earlier today.
+export function sinceLabel(ms: number): string {
+  const d = new Date(ms);
+  return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) : shortDate(ms);
+}
+
+export function samePath(a: string, b: string): boolean {
+  return a.replace(/\\+$/, "").toLowerCase() === b.replace(/\\+$/, "").toLowerCase();
+}
+
+export function isUnder(parent: string, child: string): boolean {
+  const p = parent.replace(/\\+$/, "").toLowerCase();
+  const c = child.toLowerCase();
+  return c.length > p.length + 1 && c.startsWith(`${p}\\`);
+}
+
+export function digits(n: number): string {
+  return n.toLocaleString(undefined);
+}

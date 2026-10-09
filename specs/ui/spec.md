@@ -271,16 +271,68 @@ The drawer has its own Theme tab. "Follow system" sits above a Dark / Midtone / 
 **Verification:** manual
 
 The `changes` tool card shall show the free-space chart above its usual content when the call's range holds at least
-3 refreshes, and only the numbers otherwise. The points come from `GET /api/history` limited to the `range_ms` line
-in the tool result, for the drive that line names, so the chart ends at the call's own latest refresh and a reload or scrolled-back card shows the
-same data. The `range_ms` line is not shown in the card's result text.
+3 refreshes, and only the numbers otherwise. The points come from `GET /api/history` limited to the call's `data.range_ms`
+for its `data.volume` (AGENT-TOOL-DATA), or, for an older result without data, to the `range_ms` line in the tool text and the drive that line names,
+so the chart ends at the call's own latest refresh and a reload or scrolled-back card shows the
+same data. The `range_ms` line is not shown in the card's result text or its raw view.
 
 **Verification (manual):**
 1. With an index holding at least 3 refreshes, ask "How has my free space changed over time?". The `changes` card shows
-   a "Free space over time" chart above the collapsed tool row; hovering a dot shows its date and free space.
+   a "Free space over time" chart under its headline (above the collapsed tool row for a result without data); hovering a dot shows its date and free space.
 2. Reload the page: the same chart is drawn from the stored tool result.
 3. Run another refresh, then scroll back to that card: it still ends at the refresh the call saw.
 4. With only 2 refreshes in the index, ask again: the card shows no chart, only the numbers.
+
+### UI-TOOL-CARDS: Folders, files and changes show as cards
+**Applies to:** hoardini
+**Verification:** manual
+
+When a `top_dirs`, `top_files` or `changes` call has `data` (AGENT-TOOL-DATA: live from the `tool_data` event, after a reload from the thread's tool message), the chat shall show a card in place of the tool chip; a call without data (an older result, an error, no index) keeps the chip.
+- **Folders and files cards:** a title ("Largest folders" or "Largest files") with the scope (the `under` folder, or "on your drives") and the files card's filters, the index age ("as of 3 days ago"), and ranked rows: name, the part of the path below the scope, size, a size bar relative to the largest row, and the file count (folders, with "some unreadable" when denied) or the last-modified date (files, last opened as the tooltip). The first 8 rows show, then "Show all N"; a footer "+N more · X" comes from `more`.
+- **Changes card:** the headline is the free-space delta ("C: has 127 GB more free since 2:14 PM", "less free" when it fell; a time of day for a refresh earlier today, else the date), then the free-space chart (UI-CHANGES-CHART), "Freed X · Grew Y" (Freed sums removed and shrank rows, Grew sums grew and new rows, each row counted once with its listed ancestors), a Freed section (removed and shrank) and a Grew section (grew and new), each row with its signed delta, a bar, and "before → after", "new" or "removed". The volume root's own row is hidden, and a row under another row of the same section sits indented beneath it. Removed rows are struck through and have no buttons.
+- **Row buttons** (shown on hover or keyboard focus, over the row's right end): ▸ opens the folder's ItemTree inline (UI-ITEM-TREE); **Ask** sends "What is {path} and is it safe to remove?"; **Clean up** (folders) sends "What can I clean up in {path}?"; **Show in Explorer** (SRV-REVEAL). Ask and Clean up are disabled while a run streams.
+- A small **raw** toggle in the card's header shows the call's arguments and the tool text.
+
+**Verification (manual):**
+1. In `ui/`, run `MOCK_PORT=72xx MOCK_IDLE=1 bun run mock` and Vite with its `/api` proxy pointed at that port; open it at 1000 × 900.
+2. Press Show hotspots. A "Largest folders on your drives" card shows 8 rows with bars and file counts and "Show all 10"; Windows says "some unreadable". A changes card reads "C: has 127 GB more free since 2:14 PM" with the chart and "Freed 124 GB · Grew 7.3 GB"; the `C:\` row is not listed; the Hugging Face model folder sits indented under `.cache` and the removed `deepseek` file under `models`, both struck through. No chip for `top_dirs`, `changes` or `suggest_next` shows.
+3. Hover the `code` row: Ask, Clean up and Show in Explorer appear over the row's end and its file count hides. Press ▸: the ItemTree opens under it.
+4. Press raw on the folders card: the arguments and the tool text show; press it again to hide them.
+5. Press the "Clean up C:\code" pill (UI-FOLLOW-UPS), then Ask on the covenant-agent row of the new folders card: it sends "What is C:\code\covenant-agent and is it safe to remove?".
+6. Ask "List the biggest files": the files card shows 8 rows with "modified" dates, "Show all 12", and "+3,184 more · 212 GB".
+7. Reload: the same cards come back from the stored thread.
+8. Repeat steps 2 and 6 with a dark theme (Marshmallow Night) and at 430 px wide: text, bars, and the green and red deltas stay readable, and rows do not overflow.
+9. With `hoardini serve` and a model that calls `top_dirs`: the card renders live, and again after a reload from `GET /api/thread`.
+(2026-10-09: steps 1–8 pass against the mock in headless Chromium through Playwright, in Marshmallow and Marshmallow Night. Step 9 passes against `hoardini serve` on a scratch folder with a scripted OpenAI-compatible model calling `top_dirs`, `changes` and `suggest_next`: both cards rendered live and after a reload, ▸ listed the folder from `/api/index/children`, no chip showed, and no model request held card data.)
+
+### UI-ITEM-TREE: The ▸ tree under a folder
+**Applies to:** hoardini
+**Verification:** manual
+
+`ItemTree` (`ui/src/components/ItemTree.tsx`; props `path`, optional `rootSize`, optional `actions(row)` slot) shall show a folder's children inline from `GET /api/index/children` (SRV-INDEX-CHILDREN), loading a level only when it is opened. Each row has ▸ when it has children, its name (full path as the tooltip), a size bar and its percentage of the parent (of `rootSize` at the top level, else of the folder), its file count, its last-modified date, the caller's buttons, and **Show in Explorer** (`POST /api/reveal`); a refusal shows inline on the row ("not found", "not on a watched drive") and keeps the row's buttons up. The buttons appear on hover or keyboard focus over the row's right end. Nested levels indent with a guide line. Under the rows come "N small files · X" when the folder has folded small files and "+N more · X" past 50 rows, which loads the rest when pressed; an empty folder says "Empty" and a failed load says why. As the card narrows, the date drops out first, then the file count, then the bar. The chat cards (UI-TOOL-CARDS) use it, and the review and Explore views are meant to.
+
+**Verification (manual):**
+1. Against the mock (UI-TOOL-CARDS step 1), press Show hotspots, then ▸ on `code` in the folders card.
+2. The tree lists covenant-agent (52%, 161 GB, 12,137 files, a date) first, then hoardini, llama.cpp and the side projects, each with a bar; "+13 more · 1.9 GB" ends the list. Press it: all 63 folders show.
+3. ▸ on covenant-agent opens its children one level deeper, indented, with "277 small files · 1.4 GB" under them.
+4. Hover `covenant-agent\target` and press Show in Explorer: the mock records the path (`GET /api/mock/revealed`).
+5. Against `hoardini serve`, Show in Explorer opens Explorer with the item selected (SRV-REVEAL), and on a path that is gone the row says "not found".
+6. At 430 px wide the rows keep name, percentage and size; at 1000 px the bar, file count and date show too.
+(2026-10-09: steps 1–4 and 6 pass against the mock in headless Chromium, and the tree also opened against `hoardini serve` (UI-TOOL-CARDS step 9); step 5 was not run, since it opens Explorer on the desktop.)
+
+### UI-FOLLOW-UPS: Follow-up pills under the answer
+**Applies to:** hoardini
+**Verification:** manual
+
+Under the settled last answer the chat shall show up to 3 pills styled like the greeting's starters: hidden while a run streams, gone as soon as the user sends anything, and absent while the turn waits on a proposal card. The turn is everything after the last question or card decision. The model's pills from the turn's `suggest_next` results (AGENT-SUGGEST-NEXT) come first; pills built from the turn's cards fill the rest: from a folders card, "What's inside {name} ({size})?" for its biggest row (it sends "What's inside {path}?") and "Clean up {scope}" for its `under` folder, else its biggest row (the folder's name instead of the path when the path is long); from a files card, "What is {name} ({size})?" for its biggest file; from a changes card, "Why did {name} grow (+X)?" for its biggest top-level grower. A pill with the same kind and path as an earlier one, or the same label when it has no path, is skipped. An `ask` pill sends its label (a built one its full-path question), and a `clean_up` pill sends "What can I clean up in {path}?". A pill never approves anything. The `suggest_next` call itself shows no chip.
+
+**Verification (manual):**
+1. Against the mock (UI-TOOL-CARDS step 1), press Show hotspots. Under the answer: "What's in covenant-agent?", "Clean up C:\code" (the model's; its third pill names a path not in the index and is dropped) and "What's inside Users (652 GB)?" (built from the folders card). No pills show while the answer streams.
+2. Reload: the same three pills show.
+3. Press "Clean up C:\code": the pills disappear at once, the question "What can I clean up in C:\code?" is sent, and the new answer gets "Clean up C:\code\covenant-agent" (the model's), then "What's inside covenant-agent (161 GB)?" and "Clean up C:\code" (built).
+4. Ask "List the biggest files": the pills are "Which models haven't I used lately?" and "What is llama-3.3-70b-Q4_K_M.gguf (42.5 GB)?".
+5. Ask "what is in lmstudio": the turn ends on a proposal card and no pills show; approve it and the answer after the card shows no pills built from the earlier card.
+(2026-10-09: steps 1–5 pass against the mock in headless Chromium; against `hoardini serve` with a scripted model, the model's pill came first, then the two built from the folders card, and the same three came back after a reload.)
 
 ### UI-DRIVE-SELECTOR: The header shows one drive, picked from a menu
 **Applies to:** hoardini

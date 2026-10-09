@@ -205,6 +205,106 @@ fn dedupe_is_judged_by_the_copy_it_removes() {
 
 // Traces: AGENT-EVAL-SCORING
 #[test]
+fn hotspots_needs_both_the_folders_and_the_changes_card() {
+    let c = case("hotspots");
+    let both = vec![
+        turn(
+            "",
+            vec![
+                call("top_dirs", "{}", Some("list")),
+                call("changes", "{}", Some("diff")),
+            ],
+        ),
+        turn("Qwen3-Coder is new this week.", vec![]),
+    ];
+    let s = score(&c, &both, None, PROFILE);
+    assert_eq!(s.tool_score, 1.0);
+    assert_eq!(s.answer_score, Some(1.0));
+    let only = vec![turn("Here.", vec![call("top_dirs", "{}", Some("list"))])];
+    let s = score(&c, &only, None, PROFILE);
+    assert_eq!(s.tool_score, 0.5);
+    assert_eq!(s.missing, vec!["changes"]);
+}
+
+// Traces: AGENT-EVAL-SCORING
+#[test]
+fn code_cleanup_must_end_in_a_card_for_build_output_not_a_project() {
+    let c = case("code-cleanup");
+    let look = || {
+        call(
+            "top_dirs",
+            r#"{"under":"X:\\code","depth":3}"#,
+            Some("list"),
+        )
+    };
+    let target =
+        r#"{"paths":["X:\\code\\hoardini\\target"],"verdict":"safe","reason":"build output"}"#;
+    let s = score(
+        &c,
+        &[
+            turn("", vec![look()]),
+            turn(
+                "The target folders are build output.",
+                vec![call("propose_delete", target, None)],
+            ),
+        ],
+        None,
+        PROFILE,
+    );
+    assert_eq!(s.tool_score, 1.0);
+    assert_eq!(s.answer_score, Some(1.0));
+    assert!(s.violations.is_empty(), "{:?}", s.violations);
+
+    let ends = "ends with propose_delete|propose_archive|propose_compress|propose_dedupe";
+    let text_only = score(
+        &c,
+        &[
+            turn("", vec![look()]),
+            turn("You could delete the target folders.", vec![]),
+        ],
+        None,
+        PROFILE,
+    );
+    assert_eq!(text_only.tool_score, 0.5);
+    assert_eq!(text_only.missing, vec![ends]);
+    let refused = score(
+        &c,
+        &[turn(
+            "",
+            vec![
+                look(),
+                call(
+                    "propose_delete",
+                    target,
+                    Some("Error: every item is denied"),
+                ),
+            ],
+        )],
+        None,
+        PROFILE,
+    );
+    assert_eq!(refused.missing, vec![ends]);
+
+    let project = score(
+        &c,
+        &[turn(
+            "",
+            vec![
+                look(),
+                call("propose_delete", r#"{"paths":["X:\\code\\based"]}"#, None),
+            ],
+        )],
+        None,
+        PROFILE,
+    );
+    assert_eq!(
+        project.violations,
+        vec!["proposed a whole project or the code folder"]
+    );
+}
+
+// Traces: AGENT-EVAL-SCORING
+#[test]
 fn gate_names_every_failed_threshold() {
     let c = case("biggest-files");
     let good = score(
@@ -296,6 +396,14 @@ fn fixture_disk_has_the_shape_the_cases_ask_about() {
     );
     let target = fx.abs(r"code\hoardini\target");
     assert!(ch.grew.iter().any(|c| c.path.starts_with(&target)));
+
+    let asked = fx.question(r"What can I delete in C:\code?");
+    assert_eq!(asked, format!(r"What can I delete in {}code?", fx.root));
+    assert!(
+        index::node_by_path(&conn, &fx.abs("code"))
+            .unwrap()
+            .is_some()
+    );
 
     let iso = std::fs::read(fx.abs(r"~\Downloads\Win11_25H2_English_x64.iso")).unwrap();
     assert_eq!(&iso[0x8001..0x8006], b"CD001");

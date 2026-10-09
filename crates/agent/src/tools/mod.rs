@@ -43,11 +43,16 @@ pub struct ToolCtx {
     pub tool_call_id: String,
 }
 
+// Card payloads carry this version so the UI can tell an old stored shape from a new one.
+pub const DATA_VERSION: u64 = 1;
+
 #[derive(Debug)]
 pub enum Outcome {
     Text {
         content: String,
         custom: Vec<(String, Value)>,
+        // The UI's card payload; stored in `message.ui_json` and never sent to the model.
+        data: Option<Value>,
     },
     Proposal {
         proposal_id: String,
@@ -59,6 +64,20 @@ impl Outcome {
         Outcome::Text {
             content: util::cap(content.into()),
             custom: Vec::new(),
+            data: None,
+        }
+    }
+
+    pub fn with_data(self, data: Value) -> Outcome {
+        match self {
+            Outcome::Text {
+                content, custom, ..
+            } => Outcome::Text {
+                content,
+                custom,
+                data: Some(data),
+            },
+            other => other,
         }
     }
 }
@@ -104,6 +123,7 @@ registry! {
     duplicates => [Duplicates],
     estimate_compression => [EstimateCompression],
     web_search => [WebSearch],
+    suggest_next => [SuggestNext],
     propose => [ProposeDelete, ProposeArchive, ProposeCompress, ProposeDedupe],
 }
 

@@ -134,6 +134,8 @@ export const routes = {
     if (volume) q.set("volume", volume);
     return api<T.HistoryPoint[]>(`/api/history${q.size ? `?${q}` : ""}`);
   },
+  children: (path: string, limit = 50) => api<T.Children>(`/api/index/children?path=${enc(path)}&limit=${limit}`),
+  reveal: (path: string) => api<{ ok: true }>("/api/reveal", { body: { path } }),
   settings: () => api<T.Settings>("/api/settings"),
   putSettings: (s: Partial<Omit<T.Settings, "index_size_bytes">>) => put<T.Settings>("/api/settings", s),
 };

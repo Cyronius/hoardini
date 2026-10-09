@@ -8,14 +8,20 @@ import { SpinnerIcon, ToolIcon } from "./icons";
 
 const MIN_CHART_POINTS = 3;
 // Older results carry no drive; those charts follow the selected drive.
-const RANGE_RE = /^range_ms: (\d+)\.\.(\d+)(?: (.+?))?\s*$/m;
+export const RANGE_RE = /^range_ms: (\d+)\.\.(\d+)(?: (.+?))?\s*$/m;
 
-function ChangesChart({ result }: { result: string }) {
+export type ChartRange = { since: number; until: number; volume?: string };
+
+export function rangeFromText(result: string): ChartRange | null {
   const m = RANGE_RE.exec(result);
+  return m ? { since: Number(m[1]), until: Number(m[2]), volume: m[3] } : null;
+}
+
+export function ChangesChart({ range }: { range: ChartRange | null }) {
   const [points, setPoints] = useState<HistoryPoint[]>([]);
-  const since = m ? Number(m[1]) : null;
-  const until = m ? Number(m[2]) : null;
-  const volume = m?.[3];
+  const since = range?.since ?? null;
+  const until = range?.until ?? null;
+  const volume = range?.volume;
   useEffect(() => {
     if (since == null || until == null) return;
     let live = true;
@@ -105,7 +111,7 @@ export function ToolChip({ id, name, args, result }: { id: string; name: string;
   const shown = name === "changes" ? result.replace(RANGE_RE, "").trimEnd() : result;
   return (
     <>
-    {name === "changes" && done && <ChangesChart result={result} />}
+    {name === "changes" && done && <ChangesChart range={rangeFromText(result)} />}
     <details className="group my-1 rounded-xl border border-line-soft bg-ink-850/70">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1 text-[length:var(--fs-sm)] text-muted hover:text-paper">
         {done ? <ToolIcon /> : <SpinnerIcon />}

@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 
 use crate::state::{ApiError, ApiResult, AppState, blocking, parse};
 use crate::supervisor::index_speed;
-use crate::{builtin, providers, rclone, status, stream, volumes};
+use crate::{builtin, providers, rclone, status, stream, tree, volumes};
 
 pub struct Entry {
     pub method: &'static str,
@@ -85,6 +85,8 @@ fn entries() -> Vec<Entry> {
         get_("/api/volumes", volumes::list),
         put_("/api/volumes", volumes::put),
         get_("/api/index/summary", index_summary),
+        get_("/api/index/children", tree::children),
+        post_("/api/reveal", tree::reveal),
         post_("/api/agent/run", stream::agent_run),
         post_("/api/agent/runs/{run_id}/cancel", stream::cancel_run),
         get_("/api/thread", thread_get),

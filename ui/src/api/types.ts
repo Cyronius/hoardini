@@ -224,3 +224,51 @@ export type BuiltinView = {
   threads: number;
   context: number;
 };
+
+export type More = { count: number; bytes: number };
+export type FolderRow = { path: string; size: number; files: number; denied: boolean };
+export type FileRow = { path: string; size: number; modified_ms: number | null; accessed_ms: number | null };
+export type ChangeRow = { kind: "dir" | "file"; path: string; delta: number; before: number | null; after: number | null };
+export type FoldersData = { v: 1; kind: "folders"; under: string | null; depth: number; as_of_ms: number | null; items: FolderRow[]; more: More };
+export type FilesData = {
+  v: 1;
+  kind: "files";
+  filters: { under: string | null; min_size: number | null; ext: string | null; not_used_for_days: number | null };
+  as_of_ms: number | null;
+  items: FileRow[];
+  more: More;
+};
+export type ChangesData = {
+  v: 1;
+  kind: "changes";
+  volume: string;
+  from: { id: number; ms: number };
+  to: { id: number; ms: number };
+  free_delta: number | null;
+  indexed_delta: number;
+  free_before: number | null;
+  free_after: number | null;
+  grew: ChangeRow[];
+  new: ChangeRow[];
+  shrank: ChangeRow[];
+  removed: ChangeRow[];
+  omitted: { grew: number; new: number; shrank: number; removed: number };
+  range_ms: [number, number];
+};
+export type PillKind = "ask" | "clean_up";
+export type Pill = { label: string; kind: PillKind; path?: string };
+export type PillsData = { v: 1; kind: "pills"; items: Pill[] };
+export type CardData = FoldersData | FilesData | ChangesData;
+export type ToolData = CardData | PillsData;
+
+export type ChildRow = {
+  path: string;
+  name: string;
+  kind: "dir" | "file" | "link";
+  size: number;
+  files: number;
+  mtime_ms: number | null;
+  denied: boolean;
+  has_children: boolean;
+};
+export type Children = { path: string; size: number; files: number; children: ChildRow[]; small: More; more: More };

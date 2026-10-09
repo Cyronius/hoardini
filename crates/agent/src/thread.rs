@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use hoardini_core::paths::humanize_bytes;
@@ -8,7 +9,7 @@ use serde_json::Value;
 
 use crate::agui::{AgFunctionCall, AgMessage, AgToolCall};
 use crate::provider::{ChatMessage, ToolCallMsg};
-use crate::tools::util::redact_all;
+use crate::tools::util::{redact_all, redact_value};
 
 #[derive(Clone, Debug)]
 pub struct Stored {
@@ -93,6 +94,29 @@ pub fn replace(conn: &Connection, id: &str, msg: &ChatMessage) -> anyhow::Result
         params![id, serde_json::to_string(msg)?],
     )?;
     Ok(())
+}
+
+pub fn set_ui(conn: &Connection, id: &str, data: &Value) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE message SET ui_json = ?2 WHERE id = ?1",
+        params![id, data.to_string()],
+    )?;
+    Ok(())
+}
+
+fn ui_from(conn: &Connection, conv: &str, from_seq: i64) -> anyhow::Result<HashMap<String, Value>> {
+    let mut st = conn.prepare(
+        "SELECT id, ui_json FROM message WHERE conversation_id = ?1 AND seq >= ?2 AND ui_json IS NOT NULL",
+    )?;
+    let rows = st
+        .query_map(params![conv, from_seq], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, json)| serde_json::from_str(&json).ok().map(|v| (id, v)))
+        .collect())
 }
 
 fn query_stored(conn: &Connection, sql: &str, conv: &str) -> anyhow::Result<Vec<Stored>> {
@@ -645,7 +669,9 @@ pub fn agui_messages_from(
     profile: Option<&str>,
     from_seq: i64,
 ) -> anyhow::Result<Vec<AgMessage>> {
-    let stored = load_from(&db.conn()?, conv, from_seq)?;
+    let conn = db.conn()?;
+    let stored = load_from(&conn, conv, from_seq)?;
+    let mut ui = ui_from(&conn, conv, from_seq)?;
     let shown = |s: &str| match profile {
         Some(p) => redact_all(s, p),
         None => s.to_string(),
@@ -690,6 +716,10 @@ pub fn agui_messages_from(
             content,
             tool_calls: (!calls.is_empty()).then_some(calls),
             tool_call_id: m.tool_call_id.clone(),
+            data: ui.remove(&s.id).map(|v| match profile {
+                Some(p) => redact_value(&v, p),
+                None => v,
+            }),
         });
     }
     Ok(out)

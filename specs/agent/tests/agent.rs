@@ -9,7 +9,7 @@ use hoardini_agent::run::{IndexControl, OVERFLOW_MESSAGE};
 use hoardini_agent::thread::{self, NO_DECISION, Stored};
 use hoardini_agent::tools::util::{MAX_RESULT_CHARS, untrusted};
 use hoardini_agent::tools::{Kind, Outcome, Registry, ToolCtx, ToolError};
-use hoardini_core::index::{RefreshOptions, WinLister, normalize_path, refresh};
+use hoardini_core::index::{FakeFs, RefreshOptions, WinLister, normalize_path, refresh};
 use hoardini_core::memory::{self, Kind as MemKind, NewMemory, Scope};
 use hoardini_core::proposals;
 use hoardini_core::store::{now_ms, set_meta};
@@ -114,6 +114,10 @@ fn every_tool_leaves_the_filesystem_unchanged_and_propose_tools_only_create_pend
         ("duplicates", json!({"under": root, "min_size": "1 KB"})),
         ("estimate_compression", json!({"path": file})),
         ("web_search", json!({"query": "big.gguf"})),
+        (
+            "suggest_next",
+            json!({"items": [{"label": "Why is it big?", "kind": "ask"}]}),
+        ),
         (
             "propose_delete",
             json!({"paths": [file], "verdict": "redownload", "reason": "test"}),
@@ -709,6 +713,7 @@ async fn a_card_answered_after_its_turn_left_the_window_reaches_the_model_as_a_n
         content: Some(r#"{"approved":false}"#.into()),
         tool_calls: None,
         tool_call_id: Some("call_old".into()),
+        data: None,
     };
     h.run(h.provider(&mock.base_url), input("t-late", vec![answer]))
         .await;
@@ -755,6 +760,7 @@ async fn a_client_tool_answer_for_a_proposal_is_rewritten_from_the_proposal_row(
         ),
         tool_calls: None,
         tool_call_id: Some("call_p".into()),
+        data: None,
     };
     h.run(h.provider(&mock.base_url), input("t-prop", vec![answer]))
         .await;
@@ -921,6 +927,7 @@ async fn small_profiles_get_the_reduced_toolset_and_a_shorter_prompt() {
             "propose_delete",
             "recall",
             "remember",
+            "suggest_next",
             "top_dirs",
             "top_files"
         ]
@@ -1132,6 +1139,285 @@ async fn remember_with_user_asked_pins_the_note_and_the_chip_says_so() {
         .unwrap()
         .expect("memory row");
     assert!(m.pinned);
+}
+
+fn refresh_profile(h: &Harness, files: &[(&str, u64)], free: u64) {
+    let fs = FakeFs::new(FAKE_PROFILE);
+    fs.set_volume(2 << 40, free);
+    for (p, size) in files {
+        fs.file(p, *size);
+    }
+    let out = refresh(
+        &h.db.conn().unwrap(),
+        &fs,
+        FAKE_PROFILE,
+        &RefreshOptions::default(),
+    )
+    .unwrap();
+    assert!(out.completed);
+}
+
+// Traces: AGENT-TOOL-DATA
+#[tokio::test]
+async fn card_tools_send_their_data_to_the_ui_and_never_to_the_model() {
+    let h = Harness::new(Some(FAKE_PROFILE));
+    refresh_profile(
+        &h,
+        &[
+            (r"C:\Users\zq_owner\Games\a.pak", 2 * GIB),
+            (r"C:\Users\zq_owner\Models\m.gguf", 3 * GIB),
+        ],
+        64 * GIB,
+    );
+    refresh_profile(
+        &h,
+        &[
+            (r"C:\Users\zq_owner\Games\a.pak", 4 * GIB),
+            (r"C:\Users\zq_owner\Games\b.pak", 200 * MIB),
+            (r"C:\Users\zq_owner\New\n.bin", GIB),
+        ],
+        60 * GIB,
+    );
+    let mock = MockLlm::start(vec![
+        Turn::Calls(
+            None,
+            vec![
+                call("c1", "top_dirs", json!({"under": "~"})),
+                call("c2", "top_files", json!({"under": "~", "limit": 2})),
+                call("c3", "changes", json!({})),
+            ],
+        ),
+        Turn::Text("Games grew.".into()),
+    ])
+    .await;
+    let ev = h
+        .run(
+            h.provider(&mock.base_url),
+            user("t-data", "u1", "where did my space go?"),
+        )
+        .await;
+    assert_valid_sequence(&ev);
+    let sent = custom(&ev, "tool_data");
+    assert_eq!(sent.len(), 3);
+    for id in ["c1", "c2", "c3"] {
+        let result = ev
+            .iter()
+            .position(|e| e["type"] == "TOOL_CALL_RESULT" && e["toolCallId"] == id)
+            .unwrap();
+        let data = ev
+            .iter()
+            .position(|e| e["name"] == "tool_data" && e["value"]["tool_call_id"] == id)
+            .unwrap();
+        assert_eq!(data, result + 1, "tool_data for {id} follows its result");
+    }
+
+    let folders = &sent[0]["value"]["data"];
+    assert_eq!(folders["v"], 1);
+    assert_eq!(folders["kind"], "folders");
+    assert_eq!(folders["under"], "~");
+    assert_eq!(folders["depth"], 1);
+    assert!(folders["as_of_ms"].as_i64().unwrap() > 0);
+    assert_eq!(
+        folders["items"][0],
+        json!({"path": r"~\Games", "size": 4 * GIB + 200 * MIB, "files": 2, "denied": false})
+    );
+    assert_eq!(folders["items"][1]["path"], r"~\New");
+    assert_eq!(folders["more"], json!({"count": 0, "bytes": 0}));
+
+    let files = &sent[1]["value"]["data"];
+    assert_eq!(files["kind"], "files");
+    assert_eq!(files["filters"]["under"], "~");
+    assert_eq!(files["items"].as_array().unwrap().len(), 2);
+    assert_eq!(files["items"][0]["path"], r"~\Games\a.pak");
+    assert_eq!(files["items"][0]["size"], 4 * GIB);
+    assert!(files["items"][0]["modified_ms"].is_i64());
+    assert!(files["items"][0]["accessed_ms"].is_i64());
+    assert_eq!(files["more"], json!({"count": 1, "bytes": 200 * MIB}));
+
+    let ch = &sent[2]["value"]["data"];
+    assert_eq!(ch["kind"], "changes");
+    assert_eq!(ch["volume"], "~");
+    assert_eq!(ch["free_delta"], -4 * GIB as i64);
+    assert_eq!(ch["free_before"], 64 * GIB);
+    assert_eq!(ch["free_after"], 60 * GIB);
+    assert_eq!(ch["range_ms"], json!([ch["from"]["ms"], ch["to"]["ms"]]));
+    assert!(ch["from"]["id"].as_i64().unwrap() < ch["to"]["id"].as_i64().unwrap());
+    assert!(
+        ch["grew"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["path"] == r"~\Games\a.pak" && c["delta"] == 2 * GIB as i64)
+    );
+    assert!(
+        ch["new"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["path"] == r"~\New")
+    );
+    let gone = ch["removed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["path"] == r"~\Models")
+        .expect("removed folder");
+    assert_eq!(
+        gone,
+        &json!({"path": r"~\Models", "kind": "dir", "before": 3 * GIB, "after": null, "delta": -3 * GIB as i64})
+    );
+    assert!(!serde_json::to_string(&ev).unwrap().contains("zq_owner"));
+
+    let reqs = mock.requests();
+    assert_eq!(reqs.len(), 2);
+    for r in &reqs {
+        for marker in ["as_of_ms", "free_before", r#"\"kind\":\"folders\""#] {
+            assert!(!r.body.contains(marker), "{marker} reached the model");
+        }
+    }
+    assert!(tool_content(&reqs[1], "c1").starts_with(r"Largest folders under ~ (depth 1;"));
+    assert!(tool_content(&reqs[1], "c3").contains("range_ms: "));
+
+    let stored: i64 =
+        h.db.conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM message WHERE role = 'tool' AND ui_json IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+    assert_eq!(stored, 3);
+    let shown = thread::agui_messages(&h.db, "t-data", Some(FAKE_PROFILE)).unwrap();
+    let tool = shown
+        .iter()
+        .find(|m| m.tool_call_id.as_deref() == Some("c1"))
+        .unwrap();
+    let wire = serde_json::to_value(tool).unwrap();
+    assert_eq!(&wire["data"], folders);
+    assert!(
+        shown
+            .iter()
+            .filter(|m| m.role != "tool")
+            .all(|m| serde_json::to_value(m).unwrap().get("data").is_none())
+    );
+}
+
+// Traces: AGENT-SUGGEST-NEXT
+#[test]
+fn suggest_next_keeps_at_most_three_pills_whose_paths_are_in_the_index() {
+    let h = Harness::new(Some(FAKE_PROFILE));
+    h.index_fake(
+        FAKE_PROFILE,
+        &[
+            (r"C:\Users\zq_owner\code\big\x.bin", 2 * GIB),
+            (r"C:\Users\zq_owner\.cache\y.bin", GIB),
+        ],
+    );
+    let reg = Registry::full();
+    let args = json!({"items": [
+        {"label": "What is in big?", "kind": "ask", "path": r"~\code\big"},
+        {"label": "Clean up code", "kind": "clean_up", "path": r"~\code"},
+        {"label": "Clean up gone", "kind": "clean_up", "path": r"~\gone"},
+        {"label": "Explore the cache", "kind": "explore", "path": r"~\.cache"},
+        {"label": "Clean up code again", "kind": "clean_up", "path": r"~\CODE"},
+        {"label": "Clean up somewhere", "kind": "clean_up"},
+        {"label": "Why so big?", "kind": "ask"},
+        {"label": "One too many", "kind": "ask"},
+    ]});
+    let out = reg
+        .call(
+            &ctx(&h, FAKE_PROFILE, "c1"),
+            "suggest_next",
+            &args.to_string(),
+        )
+        .unwrap();
+    let Outcome::Text { content, data, .. } = out else {
+        panic!("suggest_next returned a proposal")
+    };
+    assert_eq!(
+        data.expect("pills"),
+        json!({"v": 1, "kind": "pills", "items": [
+            {"label": "What is in big?", "kind": "ask", "path": r"C:\Users\zq_owner\code\big"},
+            {"label": "Clean up code", "kind": "clean_up", "path": r"C:\Users\zq_owner\code"},
+            {"label": "Why so big?", "kind": "ask"},
+        ]})
+    );
+    for why in [
+        r"C:\Users\zq_owner\gone is not in the index",
+        r#"kind "explore" is not available"#,
+        "a duplicate",
+        "clean_up needs a path",
+        "only 3 are shown",
+    ] {
+        assert!(content.contains(why), "{why}: {content}");
+    }
+    let none = reg
+        .call(
+            &ctx(&h, FAKE_PROFILE, "c2"),
+            "suggest_next",
+            &json!({"items": [{"label": "Gone", "kind": "clean_up", "path": r"~\gone"}]})
+                .to_string(),
+        )
+        .unwrap();
+    let Outcome::Text { data, .. } = none else {
+        panic!("suggest_next returned a proposal")
+    };
+    assert!(data.is_none());
+}
+
+// Traces: AGENT-SUGGEST-NEXT, AGENT-TOOL-DATA
+#[tokio::test]
+async fn an_answer_ending_in_suggest_next_ends_the_run_and_its_pills_survive_a_reload() {
+    let h = Harness::new(Some(FAKE_PROFILE));
+    h.index_fake(
+        FAKE_PROFILE,
+        &[(r"C:\Users\zq_owner\code\big\x.bin", 2 * GIB)],
+    );
+    let pills =
+        json!({"items": [{"label": "Clean up code", "kind": "clean_up", "path": r"~\code"}]});
+    let mock = MockLlm::start(vec![
+        Turn::Calls(
+            Some("Most of it is code.".into()),
+            vec![call("c1", "suggest_next", pills.clone())],
+        ),
+        Turn::Calls(None, vec![call("c2", "suggest_next", pills)]),
+        Turn::Text("Anything else?".into()),
+    ])
+    .await;
+    let ev = h
+        .run(
+            h.provider(&mock.base_url),
+            user("t-pills", "u1", "where is my space?"),
+        )
+        .await;
+    assert_valid_sequence(&ev);
+    assert_eq!(types(&ev).last().unwrap(), "RUN_FINISHED");
+    assert_eq!(mock.requests().len(), 1, "no model round after the pills");
+    let sent = custom(&ev, "tool_data");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["value"]["tool_call_id"], "c1");
+    assert_eq!(sent[0]["value"]["data"]["items"][0]["path"], r"~\code");
+
+    let shown = thread::agui_messages(&h.db, "t-pills", Some(FAKE_PROFILE)).unwrap();
+    let tool = shown
+        .iter()
+        .find(|m| m.tool_call_id.as_deref() == Some("c1"))
+        .expect("stored result");
+    assert_eq!(
+        tool.data.as_ref().unwrap()["items"][0],
+        json!({"label": "Clean up code", "kind": "clean_up", "path": r"~\code"})
+    );
+
+    let ev = h
+        .run(h.provider(&mock.base_url), user("t-pills", "u2", "and?"))
+        .await;
+    assert_eq!(
+        mock.requests().len(),
+        3,
+        "pills without text let the model go on"
+    );
+    assert!(text_of(&ev).contains("Anything else?"));
 }
 
 // Traces: AGENT-TOOL-OUTPUT

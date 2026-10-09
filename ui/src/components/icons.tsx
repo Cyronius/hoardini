@@ -101,3 +101,9 @@ export const SpinnerIcon = ({ size = 12 }: { size?: number }) => (
     <path d="M12 3a9 9 0 1 0 9 9" />
   </svg>
 );
+export const ExplorerIcon = () => (
+  <Svg size={13}>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+    <path d="M10 14h6M13.5 11.5 16 14l-2.5 2.5" />
+  </Svg>
+);

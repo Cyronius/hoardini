@@ -1,5 +1,6 @@
 import type { RequestHandler } from "@itkennel/lm-ag-ui";
 import { readSse } from "../api/client";
+import type { ToolData } from "../api/types";
 import { useAiSetup } from "../aiSetup";
 import { useStore } from "../store";
 
@@ -39,6 +40,7 @@ function handle(data: string): void {
     case "CUSTOM": {
       const v = (ev.value ?? {}) as Record<string, unknown>;
       if (ev.name === "proposal" && typeof v.proposal_id === "string") void s.loadProposal(v.proposal_id);
+      else if (ev.name === "tool_data" && typeof v.tool_call_id === "string" && v.data) s.setToolData(v.tool_call_id, v.data as ToolData);
       else if (ev.name === "rate_limit_wait") useAiSetup.getState().setWait(Date.now() + Number(v.seconds) * 1000);
       else if (ev.name === "memory_noted" && typeof v.tool_call_id === "string") {
         s.noteMemory(v.tool_call_id, { memoryId: Number(v.memory_id), text: String(v.text ?? ""), pinned: v.pinned === true });

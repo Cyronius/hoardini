@@ -12,10 +12,12 @@ import { classifySettledTurn, describeRunError, isAbortError } from "../agent/ru
 import { isProposeTool } from "../agent/toolDefs";
 import { friendlyToolName, humanElapsed } from "../format";
 import { THREAD_ID, useStore } from "../store";
+import { FollowUps, followUps } from "./FollowUps";
 import { Greeting } from "./Greeting";
 import { EraserIcon, SendIcon, SpinnerIcon, StopIcon } from "./icons";
 import { IconButton } from "./IconButton";
 import { Markdown } from "./Markdown";
+import { ToolCard, isCardData } from "./ToolCards";
 import { ToolChip } from "./ToolChip";
 
 const sentToolIds = new Set<string>();
@@ -214,9 +216,12 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   const lastUserText = lastNonTool?.role === "user" && typeof lastNonTool.content === "string" ? lastNonTool.content : null;
 
   const callsBefore = useStore((s) => s.callsBefore);
+  const toolData = useStore((s) => s.toolData);
+  const ask = (text: string) => void sendText(text);
   const renderCall = (tc: ToolCallLike) => {
     const name = tc.function?.name ?? getToolNameFromCallId(tc.id);
     const tool = name ? toolDefs[name] : undefined;
+    const data = toolData[tc.id];
     let args: Record<string, unknown> = {};
     try {
       args = JSON.parse(tc.function?.arguments || "{}");
@@ -229,7 +234,9 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
       <div key={tc.id}>
         {tool?.renderer
           ? ((tool.renderer(args, result, () => {}, () => undefined, tool.configJson) as unknown as ReactNode) ?? null)
-          : name && <ToolChip id={tc.id} name={name} args={args} result={result} />}
+          : name && isCardData(data)
+            ? <ToolCard name={name} args={args} result={result} data={data} onAsk={ask} />
+            : name && <ToolChip id={tc.id} name={name} args={args} result={result} />}
       </div>
     );
   };
@@ -245,7 +252,11 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   }, [messages]);
 
   const renderMessage = (m: Message, key: string): ReactNode => {
-    const toolCalls = (m as unknown as { toolCalls?: ToolCallLike[] }).toolCalls;
+    // suggest_next shows as pills under the answer (UI-FOLLOW-UPS), not as a chip.
+    const toolCalls = (m as unknown as { toolCalls?: ToolCallLike[] }).toolCalls?.filter(
+      (tc) => (tc.function?.name ?? getToolNameFromCallId(tc.id)) !== "suggest_next",
+    );
+    if (m.role === "assistant" && !toolCalls?.length && !(typeof m.content === "string" && m.content.trim())) return null;
     if (m.role === "assistant" && toolCalls?.length) {
       const before = callsBefore[m.id] ?? [];
       return (
@@ -300,6 +311,15 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   }
   const boundaryAtEnd = boundaryDue || (!!meta?.has_hidden && meta.window_start_id == null);
 
+  // A card decision (a client "tool_" answer) starts a new answer just like a question does.
+  const asks = messages.map((m) => m.role === "user" || (m.role === "tool" && m.id.startsWith("tool_") && !m.id.startsWith("tool_result_")));
+  const turnData = messages
+    .slice(asks.lastIndexOf(true) + 1)
+    .flatMap((m) => (m as unknown as { toolCalls?: ToolCallLike[] }).toolCalls ?? [])
+    .map((tc) => toolData[tc.id])
+    .filter((d) => d != null);
+  const pills = !isStreaming && !waitingOnCard ? followUps(turnData) : [];
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
@@ -315,6 +335,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
             </div>
           )}
           {scrollback}
+          <FollowUps items={pills} onAsk={ask} disabled={!connected} />
           {isStreaming && <LiveActivity />}
           {isStreaming && currentMessage && (
             <div className="break-words leading-relaxed">

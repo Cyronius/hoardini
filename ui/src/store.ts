@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Message } from "@ag-ui/client";
 import { routes } from "./api/client";
-import type { IndexSummary, Job, Proposal, Status, StatusEvent, ThreadDetail } from "./api/types";
+import type { IndexSummary, Job, Proposal, Status, StatusEvent, ThreadDetail, ToolData } from "./api/types";
 import { saveThemePref, themePref } from "./theme";
 
 export type DrawerTab = "memory" | "destinations" | "providers" | "search" | "theme" | "settings";
@@ -17,6 +17,15 @@ interface NotedMemory {
 export const THREAD_ID = "main";
 
 export type ThreadMeta = Pick<ThreadDetail, "window_start_id" | "has_hidden" | "fresh" | "earlier" | "showing_all">;
+
+// Card payloads ride on stored tool messages (AGENT-TOOL-DATA); live ones arrive as `tool_data` events.
+const dataOf = (messages: unknown[]): Record<string, ToolData> => {
+  const out: Record<string, ToolData> = {};
+  for (const m of messages as { role?: string; toolCallId?: string; data?: ToolData }[]) {
+    if (m.role === "tool" && m.toolCallId && m.data) out[m.toolCallId] = m.data;
+  }
+  return out;
+};
 
 const metaOf = (d: ThreadDetail): ThreadMeta => ({
   window_start_id: d.window_start_id,
@@ -50,6 +59,7 @@ interface State {
   proposals: Record<string, Proposal>;
   noted: Record<string, NotedMemory>;
   toolTimes: Record<string, { start: number; end?: number }>;
+  toolData: Record<string, ToolData>;
   // lm-ag-ui folds a text-less tool round into the next text message; these calls came before that text.
   callsBefore: Record<string, string[]>;
 
@@ -64,6 +74,7 @@ interface State {
   noteMemory(toolCallId: string, n: NotedMemory): void;
   markToolStart(id: string): void;
   markToolEnd(id: string): void;
+  setToolData(toolCallId: string, data: ToolData): void;
   markCallsBefore(messageId: string, callIds: string[]): void;
   loadThread(all?: boolean): Promise<void>;
   refreshThreadMeta(): Promise<void>;
@@ -94,6 +105,7 @@ export const useStore = create<State>((set, get) => ({
   proposals: {},
   noted: {},
   toolTimes: {},
+  toolData: {},
   callsBefore: {},
 
   applyStatusEvent(e) {
@@ -143,6 +155,7 @@ export const useStore = create<State>((set, get) => ({
       const t = s.toolTimes[id];
       return t && !t.end ? { toolTimes: { ...s.toolTimes, [id]: { ...t, end: Date.now() } } } : s;
     }),
+  setToolData: (toolCallId, data) => set((s) => ({ toolData: { ...s.toolData, [toolCallId]: data } })),
   markCallsBefore: (messageId, callIds) => set((s) => ({ callsBefore: { ...s.callsBefore, [messageId]: callIds } })),
   async loadThread(all = false) {
     try {
@@ -153,6 +166,7 @@ export const useStore = create<State>((set, get) => ({
         seedMessages: d.messages as Message[],
         threadMeta: metaOf(d),
         proposals: { ...s.proposals, ...d.proposals },
+        toolData: { ...s.toolData, ...dataOf(d.messages) },
       }));
     } catch {
       // Offline: still open an empty chat so the composer works once the server is back.

@@ -405,6 +405,11 @@ impl Fixture {
         }
     }
 
+    // The fixture stands in for the system drive, so a question about C:\ is asked about its root.
+    pub fn question(&self, turn: &str) -> String {
+        turn.replace(r"C:\", &self.root)
+    }
+
     pub fn size_of(&self, db: &Db, rel: &str) -> Result<u64> {
         let conn = db.conn()?;
         Ok(index::node_by_path(&conn, &self.abs(rel))?

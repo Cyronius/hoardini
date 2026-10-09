@@ -2,7 +2,7 @@ import { fileName, humanAge, humanBytes } from "../format";
 import { useStore } from "../store";
 import { selectedVolume } from "./mascot/girth";
 
-const starter = "rounded-full border border-brass/40 bg-brass/10 px-3 py-1 text-[length:var(--fs-sm)] font-bold text-brass hover:bg-brass/20";
+export const starter = "rounded-full border border-brass/40 bg-brass/10 px-3 py-1 text-[length:var(--fs-sm)] font-bold text-brass hover:bg-brass/20";
 
 export function Greeting({ onAsk }: { onAsk: (text: string) => void }) {
   const summary = useStore((s) => s.summary);

@@ -245,30 +245,209 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
   return job;
 }
 
+// ---- Folder tree (GET /api/index/children) ----
+// Profile paths show as "~", as the real server sends them.
+type TreeNode = { path: string; name: string; kind: "dir" | "file"; size: number; files: number; mtime_ms: number; kids?: TreeNode[]; small?: { count: number; bytes: number } };
+const DAY = 86_400_000;
+const hash = (s: string) => [...s.toLowerCase()].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7);
+const join = (p: string, n: string) => (p.endsWith("\\") ? `${p}${n}` : `${p}\\${n}`);
+
+type Spec = [name: string, gb: number, kids?: Spec[]];
+function build(parent: string, [name, gb, kids]: Spec): TreeNode {
+  const path = parent === "" ? `${name}\\` : parent === "C:\\Users" && name === "josha" ? "~" : join(parent, name);
+  const isFile = /\.(gguf|bin|iso|safetensors|vhdx|mp4|sys|exe|zip)$/i.test(name) && !kids;
+  const node: TreeNode = { path, name, kind: isFile ? "file" : "dir", size: Math.round(gb * GB), files: isFile ? 1 : 0, mtime_ms: now() - (hash(path) % 300) * DAY };
+  if (kids) {
+    node.kids = kids.map((k) => build(path, k));
+    const rest = node.size - node.kids.reduce((a, k) => a + k.size, 0);
+    if (rest > 0) node.small = { count: 40 + (hash(path) % 900), bytes: rest };
+    node.files = node.kids.reduce((a, k) => a + k.files, 0) + (node.small?.count ?? 0);
+  } else if (!isFile) node.files = 20 + (hash(path) % 4000);
+  return node;
+}
+
+const smallRepos: Spec[] = Array.from({ length: 58 }, (_, i) => [`side-project-${String(i + 1).padStart(2, "0")}`, 0.5 - i * 0.007]);
+const tree = build("", [
+  "C:",
+  1844,
+  [
+    ["Users", 652, [["josha", 650, [[".lmstudio", 96.1, [["models", 95.4, [["llama-3.3-70b-Q4_K_M.gguf", 42.5], ["qwen3.8-27b-Q8_0.gguf", 27.1], ["gemma-4-12b-Q8_0.gguf", 12.4], ["mistral-small-24b-Q6_K.gguf", 9.9]]], ["cache", 0.6]]], ["AppData", 120, [["Local", 110, [["Docker", 40], ["Temp", 12, [["claude", 9.1]]], ["Microsoft", 21]]], ["Roaming", 9]]], [".cache", 48, [["huggingface", 31], ["pip", 6.2], ["uv", 4.6]]], ["Downloads", 31], ["Documents", 22]]]]],
+    ["code", 312, [["covenant-agent", 161, [["target", 98], ["data", 41], ["models", 17], ["node_modules", 3.2], ["src", 0.4]]], ["hoardini", 58, [["target", 52], ["ui", 4.1]]], ["llama.cpp", 31], ["based", 22], ["lm-admin", 14], ...smallRepos]],
+    ["Games", 160],
+    ["Program Files", 88],
+    ["Windows", 41],
+    ["ProgramData", 19],
+    ["$WINDOWS.~BT", 9.2],
+    ["NVIDIA", 3.1],
+    ["Intel", 1.2],
+    ["PerfLogs", 0.1],
+  ],
+]);
+
+const NAMES = ["cache", "data", "build", "models", "packages", "logs", "assets", "lib", "bin", "backup", "tmp", "src"];
+// Folders the tree above leaves open get made-up contents, so ▸ always goes deeper.
+function grow(n: TreeNode): void {
+  if (n.kids || n.kind === "file") return;
+  const h = hash(n.path);
+  if (n.size < 64 * MB) {
+    n.small = { count: n.files, bytes: n.size };
+    n.kids = [];
+    return;
+  }
+  const k = 3 + (h % 5);
+  let left = n.size * 0.9;
+  n.kids = Array.from({ length: k }, (_, i) => {
+    const size = Math.round(i === k - 1 ? left : left * (0.45 + ((h >> i) % 20) / 100));
+    left -= size;
+    const name = i === 0 && n.size < 4 * GB ? `${NAMES[h % NAMES.length]}-${i}.bin` : `${NAMES[(h + i) % NAMES.length]}${i > 3 ? `-${i}` : ""}`;
+    const isFile = name.endsWith(".bin");
+    return { path: join(n.path, name), name, kind: isFile ? "file" : "dir", size, files: isFile ? 1 : 10 + ((h >> i) % 3000), mtime_ms: now() - ((h >> i) % 200) * DAY };
+  });
+  n.small = { count: 30 + (h % 500), bytes: Math.round(n.size * 0.1) };
+}
+
+const norm = (p: string) => p.trim().replace(/\//g, "\\").replace(/^C:\\Users\\josha(?=\\|$)/i, "~").replace(/\\+$/, "").toLowerCase();
+
+function findNode(path: string): TreeNode | null {
+  const want = norm(path);
+  const walk = (n: TreeNode): TreeNode | null => {
+    if (norm(n.path) === want) return n;
+    grow(n);
+    for (const k of n.kids ?? []) {
+      const p = norm(k.path);
+      if (want === p || want.startsWith(`${p}\\`)) return walk(k);
+    }
+    return null;
+  };
+  const profile = tree.kids!.find((k) => k.name === "Users")!.kids!.find((k) => k.path === "~")!;
+  return walk(want === "~" || want.startsWith("~\\") ? profile : tree);
+}
+
+function childrenOf(path: string, limit: number) {
+  const n = findNode(path);
+  if (!n) return null;
+  grow(n);
+  const kids = [...(n.kids ?? [])].sort((a, b) => b.size - a.size || a.name.localeCompare(b.name));
+  const rows = kids.slice(0, limit).map((k) => ({ path: k.path, name: k.name, kind: k.kind, size: k.size, files: k.files, mtime_ms: k.mtime_ms, denied: false, has_children: k.kind === "dir" }));
+  const rest = kids.slice(limit);
+  return { path: n.path, size: n.size, files: n.files, children: rows, small: n.small ?? { count: 0, bytes: 0 }, more: { count: rest.length, bytes: rest.reduce((a, k) => a + k.size, 0) } };
+}
+
+const revealed: string[] = [];
+
 // ---- AG-UI run ----
 const enc = new TextEncoder();
 type Sse = { send: (e: Record<string, unknown>) => void; closed: () => boolean };
+type Stored = { id: string } & Record<string, unknown>;
 
 async function say(s: Sse, text: string) {
   const messageId = uuid();
   s.send({ type: "TEXT_MESSAGE_START", messageId, role: "assistant" });
   for (const chunk of text.match(/[\s\S]{1,18}(\s|$)/g) ?? [text]) {
-    if (s.closed()) return;
+    if (s.closed()) return messageId;
     s.send({ type: "TEXT_MESSAGE_CONTENT", messageId, delta: chunk });
     await sleep(35);
   }
   s.send({ type: "TEXT_MESSAGE_END", messageId });
+  thread.messages.push({ id: messageId, role: "assistant", content: text });
+  return messageId;
 }
 
-async function readTool(s: Sse, name: string, args: unknown, result: string, ms = 600) {
+// Like the server: the call joins the text message it follows, and its card data comes right after the result.
+async function readTool(s: Sse, name: string, args: unknown, result: string, ms = 600, data?: unknown, parent?: string) {
   const toolCallId = uuid();
-  const parentMessageId = uuid();
+  const parentMessageId = parent ?? uuid();
   s.send({ type: "TOOL_CALL_START", toolCallId, toolCallName: name, parentMessageId });
   s.send({ type: "TOOL_CALL_ARGS", toolCallId, delta: JSON.stringify(args) });
   s.send({ type: "TOOL_CALL_END", toolCallId });
   await sleep(ms);
-  s.send({ type: "TOOL_CALL_RESULT", messageId: uuid(), toolCallId, content: result, role: "tool" });
+  const resultId = uuid();
+  s.send({ type: "TOOL_CALL_RESULT", messageId: resultId, toolCallId, content: result, role: "tool" });
+  if (data) s.send({ type: "CUSTOM", name: "tool_data", value: { tool_call_id: toolCallId, data } });
+  const call = { id: toolCallId, type: "function", function: { name, arguments: JSON.stringify(args) } };
+  const host = parent ? (thread.messages.find((m) => m.id === parent) as Stored | undefined) : undefined;
+  if (host) host.toolCalls = [...((host.toolCalls as unknown[]) ?? []), call];
+  else thread.messages.push({ id: parentMessageId, role: "assistant", content: "", toolCalls: [call] });
+  thread.messages.push({ id: resultId, role: "tool", content: result, toolCallId, ...(data ? { data } : {}) });
   return toolCallId;
+}
+
+const folderData = (under: string | null, depth = 1, limit = 15) => {
+  const n = findNode(under ?? "C:\\");
+  grow(n!);
+  const kids = [...(n!.kids ?? [])].filter((k) => k.kind === "dir").sort((a, b) => b.size - a.size);
+  const rest = kids.slice(limit);
+  return {
+    v: 1,
+    kind: "folders",
+    under,
+    depth,
+    as_of_ms: status.index.last_refresh_ms,
+    items: kids.slice(0, limit).map((k) => ({ path: k.path, size: k.size, files: k.files, denied: k.name === "Windows" })),
+    more: { count: rest.length, bytes: rest.reduce((a, k) => a + k.size, 0) },
+  };
+};
+const folderText = (d: ReturnType<typeof folderData>) =>
+  `Largest folders under ${d.under ?? "the indexed volumes"} (depth ${d.depth}; index as of 3 days ago):\n${d.items.map((i) => `- ${i.path} | ${(i.size / GB).toFixed(1)} GB | ${i.files} files`).join("\n")}`;
+
+function filesData() {
+  const files = [
+    ["~\\.lmstudio\\models\\llama-3.3-70b-Q4_K_M.gguf", 42.5, 74],
+    ["~\\.lmstudio\\models\\qwen3.8-27b-Q8_0.gguf", 27.1, 160],
+    ["~\\AppData\\Local\\Docker\\wsl\\disk\\docker_data.vhdx", 21.3, 0],
+    ["C:\\pagefile.sys", 16, 0],
+    ["C:\\hiberfil.sys", 12.7, 0],
+    ["~\\.lmstudio\\models\\gemma-4-12b-Q8_0.gguf", 12.4, 150],
+    ["~\\.lmstudio\\models\\mistral-small-24b-Q6_K.gguf", 9.9, 180],
+    ["~\\Downloads\\Win11_25H2_English_x64.iso", 7, 200],
+    ["C:\\code\\covenant-agent\\models\\encoder.safetensors", 6.5, 33],
+    ["~\\Downloads\\ubuntu-24.04.3-desktop-amd64.iso", 5.9, 150],
+    ["~\\Documents\\Videos\\wedding-2019.mp4", 4.2, 900],
+    ["C:\\code\\hoardini\\target\\debug\\incremental\\query-cache.bin", 4.2, 1],
+  ] as const;
+  return {
+    v: 1,
+    kind: "files",
+    filters: { under: null, min_size: null, ext: null, not_used_for_days: null },
+    as_of_ms: status.index.last_refresh_ms,
+    items: files.map(([path, gb, days]) => ({ path, size: Math.round(gb * GB), modified_ms: now() - days * DAY, accessed_ms: now() - Math.min(days, 30) * DAY })),
+    more: { count: 3184, bytes: Math.round(212 * GB) },
+  };
+}
+
+function changesData() {
+  const from = new Date();
+  from.setHours(14, 14, 0, 0);
+  if (from.getTime() > now()) from.setTime(now() - 3 * 3_600_000);
+  const c = (kind: "dir" | "file", path: string, before: number | null, after: number | null) => ({
+    kind,
+    path,
+    before: before == null ? null : Math.round(before * GB),
+    after: after == null ? null : Math.round(after * GB),
+    delta: Math.round(((after ?? 0) - (before ?? 0)) * GB),
+  });
+  return {
+    v: 1,
+    kind: "changes",
+    volume: "C:\\",
+    from: { id: 41, ms: from.getTime() },
+    to: { id: 42, ms: now() - 5 * 60_000 },
+    free_delta: Math.round(127 * GB),
+    indexed_delta: Math.round(-129.5 * GB),
+    free_before: Math.max(0, selectedDrive().free_bytes - Math.round(127 * GB)),
+    free_after: selectedDrive().free_bytes,
+    grew: [c("dir", "C:\\code\\covenant-agent\\data", 36.9, 41), c("dir", "~\\AppData\\Local\\Docker", 38.2, 40)],
+    new: [c("file", "~\\Downloads\\proxmox-ve_9.0-1.iso", null, 1.4)],
+    shrank: [c("dir", "C:\\", 1973.5, 1844), c("dir", "~\\.cache", 68, 48), c("dir", "~\\.lmstudio\\models", 107.4, 95.4)],
+    removed: [c("dir", "~\\AppData\\Local\\Temp\\claude\\scratch", 92, null), c("dir", "~\\.cache\\huggingface\\hub\\models--meta-llama--Llama-3.1-8B", 15.1, null), c("file", "~\\.lmstudio\\models\\deepseek-r1-32b-Q4_K_M.gguf", 12, null)],
+    omitted: { grew: 0, new: 2, shrank: 1, removed: 0 },
+    range_ms: [from.getTime(), now() - 5 * 60_000],
+  };
+}
+
+async function suggest(s: Sse, parent: string, items: { label: string; kind: "ask" | "clean_up"; path?: string }[]) {
+  const kept = items.filter((p) => !p.path || findNode(p.path));
+  await readTool(s, "suggest_next", { items }, `Shown under your answer: ${kept.map((p) => JSON.stringify(p.label)).join(", ")}.`, 150, kept.length ? { v: 1, kind: "pills", items: kept } : undefined, parent);
 }
 
 async function agentRun(input: { runId: string; messages: { id?: string; role: string; content?: unknown }[] }, s: Sse) {
@@ -298,9 +477,40 @@ async function agentRun(input: { runId: string; messages: { id?: string; role: s
         const toolCallId = await readTool(s, "remember", { scope: "global", kind: "preference", text }, JSON.stringify({ id: ++memSeq }), 300);
         memories.push({ id: memSeq, scope: "global", key: "", kind: "preference", text: text.replace(/^remember( that)?/i, "").trim() || text, source: "chat", confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null, pinned: false, last_used_ms: now(), forgotten_ms: null });
         s.send({ type: "CUSTOM", name: "memory_noted", value: { memory_id: memSeq, text: text.replace(/^remember( that)?/i, "").trim() || text, tool_call_id: toolCallId, pinned: false } });
+      } else if (/hotspot|where .*space|taking up/i.test(text)) {
+        const folders = folderData(null);
+        await readTool(s, "top_dirs", {}, folderText(folders), 500, folders);
+        await readTool(s, "changes", { since: "previous" }, "C:\\: refresh #41 -> #42. Free space +127.0 GB.\nrange_ms: 0..0 C:\\", 500, changesData());
+        const id = await say(s, "Most of the change is the Claude scratch folder in Temp going away. `C:\\code` still holds 312 GB, most of it in covenant-agent.");
+        await suggest(s, id, [
+          { label: "What's in covenant-agent?", kind: "ask", path: "C:\\code\\covenant-agent" },
+          { label: "Clean up C:\\code", kind: "clean_up", path: "C:\\code" },
+          { label: "Explain a gone folder", kind: "ask", path: "C:\\nope" },
+        ]);
+      } else if (/biggest files|largest files/i.test(text)) {
+        const files = filesData();
+        await readTool(s, "top_files", { limit: 12 }, files.items.map((f) => `- ${f.path}`).join("\n"), 500, files);
+        const id = await say(s, "Model files lead, then the Docker disk and the page file.");
+        await suggest(s, id, [{ label: "Which models haven't I used lately?", kind: "ask" }]);
+      } else if (/over time|free space changed/i.test(text)) {
+        await readTool(s, "changes", { since: "30d" }, "C:\\: refresh #28 -> #42.\nrange_ms: 0..0 C:\\", 500, changesData());
+        await say(s, "Free space has trended down, with a jump today when the Temp scratch folder went.");
+      } else if (/^what's inside (.+)\?$|^what can i clean up in (.+)\?$/i.test(text)) {
+        const m = /^what's inside (.+)\?$|^what can i clean up in (.+)\?$/i.exec(text)!;
+        const path = (m[1] ?? m[2])!;
+        const folders = findNode(path) ? folderData(path) : null;
+        if (folders) await readTool(s, "top_dirs", { under: path }, folderText(folders), 400, folders);
+        const id = await say(s, folders ? `Here is what is inside \`${path}\`.` : `\`${path}\` is not in the index.`);
+        if (folders?.items[0]) await suggest(s, id, [{ label: `Clean up ${folders.items[0].path}`, kind: "clean_up", path: folders.items[0].path }]);
+      } else if (/^what is (.+) and is it safe to remove\?$/i.test(text)) {
+        const path = /^what is (.+) and is it safe to remove\?$/i.exec(text)![1]!;
+        await readTool(s, "inspect", { path }, `${path}: build output and caches; nothing the user made.`, 400);
+        const id = await say(s, `\`${path}\` is mostly build output that comes back on the next build, so it is safe to remove.`);
+        await suggest(s, id, [{ label: `Clean up ${path}`, kind: "clean_up", path }]);
       } else {
-        await say(s, "Let me look at what is in `~\\.lmstudio`.\n\n");
-        await readTool(s, "top_dirs", { under: "~\\.lmstudio", depth: 2, limit: 10 }, "~\\.lmstudio 96.1 GB\n  models 95.4 GB (9 files)\n  cache 0.6 GB", 700);
+        const id = await say(s, "Let me look at what is in `~\\.lmstudio`.\n\n");
+        const lm = folderData("~\\.lmstudio");
+        await readTool(s, "top_dirs", { under: "~\\.lmstudio", depth: 2, limit: 10 }, "~\\.lmstudio 96.1 GB\n  models 95.4 GB (9 files)\n  cache 0.6 GB", 700, lm, id);
         await readTool(s, "inspect", { path: "~\\.lmstudio\\models\\llama-3.3-70b-Q4_K_M.gguf" }, "GGUF llama 70B Q4_K_M, 42.5 GB, last access 74 days ago (medium confidence), public on Hugging Face.", 900);
         await say(s, "**9 models, 96 GB.** On Sep 12 you said to keep Qwen3.8 27B, so I left it out. Two others have not been opened in a while:\n\n- `llama-3.3-70b` (42.5 GB), 74 days since last access\n- `mistral-small-24b` (9.9 GB), 12 days\n\nHere is a plan. Nothing happens until you approve it.\n\n");
         const kind: T.ProposalKind = /archive|nas/i.test(text) ? "archive" : "delete";
@@ -369,6 +579,7 @@ async function route(req: Request): Promise<Response> {
 
   switch (seg[0]) {
     case "mock": {
+      if (seg[1] === "revealed") return json(revealed);
       const b = await body<{ fill?: number; running_runs?: number; idle?: boolean; next_job?: NextJob }>();
       if (b.next_job) nextJob = b.next_job;
       if (b.fill != null) setFill(b.fill);
@@ -379,8 +590,24 @@ async function route(req: Request): Promise<Response> {
     }
     case "status":
       return json(status);
+    case "reveal": {
+      const { path: p } = await body<{ path?: string }>();
+      if (!p?.trim()) return err("path is required");
+      if (!findNode(p)) return err(`${p} not found`, 404);
+      revealed.push(p);
+      console.log(`reveal ${p}`);
+      return json({ ok: true });
+    }
     case "index":
       if (seg[1] === "summary") return json(summary);
+      if (seg[1] === "children") {
+        const p = url.searchParams.get("path");
+        if (!p?.trim()) return err("path is required");
+        const page = childrenOf(p, Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") ?? 50))));
+        if (!page) return err(`${p} in the index not found`, 404);
+        if (findNode(p)!.kind === "file") return err(`${p} is not a folder`);
+        return json(page);
+      }
       if (seg[1] === "refresh") {
         if (status.index.state !== "idle") return json({ started: false });
         startRefresh(settings.index_speed === "fast" ? "fast" : "background");
