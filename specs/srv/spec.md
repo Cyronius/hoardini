@@ -142,10 +142,11 @@ The conversation routes are:
 **Applies to:** hoardini-server
 **Verification:** test
 
-`/api/memory` lists, creates (source `user`), searches (`?q=`, full-text), updates, and deletes memories; unknown ids answer 404.
+`/api/memory` lists, creates (source `user`), searches (`?q=`, full-text), updates, and deletes memories; unknown ids answer 404. Each row carries `detail` (MEM model): null for notes, the object for location and file-type rows.
 
 **Acceptance criteria:**
 - Create → list shows it → `?q=` finds it, an unrelated query finds nothing → `PUT` changes text and kind → `DELETE` → list empty; `PUT`/`DELETE` of a missing id → 404.
+- The created note's `detail` is null; a file-type row written for `q4nx` lists with `detail.category` `model-weights` and `detail.app` `FastFlowLM`.
 
 ### SRV-STATUS-STREAM: Status stream
 **Applies to:** hoardini-server

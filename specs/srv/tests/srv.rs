@@ -458,6 +458,25 @@ async fn memory_crud_and_search() {
     );
     let (_, all) = f.call("GET", "/api/memory", None).await;
     assert!(all.as_array().unwrap().is_empty());
+
+    assert!(m["detail"].is_null(), "{m}");
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    hoardini_core::memory::knowledge::remember_filetype(
+        &db.conn().unwrap(),
+        "q4nx",
+        ".q4nx: FastFlowLM NPU model weights.",
+        "user",
+        hoardini_core::memory::Detail {
+            category: "model-weights".into(),
+            app: Some("FastFlowLM".into()),
+            ..Default::default()
+        },
+        1,
+    )
+    .unwrap();
+    let (_, all) = f.call("GET", "/api/memory", None).await;
+    assert_eq!(all[0]["detail"]["category"], "model-weights", "{all}");
+    assert_eq!(all[0]["detail"]["app"], "FastFlowLM");
     let _ = f.h.shutdown.send(());
 }
 

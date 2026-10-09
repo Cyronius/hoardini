@@ -94,6 +94,22 @@ export type Memory = {
   pinned: boolean;
   last_used_ms: number | null;
   forgotten_ms: number | null;
+  detail?: MemoryDetail | null;
+};
+// Location and file-type rows (MEM-LOCATION, MEM-FILETYPE); absent fields mean empty.
+export type MemoryDetail = {
+  category?: string;
+  label?: string;
+  verdict?: Verdict;
+  actions?: ("delete" | "dedupe" | "archive" | "compress")[];
+  app?: string;
+  use?: string;
+  copy_hint?: string;
+  size_at?: number;
+  assessed_ms?: number;
+  by?: string;
+  cleaned?: unknown[];
+  kept?: unknown[];
 };
 export type MemoryInput = Partial<Pick<Memory, "scope" | "key" | "kind" | "text" | "pinned">>;
 

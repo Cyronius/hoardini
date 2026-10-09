@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { routes } from "../api/client";
-import type { Memory } from "../api/types";
+import type { Memory, MemoryDetail } from "../api/types";
 import { humanAge } from "../format";
 import { EditIcon, PlusIcon, TrashIcon } from "../components/icons";
 import { IconButton } from "../components/IconButton";
@@ -21,6 +21,20 @@ function PinIcon({ filled }: { filled: boolean }) {
     <svg width={16} height={16} viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 17v5M9 3h6l-1 7 3 3v2H7v-2l3-3Z" />
     </svg>
+  );
+}
+
+function DetailChips({ d }: { d: MemoryDetail }) {
+  const what = d.label ?? d.app ?? d.category;
+  return (
+    <>
+      {what && (
+        <span className="rounded-full bg-ink-800 px-2 py-px text-paper-dim" title={d.category ? `Category: ${d.category}` : undefined}>
+          {what}
+        </span>
+      )}
+      {d.verdict && <span className="rounded-full border border-brass/40 px-2 py-px text-brass">{d.verdict}</span>}
+    </>
   );
 }
 
@@ -199,6 +213,7 @@ export function MemoryTab() {
                   <div className="flex flex-wrap items-center gap-1.5 text-[length:var(--fs-xs)]">
                     <span className="rounded-full bg-ink-800 px-2 py-px font-bold text-paper-dim">{m.kind}</span>
                     <span className="rounded-full bg-ink-800 px-2 py-px text-muted">{m.scope}</span>
+                    {m.detail && <DetailChips d={m.detail} />}
                     {m.key && (
                       <span className="min-w-0 truncate font-mono text-muted" title={m.key}>
                         {m.key}
