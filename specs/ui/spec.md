@@ -78,3 +78,32 @@ The header mascot is a sumo wrestler whose body girth tracks the used fraction (
 4. Post `{"fill":0.6}`; confirm he slims back down, and that 90% looks visibly chubbier than 60%.
 5. Post `{"running_runs":1}`; confirm he alternately lifts and stomps left then right, with dust at each stomp. Post `{"running_runs":0}` to stop.
 6. Enable reduced motion in the OS or browser; confirm no looping animation.
+
+### UI-THEME-CONTRAST: Every theme is readable
+**Applies to:** hoardini
+**Verification:** test
+
+Every theme shall meet WCAG 2.x contrast for its own tokens. The on-accent color (text on accent-colored buttons and pills) is whichever of the theme's bg0 or text contrasts more with its accent.
+
+**Acceptance criteria:**
+- `text` and `textDim` on each of bg0, bg1, and bg2 → ratio ≥ 4.5
+- `muted` on bg1 → ratio ≥ 4.5
+- `faint` on bg1 → ratio ≥ 3
+- on-accent on `accent` → ratio ≥ 4.5
+- `themeVars()` sets `--color-on-accent` to that computed color
+
+Test: `specs/ui/tests/theme-contrast.test.ts`.
+
+### UI-THEME-TAB: Theme tab with group-first picker
+**Applies to:** hoardini
+**Verification:** manual
+
+The drawer has its own Theme tab. "Follow system" sits above a Dark / Midtone / Light switch, and only the chosen group's swatches show. The tab opens on the active theme's group (tone is checked before mode, so Kraft and Sage Chalk are Midtone). Following the system picks Marshmallow or Marshmallow Night and never a midtone. A pick applies instantly with no Save button and survives a reload. All theme fonts are bundled, so switching themes makes no network request.
+
+**Verification (manual):**
+1. In `ui/`, run `bun run dev --port 52xx --strictPort` against a mock or scratch-data server; open the Theme tab.
+2. Confirm the Dark / Midtone / Light switch shows first, the tab opens on the active theme's group, and each group lists only its own swatches (Midtone has 22, Tater Dog is under Light).
+3. Click a swatch: the UI retints at once and no Save button exists. Reload: the same theme is active and its group is open.
+4. Pick Kraft: it is listed under Midtone. Pick Follow system: the active theme is Marshmallow or Marshmallow Night per the OS setting.
+5. With the Network panel open (cache disabled), pick a theme with a non-default font (for example Space Grotesk): font files load only from the app's own origin, and none from another host.
+6. On Rosewood, an accent-filled button or pill shows readable text.
