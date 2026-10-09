@@ -1365,3 +1365,123 @@ async fn an_unplugged_drive_is_skipped_and_keeps_its_index() {
     );
     let _ = f.h.shutdown.send(());
 }
+
+async fn next_frame(resp: &mut reqwest::Response, buf: &mut String) -> Value {
+    loop {
+        if let Some(end) = buf.find("\n\n") {
+            let frame: String = buf.drain(..end + 2).collect();
+            if let Some(data) = frame.trim().strip_prefix("data: ") {
+                return serde_json::from_str(data).unwrap();
+            }
+            continue;
+        }
+        let chunk = tokio::time::timeout(Duration::from_secs(30), resp.chunk())
+            .await
+            .expect("a frame within 30 s")
+            .unwrap()
+            .expect("the stream stays open");
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+    }
+}
+
+// Traces: ACT-FOLLOW-UP, POLICY-DEFAULT-TICK, POLICY-ITEM-MEMORY
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_job_links_its_follow_up_before_the_stream_reports_it() {
+    use hoardini_core::proposals::{self, NewItem, NewProposal, ProposalKind};
+    let f = Fixture::new().await;
+    let work = f.dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let go = work.join("go.bin");
+    let stay = work.join("stay.bin");
+    std::fs::write(&go, vec![1u8; 8192]).unwrap();
+    std::fs::write(&stay, vec![2u8; 8192]).unwrap();
+    let work_s = work.to_string_lossy().into_owned();
+    let (st, _) = f
+        .call(
+            "POST",
+            "/api/memory",
+            Some(json!({"scope": "path", "key": work_s, "kind": "fact", "text": "scratch is disposable"})),
+        )
+        .await;
+    assert_eq!(st, 200);
+
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let item = |p: &Path| NewItem {
+        path: p.to_string_lossy().into_owned(),
+        verdict: None,
+        reason: Some("test".into()),
+    };
+    let p = proposals::create(
+        &db,
+        NewProposal {
+            conversation_id: Some("main".into()),
+            tool_call_id: None,
+            kind: ProposalKind::Delete,
+            destination_id: None,
+            format: None,
+            dedupe: None,
+            summary: "two files".into(),
+            items: vec![item(&go), item(&stay)],
+        },
+    )
+    .unwrap();
+
+    let (_, v) = f
+        .call("GET", &format!("/api/proposals/{}", p.id), None)
+        .await;
+    assert_eq!(v["parent_id"], Value::Null);
+    assert_eq!(v["follow_up_id"], Value::Null);
+    for it in v["items"].as_array().unwrap() {
+        assert_eq!(it["small"], false, "{it}");
+        assert_eq!(it["selected"], false, "no verdict starts unticked: {it}");
+        assert_eq!(it["memory_note"], "scratch is disposable", "{it}");
+    }
+
+    let mut stream = f.stream().await;
+    let mut buf = String::new();
+    let go_id = p
+        .items
+        .iter()
+        .find(|i| i.path.ends_with("go.bin"))
+        .unwrap()
+        .id;
+    let (st, r) = f
+        .call(
+            "POST",
+            &format!("/api/proposals/{}/approve", p.id),
+            Some(json!({"item_ids": [go_id]})),
+        )
+        .await;
+    assert_eq!(st, 200, "{r}");
+    let job_id = r["job_id"].as_str().unwrap().to_string();
+    loop {
+        let fr = next_frame(&mut stream, &mut buf).await;
+        if fr["type"] == "job"
+            && fr["id"] == job_id.as_str()
+            && matches!(fr["status"].as_str(), Some("done" | "failed" | "cancelled"))
+        {
+            break;
+        }
+    }
+    let (_, parent) = f
+        .call("GET", &format!("/api/proposals/{}", p.id), None)
+        .await;
+    let fid = parent["follow_up_id"]
+        .as_str()
+        .expect("the follow-up exists when the job's end is streamed")
+        .to_string();
+    let (_, child) = f.call("GET", &format!("/api/proposals/{fid}"), None).await;
+    assert_eq!(child["parent_id"], p.id.as_str());
+    assert_eq!(child["follow_up_id"], Value::Null);
+    let items = child["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert!(items[0]["path"].as_str().unwrap().ends_with("stay.bin"));
+    assert_eq!(items[0]["selected"], false);
+    assert_eq!(items[0]["memory_note"], "scratch is disposable");
+
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["proposals"][&p.id]["follow_up_id"], fid.as_str());
+    assert_eq!(t["proposals"][&fid]["parent_id"], p.id.as_str());
+    drop(stream);
+    let _ = f.h.shutdown.send(());
+}

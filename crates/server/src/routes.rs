@@ -228,6 +228,7 @@ fn display_proposal(mut p: Proposal) -> Value {
         it.detail = it.detail.as_deref().map(redact);
         it.reason = it.reason.as_deref().map(redact);
         it.block_reason = it.block_reason.as_deref().map(redact);
+        it.memory_note = it.memory_note.as_deref().map(redact);
     }
     let mut v = serde_json::to_value(&p).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {

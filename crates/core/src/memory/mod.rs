@@ -423,6 +423,21 @@ pub fn protect_covering_with(
     Ok(found)
 }
 
+// Unlike recall_path, only the note a card shows counts as used.
+pub fn note_covering_with(
+    conn: &Connection,
+    abs_path: &str,
+    profile: &str,
+) -> anyhow::Result<Option<Memory>> {
+    let found = covering(conn, abs_path, profile)?
+        .into_iter()
+        .find(|m| m.kind != Kind::Protect);
+    if let Some(m) = &found {
+        touch(conn, [m.id], now_ms())?;
+    }
+    Ok(found)
+}
+
 // Free text becomes quoted OR-ed prefix terms so FTS5 operators in user input cannot raise syntax errors.
 pub fn fts_query(q: &str) -> Option<String> {
     let terms: Vec<String> = q

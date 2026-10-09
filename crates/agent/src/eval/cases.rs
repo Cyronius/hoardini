@@ -235,6 +235,7 @@ pub fn cases(sz: &Sizes) -> Vec<CaseSpec> {
         .done(),
         C::new("biggest-files", "List the 5 biggest files on my drive.")
             .needs(&["top_files"], &[])
+            .may_propose()
             .fact("names Llama 3.3 70B", r"llama[ -]?3\.3|70b")
             .fact("names Qwen3.8 27B", r"qwen ?3\.8|27b")
             .fact("gives the 70B size", &size_re((42.5 * GIB) as u64))
