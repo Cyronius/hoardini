@@ -318,6 +318,23 @@ work stack keep the pending tree small; the SQLite page cache is 16 MB.
    the DB (`h-mem.db`, after the run) is under 150 MB.
 4. Delete `%TEMP%\h-mem.db*`.
 
+### INDEX-EXT-MIX: Bytes by file type under a folder
+**Applies to:** hoardini
+**Verification:** test
+
+`index::ext_mix(conn, node_id)` shall total, for the node's subtree (or the node alone when it is a file), the allocated
+bytes and file count per lower-cased extension (the text after the last dot; none for a name without one or a leading-dot
+name), biggest first, skipping hard-link duplicates (INDEX-HARDLINK-ONCE). Files below the row threshold have no type
+(INDEX-SMALL-FOLD); their count and bytes are reported apart as `small_files` and `small_bytes`, and `total_bytes` is the
+sum of both parts. The location classifier, the model-store detector and compression candidates read it.
+
+**Acceptance criteria:**
+- On the sample tree, `C:\code` gives `bin` 44 MiB in 2 files then `rlib` 10 MiB in 5 files, 17 small files, and a total equal to the folder's allocated size.
+- `~\Downloads` gives `exe` 80 MiB, then the extension-less `thing` as `""` 2 MiB, and 1 small file.
+- The file `C:\code\old\x.bin` alone gives `bin` 40 MiB in 1 file and no small files.
+
+Test: `specs/index/tests/index.rs`.
+
 ### INDEX-STALE-AGE: Answers from the stored index state its age
 **Applies to:** hoardini
 **Verification:** manual

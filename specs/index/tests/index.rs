@@ -626,3 +626,43 @@ fn interrupted_refresh_deletes_nothing_and_stays_consistent() {
     run(&e, &fs, r"C:\", 2);
     assert_same(&snapshot(&conn, r"C:\").unwrap(), &fresh(&fs, None));
 }
+
+// Traces: INDEX-EXT-MIX
+#[test]
+fn ext_mix_totals_bytes_by_type_and_keeps_small_files_apart() {
+    let e = env();
+    run(&e, &sample_tree(), r"C:\", 1);
+    let conn = e.db.conn().unwrap();
+    let id = |p: &str| index::node_id_by_path(&conn, p).unwrap().unwrap();
+
+    let code = index::ext_mix(&conn, id(r"C:\code")).unwrap();
+    let types: Vec<(&str, u64, u64)> = code
+        .types
+        .iter()
+        .map(|t| (t.ext.as_str(), t.bytes, t.files))
+        .collect();
+    assert_eq!(types, vec![("bin", 44 * MIB, 2), ("rlib", 10 * MIB, 5)]);
+    assert_eq!(code.small_files, 17);
+    assert_eq!(code.total_bytes, size(&e, r"C:\code"));
+    assert_eq!(code.small_bytes, code.total_bytes - 54 * MIB);
+
+    let dl = index::ext_mix(&conn, id(r"C:\Users\josha\Downloads")).unwrap();
+    let types: Vec<(&str, u64, u64)> = dl
+        .types
+        .iter()
+        .map(|t| (t.ext.as_str(), t.bytes, t.files))
+        .collect();
+    assert_eq!(types, vec![("exe", 80 * MIB, 1), ("", 2 * MIB, 1)]);
+    assert_eq!(dl.small_files, 1);
+
+    let one = index::ext_mix(&conn, id(r"C:\code\old\x.bin")).unwrap();
+    assert_eq!(
+        one.types,
+        vec![index::ExtShare {
+            ext: "bin".into(),
+            bytes: 40 * MIB,
+            files: 1
+        }]
+    );
+    assert_eq!(one.small_files, 0);
+}

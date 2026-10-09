@@ -204,6 +204,59 @@ pub fn children(conn: &Connection, node_id: i64) -> Result<Vec<NodeInfo>> {
     Ok(out)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ExtShare {
+    pub ext: String,
+    pub bytes: u64,
+    pub files: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ExtMix {
+    pub types: Vec<ExtShare>,
+    pub small_bytes: u64,
+    pub small_files: u64,
+    pub total_bytes: u64,
+}
+
+fn ext_of(name: &str) -> String {
+    match name.rfind('.') {
+        Some(i) if i > 0 => name[i + 1..].to_ascii_lowercase(),
+        _ => String::new(),
+    }
+}
+
+// Files under the row threshold fold into their parent (INDEX-SMALL-FOLD), so their type stays unknown.
+pub fn ext_mix(conn: &Connection, node_id: i64) -> Result<ExtMix> {
+    let mut st = conn.prepare_cached(
+        "WITH RECURSIVE d(id) AS (SELECT ?1 UNION ALL          SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE +n.kind = 0)          SELECT n.kind, n.name, n.alloc, n.small_count, n.small_bytes, n.flags FROM node n JOIN d ON n.id = d.id          UNION ALL SELECT n.kind, n.name, n.alloc, 0, 0, n.flags FROM node n JOIN d ON n.parent_id = d.id          WHERE +n.kind = 1",
+    )?;
+    let mut by_ext: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut mix = ExtMix::default();
+    let mut rows = st.query([node_id])?;
+    while let Some(r) = rows.next()? {
+        let kind: i64 = r.get(0)?;
+        let flags: i64 = r.get(5)?;
+        if kind == KIND_DIR {
+            mix.small_files += to_u64(r.get(3)?);
+            mix.small_bytes += to_u64(r.get(4)?);
+        } else if kind == KIND_FILE && flags & FLAG_HARDLINK_DUP == 0 {
+            let name: String = r.get(1)?;
+            let e = by_ext.entry(ext_of(&name)).or_default();
+            e.0 += to_u64(r.get(2)?);
+            e.1 += 1;
+        }
+    }
+    mix.types = by_ext
+        .into_iter()
+        .map(|(ext, (bytes, files))| ExtShare { ext, bytes, files })
+        .collect();
+    mix.types
+        .sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.ext.cmp(&b.ext)));
+    mix.total_bytes = mix.small_bytes + mix.types.iter().map(|t| t.bytes).sum::<u64>();
+    Ok(mix)
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Ranked<T> {
     pub items: Vec<T>,
