@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { routes, streamStatus } from "./api/client";
+import { AiNotices } from "./components/AiNotices";
 import { ChatSession } from "./components/Chat";
+import { FirstRun } from "./components/FirstRun";
 import { Header } from "./components/Header";
 import { Drawer } from "./drawer/Drawer";
 import { useStore } from "./store";
@@ -82,8 +84,10 @@ export function App() {
   return (
     <div className="flex h-full flex-col bg-ink-900 text-paper">
       <Header />
+      <AiNotices />
       <ChatSession key={nonce} threadId={threadId} seed={seed} />
       <Drawer />
+      <FirstRun />
     </div>
   );
 }

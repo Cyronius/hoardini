@@ -155,3 +155,28 @@ Closing the app, or the app crashing, shall end the child.
 1. Chat once on the Built-in profile so `llama-server.exe` runs (Task Manager, Details).
 2. Close the app normally: `llama-server.exe` disappears within a few seconds.
 3. Start it again, chat once, then end `hoardini-app.exe` from Task Manager: `llama-server.exe` disappears too (kill-on-close job object).
+
+### PROV-RATE-LIMIT: HTTP 429 waits and retries; a daily quota ends the run
+**Applies to:** hoardini-agent
+**Verification:** test
+
+On HTTP 429 the client shall wait and retry the same request, at most 3 attempts in all. The wait is `Retry-After` (seconds or an HTTP date) when present, else 2 s then 4 s, and never more than 60 s. Before each wait it calls the registered notice with the seconds, and the run loop turns that into `CUSTOM rate_limit_wait {seconds}`. A 429 whose body names a daily limit (`per day`, `per-day`, `PerDay`, `daily`) shall not wait: it fails at once with `ProviderError::DailyQuota`, which the run reports as "the free tier is used up for today" and suggests another provider. Three 429s in a row fail with `ProviderError::RateLimited`. Sleeping is injectable (`Client::with_sleeper`).
+
+**Acceptance criteria:**
+- A mock answering 429 with `Retry-After: 7` and then 200: `chat` returns the turn, 2 requests were made, the sleeper saw exactly 7 s and the notice saw 7.
+- `Retry-After` as an HTTP date 30 s ahead: the sleeper sees 27 to 30 s (streaming path).
+- `Retry-After: 3600` sleeps 60 s.
+- Three 429s without `Retry-After` give `RateLimited` after 3 requests with sleeps of 2 s and 4 s.
+- Bodies mentioning OpenRouter `free-models-per-day`, Gemini `RESOURCE_EXHAUSTED` with `...PerDay...`, and Cerebras "Tokens per day limit exceeded" each give `DailyQuota` after 1 request and no sleep.
+
+### PROV-PRESETS: Free-tier presets, and no implicit provider
+**Applies to:** hoardini-agent, hoardini-server
+**Verification:** test
+
+`presets()` shall include Cerebras (`https://api.cerebras.ai/v1`, default model `gpt-oss-120b`), Google Gemini (`https://generativelanguage.googleapis.com/v1beta/openai/`, a Flash model) and OpenRouter (a `:free` model), each with its key-page URL, besides the existing entries. The server shall never create a provider by itself: a run with no provider ends with `RUN_ERROR` and leaves `GET /api/providers` empty and no active provider. `GET /api/providers/local` lists running local servers (LM Studio, Ollama, llama.cpp, vLLM) by probing each preset's `/models` with a 1 s timeout. `GET /api/setup` reports `meta.ai_setup_done` (an install that already has a provider counts as done); `POST /api/setup/done` sets it.
+
+**Acceptance criteria:**
+- The preset list contains `cerebras` and `gemini` with the base URLs above, a default model for each, and `needs_key`.
+- OpenRouter's default model ends in `:free`; Ollama has no default model.
+- On a fresh data dir `GET /api/setup` is `{done:false}`; `POST /api/agent/run` streams `RUN_ERROR`, `/api/providers` stays `[]`, `/api/status` has no active provider; after `POST /api/setup/done` it is `{done:true}`.
+- After creating a provider, `GET /api/setup` is `{done:true}` on an otherwise fresh data dir.

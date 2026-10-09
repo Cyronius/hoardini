@@ -106,6 +106,19 @@ With the window minimized and no job or chat run in progress, the app shall have
 - After `PUT {index_speed: "fast", builtin_idle_minutes: 0, index_size_bytes: 1, threshold_bytes: 5}` a `GET` shows `fast` and 0, `index_size_bytes` is not 1, and there is no `threshold_bytes`.
 - `PUT {index_speed: "turbo"}`, `{index_speed: true}`, and `{builtin_idle_minutes: "x"}` → 400, and `index_speed` is unchanged.
 
+### SRV-HISTORY-RANGE: History points can be limited to a time range
+**Applies to:** hoardini-server
+**Verification:** test
+
+`GET /api/history` returns one point per completed refresh of the indexed volume, oldest first. The optional
+`since_ms` and `until_ms` query parameters keep only points whose `finished_ms` is inside the range, both ends
+inclusive; with neither, every point is returned. With no indexed volume the result is `[]`.
+
+**Acceptance criteria:**
+- Scans finished at 1000, 2000, 3000, and 4000 ms: `since_ms=2000&until_ms=3000` returns exactly those at 2000 and
+  3000, with their `free_bytes`; `since_ms=3000` starts at 3000; `until_ms=1000` ends at 1000.
+- No parameters returns every point in ascending order; an empty database returns `[]`.
+
 ### SRV-MEMORY-CRUD: Memory routes
 **Applies to:** hoardini-server
 **Verification:** test

@@ -455,11 +455,12 @@ async fn memory_crud_and_search() {
     let _ = f.h.shutdown.send(());
 }
 
+// Traces: PROV-PRESETS
 #[tokio::test(flavor = "multi_thread")]
-async fn first_agent_run_seeds_an_active_lm_studio_profile() {
+async fn a_run_with_no_provider_creates_none_and_setup_state_round_trips() {
     let f = Fixture::new().await;
-    let (_, before) = f.call("GET", "/api/providers", None).await;
-    assert!(before.as_array().unwrap().is_empty());
+    let (_, setup) = f.call("GET", "/api/setup", None).await;
+    assert_eq!(setup["done"], false);
     let resp = f
         .authed("POST", "/api/agent/run")
         .json(&json!({"threadId": "t1", "runId": "r1", "messages": [{"id": "u1", "role": "user", "content": "hi"}]}))
@@ -467,19 +468,27 @@ async fn first_agent_run_seeds_an_active_lm_studio_profile() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert!(
-        resp.headers()["content-type"]
-            .to_str()
-            .unwrap()
-            .starts_with("text/event-stream")
-    );
-    // Seeding happens before streaming; dropping the stream cancels the run so no real model is called.
-    drop(resp);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("RUN_ERROR"), "{text}");
     let (_, after) = f.call("GET", "/api/providers", None).await;
-    assert_eq!(after[0]["name"], "LM Studio");
-    assert_eq!(after[0]["is_active"], true);
+    assert!(after.as_array().unwrap().is_empty());
     let (_, status) = f.call("GET", "/api/status", None).await;
-    assert_eq!(status["active_provider"]["name"], "LM Studio");
+    assert!(status["active_provider"].is_null());
+    f.call("POST", "/api/setup/done", None).await;
+    let (_, setup) = f.call("GET", "/api/setup", None).await;
+    assert_eq!(setup["done"], true);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: UI-FIRST-RUN
+#[tokio::test(flavor = "multi_thread")]
+async fn an_install_that_already_has_a_provider_counts_as_set_up() {
+    let f = Fixture::new().await;
+    let cfg = json!({"name": "Old", "base_url": "http://127.0.0.1:9/v1"});
+    let (st, _) = f.call("POST", "/api/providers", Some(cfg)).await;
+    assert_eq!(st, 200);
+    let (_, setup) = f.call("GET", "/api/setup", None).await;
+    assert_eq!(setup["done"], true);
     let _ = f.h.shutdown.send(());
 }
 
@@ -885,5 +894,65 @@ async fn arriving_with_a_stale_index_starts_one_journal_refresh() {
         1,
         "one refresh, then the interval"
     );
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-HISTORY-RANGE
+#[tokio::test(flavor = "multi_thread")]
+async fn history_filters_by_range() {
+    use hoardini_core::history::{ScanRecord, record_scan_rows};
+    use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
+    use hoardini_core::store::Db;
+
+    let f = Fixture::new().await;
+    let (_, none) = f.call("GET", "/api/history", None).await;
+    assert_eq!(none, json!([]));
+
+    let db = Db::open(f.dir.path().join("h.db")).unwrap();
+    let conn = db.conn().unwrap();
+    let fs = FakeFs::new(r"C:\");
+    fs.file(r"C:\seed.bin", 1 << 20);
+    let vol = refresh(&conn, &fs, fs.root(), &RefreshOptions::default())
+        .unwrap()
+        .volume_id;
+    for (ms, free) in [(1_000, 50u64), (2_000, 40), (3_000, 30), (4_000, 20)] {
+        let rec = ScanRecord {
+            volume_id: vol,
+            kind: "full".into(),
+            mode: "background".into(),
+            started_ms: ms - 1,
+            finished_ms: ms,
+            total_bytes: Some(100),
+            free_bytes: Some(free),
+            ..ScanRecord::default()
+        };
+        record_scan_rows(&conn, &rec, &[], &[]).unwrap();
+    }
+    let finished = |v: &Value| -> Vec<i64> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["finished_ms"].as_i64().unwrap())
+            .collect()
+    };
+    let (_, all) = f.call("GET", "/api/history", None).await;
+    let all = finished(&all);
+    assert_eq!(all.len(), 5);
+    assert!(all.windows(2).all(|w| w[0] <= w[1]));
+    assert_eq!(&all[..4], &[1_000, 2_000, 3_000, 4_000]);
+
+    let (_, mid) = f
+        .call("GET", "/api/history?since_ms=2000&until_ms=3000", None)
+        .await;
+    assert_eq!(finished(&mid), vec![2_000, 3_000]);
+    let (_, since) = f.call("GET", "/api/history?since_ms=3000", None).await;
+    assert_eq!(&finished(&since)[..2], &[3_000, 4_000]);
+    assert_eq!(finished(&since).len(), 3);
+    let (_, until) = f.call("GET", "/api/history?until_ms=1000", None).await;
+    assert_eq!(finished(&until).last(), Some(&1_000));
+    let (_, mid) = f
+        .call("GET", "/api/history?since_ms=2000&until_ms=3000", None)
+        .await;
+    assert_eq!(mid[0]["free_bytes"], 40);
     let _ = f.h.shutdown.send(());
 }

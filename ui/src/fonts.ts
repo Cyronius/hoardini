@@ -1,0 +1,21 @@
+import "@fontsource-variable/fraunces";
+import "@fontsource-variable/nunito";
+import "@fontsource-variable/jetbrains-mono";
+// Latin-subset @font-face for the variable families (their packages ship no per-subset CSS).
+import "./fonts.css";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-700.css";
+import "@fontsource/spectral/latin-400.css";
+import "@fontsource/spectral/latin-700.css";
+import "@fontsource/zilla-slab/latin-400.css";
+import "@fontsource/zilla-slab/latin-700.css";
+import "@fontsource/audiowide/latin-400.css";
+import "@fontsource/cousine/latin-400.css";
+import "@fontsource/cousine/latin-700.css";
+import "@fontsource/zen-maru-gothic/latin-400.css";
+import "@fontsource/zen-maru-gothic/latin-700.css";
+import "@fontsource/caprasimo/latin-400.css";
+import "@fontsource/amiri/latin-400.css";
+import "@fontsource/amiri/latin-700.css";
+import "@fontsource/pt-mono/latin-400.css";
+import "@fontsource/fragment-mono/latin-400.css";

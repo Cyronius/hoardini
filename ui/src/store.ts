@@ -11,6 +11,7 @@ export const TADA_MS = 5000;
 interface NotedMemory {
   memoryId: number;
   text: string;
+  pinned: boolean;
 }
 
 interface State {

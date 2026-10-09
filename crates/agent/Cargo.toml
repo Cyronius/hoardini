@@ -9,6 +9,7 @@ bytes = "1.12.1"
 futures = "0.3.34"
 hoardini-core = { version = "0.1.0", path = "../core" }
 hoardini-win = { version = "0.1.0", path = "../win" }
+httpdate = "1.0.3"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls", "http2"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }

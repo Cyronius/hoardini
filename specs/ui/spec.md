@@ -94,3 +94,75 @@ The Settings tab shall have no Save button. A toggle or switch saves when it cha
 6. Stop the server and flip the switch: an inline error appears under it and no tick.
 7. AI tab → add or edit a provider: no "Redact paths" toggle.
 8. In DevTools → Network, switch to another window and back, then minimize the browser and restore it: `/api/presence` is posted with `looking: false` on blur and `true` on focus, and the `/api/status/stream` request ends while the page is hidden and a new one starts when it is shown, without the header's "offline" badge.
+
+### UI-FIRST-RUN: First-run AI setup
+**Applies to:** hoardini-ui, hoardini-server
+**Verification:** manual
+
+While `meta.ai_setup_done` is unset and no provider exists, a pop-up asks how Hoardini should think, with five choices in this order: Google Gemini, OpenRouter, Cerebras, A model on this PC, Set up a provider. No choice carries a Recommended badge until one is picked. Each cloud choice has three steps: "Get a free key" (opens the provider's key page in the system browser), a key field (saved through the vault), and an automatic test with the model preselected. "Later" sets done; the chat then shows a one-line "No AI is set up yet. Set up AI" notice while no provider is active. The AI tab has "Run setup again". While a 429 wait runs, a "Waiting on the free tier..." notice counts down.
+
+**Verification (manual):**
+1. Start with `HOARDINI_DATA_DIR` set to an empty scratch folder. The pop-up shows with the five choices; the first index scan runs behind it.
+2. Gemini, OpenRouter, Cerebras each: Get a free key opens the system browser (not an in-app window); paste a key; Save and test ends "Working" and the provider is active with its default model. A wrong key shows the provider's error and can be retried.
+3. A model on this PC with LM Studio running lists its models and Use this makes it active; with nothing running it shows the LM Studio link and Check again.
+4. Set up a provider closes the pop-up and opens the AI tab with the add form.
+5. Later closes it; the "Set up AI" notice appears under the header and reopens the pop-up. After a restart the pop-up does not return.
+6. An existing data dir with a provider never shows the pop-up. AI tab, Run setup again, reopens it.
+7. Against a mock answering 429 with `Retry-After: 5` then 200, the notice counts down from 5 and the answer then arrives.
+
+### UI-TIP-LINE: Tip line under the brand
+**Applies to:** hoardini-ui, hoardini-app
+**Verification:** manual
+
+Under "made to vanish: X" the header shows "♥ Like this? **Tip** my local NPR station", copied from BlabberStack. Only "Tip" is a link, to `https://www.kuaf.com/donate`; the heart uses the accent color, the text is muted and small. The tooltip reads "KUAF, the maintainer's local NPR member station. Not affiliated with Hoardini." It is hidden below the `sm` breakpoint (640 px), where the header wraps. In the desktop app, links that open a new window (`target="_blank"`) and navigations away from the loopback server open in the system browser, routed in Rust (`on_new_window`, `on_navigation` with `tauri-plugin-opener`); the page gets no IPC (UI-NO-IPC).
+
+**Verification (manual):**
+1. Text, heart color, and tooltip match the above; hover shows the tooltip.
+2. Click Tip in `cargo run -p hoardini-app`: the default browser opens kuaf.com/donate and no Hoardini window appears.
+3. Resize the window under 640 px wide: the line disappears.
+4. `typeof window.__TAURI__` is still `"undefined"` and `invoke('plugin:opener|open_url', ...)` still rejects (no capability).
+
+### UI-THEME-CONTRAST: Every theme is readable
+**Applies to:** hoardini
+**Verification:** test
+
+Every theme shall meet WCAG 2.x contrast for its own tokens. The on-accent color (text on accent-colored buttons and pills) is whichever of the theme's bg0 or text contrasts more with its accent.
+
+**Acceptance criteria:**
+- `text` and `textDim` on each of bg0, bg1, and bg2 → ratio ≥ 4.5
+- `muted` on bg1 → ratio ≥ 4.5
+- `faint` on bg1 → ratio ≥ 3
+- on-accent on `accent` → ratio ≥ 4.5
+- `themeVars()` sets `--color-on-accent` to that computed color
+
+Test: `specs/ui/tests/theme-contrast.test.ts`.
+
+### UI-THEME-TAB: Theme tab with group-first picker
+**Applies to:** hoardini
+**Verification:** manual
+
+The drawer has its own Theme tab. "Follow system" sits above a Dark / Midtone / Light switch, and only the chosen group's swatches show. The tab opens on the active theme's group (tone is checked before mode, so Kraft and Sage Chalk are Midtone). Following the system picks Marshmallow or Marshmallow Night and never a midtone. A pick applies instantly with no Save button and survives a reload. All theme fonts are bundled, so switching themes makes no network request.
+
+**Verification (manual):**
+1. In `ui/`, run `bun run dev --port 52xx --strictPort` against a mock or scratch-data server; open the Theme tab.
+2. Confirm the Dark / Midtone / Light switch shows first, the tab opens on the active theme's group, and each group lists only its own swatches (Midtone has 22, Tater Dog is under Light).
+3. Click a swatch: the UI retints at once and no Save button exists. Reload: the same theme is active and its group is open.
+4. Pick Kraft: it is listed under Midtone. Pick Follow system: the active theme is Marshmallow or Marshmallow Night per the OS setting.
+5. With the Network panel open (cache disabled), pick a theme with a non-default font (for example Space Grotesk): font files load only from the app's own origin, and none from another host.
+6. On Rosewood, an accent-filled button or pill shows readable text.
+
+### UI-CHANGES-CHART: The changes card draws free space over time
+**Applies to:** hoardini
+**Verification:** manual
+
+The `changes` tool card shall show the free-space chart above its usual content when the call's range holds at least
+3 refreshes, and only the numbers otherwise. The points come from `GET /api/history` limited to the `range_ms` line
+in the tool result, so the chart ends at the call's own latest refresh and a reload or scrolled-back card shows the
+same data. The `range_ms` line is not shown in the card's result text.
+
+**Verification (manual):**
+1. With an index holding at least 3 refreshes, ask "How has my free space changed over time?". The `changes` card shows
+   a "Free space over time" chart above the collapsed tool row; hovering a dot shows its date and free space.
+2. Reload the page: the same chart is drawn from the stored tool result.
+3. Run another refresh, then scroll back to that card: it still ends at the refresh the call saw.
+4. With only 2 refreshes in the index, ask again: the card shows no chart, only the numbers.

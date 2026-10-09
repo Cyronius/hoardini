@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use futures::stream::{self, BoxStream};
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -20,9 +21,31 @@ pub trait Meter: Send + Sync {
     fn end(&self);
 }
 
+pub type Sleeper = Arc<dyn Fn(Duration) -> BoxFuture<'static, ()> + Send + Sync>;
+pub type WaitNotice = Arc<dyn Fn(u64) + Send + Sync>;
+
+pub const MAX_ATTEMPTS: u32 = 3;
+pub const MAX_WAIT: Duration = Duration::from_secs(60);
+
 #[derive(Clone, Default)]
 pub struct Client {
     meter: Option<Arc<dyn Meter>>,
+    sleeper: Option<Sleeper>,
+    on_wait: Option<WaitNotice>,
+}
+
+fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
+    let v = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
+    if let Ok(secs) = v.parse::<u64>() {
+        return Some(Duration::from_secs(secs));
+    }
+    let at = httpdate::parse_http_date(v).ok()?;
+    Some(at.duration_since(std::time::SystemTime::now()).unwrap_or_default())
 }
 
 pub(super) fn map_reqwest(e: reqwest::Error) -> ProviderError {
@@ -148,7 +171,66 @@ impl Client {
     }
 
     pub fn with_meter(meter: Arc<dyn Meter>) -> Self {
-        Self { meter: Some(meter) }
+        Self {
+            meter: Some(meter),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_sleeper(mut self, sleeper: Sleeper) -> Self {
+        self.sleeper = Some(sleeper);
+        self
+    }
+
+    pub fn with_wait_notice(mut self, notice: WaitNotice) -> Self {
+        self.on_wait = Some(notice);
+        self
+    }
+
+    async fn sleep(&self, d: Duration) {
+        match &self.sleeper {
+            Some(f) => f(d).await,
+            None => tokio::time::sleep(d).await,
+        }
+    }
+
+    // 429s wait (Retry-After, else exponential) and retry; a daily-quota 429 ends at once.
+    async fn send_retrying(
+        &self,
+        rb: reqwest::RequestBuilder,
+        headers_within: Option<Duration>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        for attempt in 1..=MAX_ATTEMPTS {
+            let req = rb
+                .try_clone()
+                .ok_or_else(|| ProviderError::Config("request body cannot be retried".into()))?;
+            let resp = match headers_within {
+                Some(t) => tokio::time::timeout(t, req.send())
+                    .await
+                    .map_err(|_| ProviderError::Timeout("no response headers".into()))?,
+                None => req.send().await,
+            }
+            .map_err(map_reqwest)?;
+            if resp.status().as_u16() != 429 {
+                return ensure_ok(resp).await;
+            }
+            let wait = retry_after(&resp);
+            let body = resp.text().await.unwrap_or_default();
+            if super::error::is_daily_quota(&body) {
+                return Err(ProviderError::DailyQuota(super::error::excerpt(&body)));
+            }
+            if attempt == MAX_ATTEMPTS {
+                return Err(ProviderError::RateLimited(super::error::excerpt(&body)));
+            }
+            let wait = wait
+                .unwrap_or_else(|| Duration::from_secs(2u64 << (attempt - 1)))
+                .min(MAX_WAIT);
+            if let Some(n) = &self.on_wait {
+                n(wait.as_secs().max(1));
+            }
+            self.sleep(wait).await;
+        }
+        Err(ProviderError::RateLimited(String::new()))
     }
 
     pub async fn chat_stream(
@@ -164,11 +246,7 @@ impl Client {
         if let Some(m) = &self.meter {
             m.request();
         }
-        let resp = tokio::time::timeout(idle, rb.send())
-            .await
-            .map_err(|_| ProviderError::Timeout("no response headers".into()))?
-            .map_err(map_reqwest)?;
-        let resp = ensure_ok(resp).await?;
+        let resp = self.send_retrying(rb, Some(idle)).await?;
 
         let is_sse = resp
             .headers()
@@ -275,7 +353,7 @@ impl Client {
         let http = http_client(cfg, true)?;
         let rb = decorate(http.post(cfg.endpoint("chat/completions")), cfg, key)
             .json(&build_body(cfg, req, false));
-        let resp = ensure_ok(rb.send().await.map_err(map_reqwest)?).await?;
+        let resp = self.send_retrying(rb, None).await?;
         let text = resp.text().await.map_err(map_reqwest)?;
         assemble_body(&text)
     }
