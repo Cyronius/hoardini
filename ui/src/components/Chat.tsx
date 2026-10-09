@@ -13,7 +13,7 @@ import { isProposeTool } from "../agent/toolDefs";
 import { friendlyToolName, humanElapsed } from "../format";
 import { THREAD_ID, useStore } from "../store";
 import { Greeting } from "./Greeting";
-import { SendIcon, SpinnerIcon, StopIcon } from "./icons";
+import { FreshStartIcon, SendIcon, SpinnerIcon, StopIcon } from "./icons";
 import { IconButton } from "./IconButton";
 import { Markdown } from "./Markdown";
 import { ToolChip } from "./ToolChip";
@@ -98,6 +98,8 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   const activitySteps = useActivity((s) => s.steps);
   const meta = useStore((s) => s.threadMeta);
   const markAsked = useStore((s) => s.markAsked);
+  const startFresh = useStore((s) => s.startFresh);
+  const connected = useStore((s) => s.connected);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -351,6 +353,15 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
       </div>
       <div className="border-t border-line-soft bg-ink-900 px-4 py-3">
         <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
+          <IconButton
+            title="Start fresh: Hoardini forgets the chat so far (it stays on screen)"
+            aria-label="Start fresh"
+            className="!h-11 !w-11 !rounded-full text-muted hover:text-paper"
+            disabled={isStreaming || !connected}
+            onClick={() => void startFresh().catch(() => {})}
+          >
+            <FreshStartIcon />
+          </IconButton>
           <textarea
             ref={inputRef}
             className="max-h-40 min-h-[44px] flex-1 resize-none rounded-2xl border border-line bg-ink-850 px-3.5 py-2.5 text-paper placeholder:text-faint focus:border-brass focus:outline-none"
