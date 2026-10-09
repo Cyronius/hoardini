@@ -44,16 +44,19 @@ export const ACT_MS: Record<OneShot, number> = {
   yawn: 2600,
   scratch: 2400,
   stretch: 2600,
-  "fin-push": 1100,
-  "fin-flop": 1300,
-  "fin-throw": 1300,
-  "fin-throw-up": 1300,
-  "fin-clap": 1100,
+  "fin-push": 1800,
+  "fin-flop": 1800,
+  "fin-throw": 1800,
+  "fin-throw-up": 1800,
+  "fin-clap": 1800,
   slip: 1900,
   shrug: 1300,
-  pleased: 2000,
+  pleased: 3000,
   shake: 800,
 };
+
+// Pre-stretch finisher lengths; Stage scales its parcel motion by FIN_MS / these.
+export const FIN_BASE_MS: Record<Move, number> = { push: 1100, flop: 1300, throw: 1300, "throw-up": 1300, clap: 1100 };
 
 export const COMBO_GAP_MS = 1500;
 export const FIDGETS = ["yawn", "scratch", "stretch"] as const;

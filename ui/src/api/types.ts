@@ -61,6 +61,8 @@ export type ProposalItem = {
   selected: boolean;
   status: "pending" | "blocked" | "skipped" | "done" | "failed";
   detail: string | null;
+  small: boolean;
+  memory_note: string | null;
 };
 export type Proposal = {
   id: string;
@@ -74,6 +76,8 @@ export type Proposal = {
   dedupe?: { group_id: number; keep: string; mode: "hardlink" | "delete" } | null;
   summary: string;
   items: ProposalItem[];
+  parent_id: string | null;
+  follow_up_id: string | null;
 };
 
 export type Memory = {
