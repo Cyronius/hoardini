@@ -142,7 +142,7 @@ The header sumo is a button whose accessible name ends in "Poke me!". A click, o
 **Applies to:** hoardini
 **Verification:** manual
 
-When an approved job from a proposal card starts running and the card's top edge is on screen, the header sumo hides and a travelling copy climbs down a ladder from the header to stand on the card's top edge (about 1 s; a fat sumo bends the rungs). A parcel pops out of the card next to him with a file or folder icon, the first item's name, the size, and "×N" for several items. The card never moves and keeps its text, controls, and result; he stands above its top edge, never over its controls. While the job runs he works the parcel in a loop, and when it finishes he plays the move for its kind:
+When an approved job from a proposal card starts running and the card's action footer (the area holding the Hold and Approve buttons, then the progress bar and result) is on screen, the header sumo hides and a travelling copy climbs down a ladder from the header to stand on the footer's top edge (1.6 s; a fat sumo bends the rungs). If the footer is not on screen but the card's top edge is, he stands on the top edge instead. When the parent card collapses mid-trip (§ UI-PROPOSAL-COLLAPSE) he moves to the follow-up card's top edge, or to the collapsed line if there is no follow-up, and is never left over nothing. A parcel pops out of the card next to him with a file or folder icon, the first item's name, the size, and "×N" for several items. The overlay never moves the card. He stands above the edge he is anchored to, never over the buttons. Whatever the job's speed, the beats last at least this long: working 2 s (even if the job finished during the climb down), the finisher about 1.8 s, the climb back 1.4 s, then pleased 3 s; about 10 s in all. While the job runs he works the parcel in a loop, and when it finishes he plays the move for its kind:
 
 | Job | Move | Parcel |
 |---|---|---|
@@ -154,11 +154,11 @@ When an approved job from a proposal card starts running and the card's top edge
 | Failed | slips, lands on his bottom, rubs his head | stays put, then goes back into the card |
 | Cancelled | stops and shrugs | hops back into the card |
 
-He then climbs back up, deflating on the way if space was freed, and in the header is pleased with himself for about 2 s (chin up, eyes closed, arms crossed, a pat-pat of the hands); the rest of that celebration is skipped. A declined proposal gets no trip, only a head shake in the header. If the card's top edge is not on screen when the job starts, or the page is hidden, there is no trip: he stomps in the header while the job runs, plays the move there when it ends, then celebrates. After about 30 s of work he climbs back and the move plays in the header when the job ends. Only one trip happens at a time; a job that starts while he is out runs without one. After 3 trips within 10 minutes later jobs get the header version. Clicking anywhere sends him home quickly, and the job carries on from the header. With `prefers-reduced-motion` there is no trip and no parcel: he holds the still stomp pose while the job runs and shows the pleased face when it succeeds. The overlay never takes pointer input, and the mascot never delays or drives a job.
+He then climbs back up, deflating on the way if space was freed, and in the header is pleased with himself for 3 s (chin up, eyes closed, arms crossed, a pat-pat of the hands); the rest of that celebration is skipped. A declined proposal gets no trip, only a head shake in the header. If neither the footer nor the card's top edge is on screen when the job starts, or the page is hidden, there is no trip: he stomps in the header while the job runs (at least 2 s), plays the move there when it ends, then celebrates for 3 s. After about 30 s of work he climbs back and the move plays in the header when the job ends. Only one trip happens at a time; a job that starts while he is out runs without one. After 5 trips within 10 minutes later jobs get the header version. Clicking anywhere sends him home quickly, and the job carries on from the header. With `prefers-reduced-motion` there is no trip and no parcel: he holds the still stomp pose while the job runs and shows the pleased face when it succeeds. The overlay never takes pointer input, and the mascot never delays or drives a job.
 
 **Verification (manual):**
 1. In `ui/`, run `MOCK_IDLE=1 MOCK_FILL=0.9 bun run mock` and `bun run dev`; open http://localhost:5193/ at about 1000 × 800.
-2. Ask "what is in lmstudio", wait for the Delete card, and hold "Hold to delete". The header sumo vanishes and a copy climbs down a ladder whose rungs sag under him, lands on the card's top edge, and a parcel ("llama-3.3-…", "52.4 GB", "×2") pops out beside him. He pushes it while the progress bar runs, then charges and bumps it off the right edge, spinning. He climbs back, slimming with puffs of air, and stands in the header with arms crossed and eyes closed for about 2 s, then idles.
+2. Ask "what is in lmstudio", wait for the Delete card, and hold "Hold to delete". The header sumo vanishes and a copy climbs down a ladder whose rungs sag under him, lands on the card's footer, and a parcel ("llama-3.3-…", "52.4 GB", "×2") pops out beside him. He pushes it while the progress bar runs, then charges and bumps it off the right edge, spinning. He climbs back, slimming with puffs of air, and stands in the header with arms crossed and eyes closed for 3 s, then idles.
 3. Before each new card's approval, post one of these to `http://127.0.0.1:7043/api/mock?token=dev` (the mock changes the kind when you approve, so the card's heading switches then), ask again, and approve:
    - `{"next_job":{"kind":"compress"}}`: he hops onto the parcel and bounces on it, then belly flops and the parcel goes flat.
    - `{"next_job":{"kind":"archive"}}`: he windmills his arm, then lifts the parcel overhead and throws it into a box that pops up to his right; the lid shuts.
@@ -167,13 +167,31 @@ He then climbs back up, deflating on the way if space was freed, and in the head
    - `{"next_job":{"outcome":"failed"}}`: he slips onto his bottom with crossed-out eyes and rubs his head; the parcel stays, then sinks back into the card; the card shows the error.
    - `{"next_job":{"outcome":"cancelled"}}`: the parcel hops back into the card and he shrugs.
 4. Press Cancel on a pending card: no trip; the header sumo shakes his head.
-5. Make the window short (about 480 px), scroll the chat to the bottom so the card's top edge is hidden, and approve: no trip. He stomps in the header, plays the move there at the end, then celebrates.
+5. Make the window very short (about 200 px) so neither the footer nor the card's top is on screen, and approve: no trip. He stomps in the header for at least 2 s, plays the move there at the end, then celebrates for 3 s.
 6. Post `{"next_job":{"ms":40000}}` and approve: after about 30 s he climbs back and stomps in the header; at the end the move plays in the header.
 7. During a trip, click anywhere on the page: he climbs home at once, the click still lands, and the job finishes with the move in the header.
-8. Approve 5 jobs within 10 minutes: the first 3 get trips, the rest the header version.
+8. Approve 7 jobs within 10 minutes: the first 5 get trips, the rest the header version.
 9. Turn on reduced motion and approve: no ladder or parcel; the header sumo holds the stomp pose while the job runs and shows the pleased face at the end.
-10. During a trip, type in the chat box and scroll the chat: input works, he stays on the card's edge as it moves, and the progress bar and the job's finish time are the same as with no trip.
-(2026-10-09: steps 2–10 checked against the mock in headless Chromium through Playwright, with compress, dedupe, failed, cancelled, and long jobs also driven through the store directly.)
+10. During a trip, type in the chat box and scroll the chat: input works, he stays on his anchor as it moves, and the progress bar and the job's finish time are the same as with no trip.
+11. Ask "what is in lmstudio" (the mock card has 15 items, so it is taller than the window), scroll so the Hold button is on screen and the card's top is not, and approve with `{"next_job":{"ms":300}}` posted first: he still travels, standing on the footer. The job ends during the climb; he still works for at least 2 s, plays the finisher (about 1.8 s), climbs back (1.4 s), and is pleased for 3 s. Timing the whole thing from the hold release gives about 10 s.
+12. During step 11 the old card collapses and the follow-up appears; he moves to stand on the follow-up card's top and is never over empty space.
+(2026-10-09: steps 2–10 checked against the mock in headless Chromium through Playwright, with compress, dedupe, failed, cancelled, and long jobs also driven through the store directly. Steps 11 and 12 checked the same way: trip from the footer with the card top off screen, sumo visible throughout, push at 2.9 s, finisher at 5.0 s, climb back at 6.8 s, home at 8.2 s with a 300 ms job.)
+
+### UI-PROPOSAL-COLLAPSE: Finished cards collapse and a follow-up card follows
+**Applies to:** hoardini
+**Verification:** manual
+**Depends on:** ACT-FOLLOW-UP (server side; the follow-up proposal and `parent_id` / `follow_up_id`)
+
+A proposal card whose proposal was declined, or whose job ended (done, partial, failed, or cancelled), collapses to one line: the kind's verb (Deleted, Archived, Compressed, Deduplicated), the item count, and the bytes freed, e.g. "Deleted 12 items · freed 3.4 GB · details ▸"; a decline reads "Declined · N items". Clicking it expands the read-only item list with each item's outcome, and "hide ▴" collapses it again. Pending and running cards stay full size. When the proposal has a `follow_up_id`, the follow-up's full card renders directly under the collapsed card in the same chat slot; chains repeat. The UI refetches the proposal when its job reaches a terminal state, and a reloaded thread renders the same chain. Item rows show a muted "small" tag when `small` is true and a muted "Noted: ..." line from `memory_note`; the initial ticks are the server's `selected` values. Approving or declining a follow-up card does not report back to the model; the model sees it through the open-proposals line.
+
+**Verification (manual):**
+1. In `ui/`, run `MOCK_PORT=7261 MOCK_IDLE=1 bun run mock` and Vite with its `/api` proxy pointed at it; ask "what is in lmstudio".
+2. The card lists 15 items: the "tiny-test.gguf" row has a "small" tag and "Noted: C:\Users\josha\.lmstudio is disposable"; it, "keep", and the blocked item are unticked and the cache blobs are ticked.
+3. Approve. When the job ends, the card becomes "Deleted 12 items · freed 53.6 GB · details ▸" and a new full card appears directly under it holding the 3 items that were not done, all unticked.
+4. Click "details ▸": the original items show with "done" outcomes. Click "hide ▴".
+5. Reload the page: the same collapsed card and follow-up are shown.
+6. On a fresh mock, post `{"next_job":{"outcome":"failed"}}` and approve: the card collapses as "Deleted nothing · failed: Access is denied"; the follow-up holds the 12 failed items ticked plus the 3 unticked ones.
+7. Decline a pending card: it collapses to "Declined · N items".
 
 ### UI-SETTINGS-AUTOSAVE: Settings save themselves; one Rescan now control
 **Applies to:** hoardini
