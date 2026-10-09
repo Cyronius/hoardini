@@ -41,13 +41,16 @@ function useLiveStatus() {
 export function App() {
   useThemeSync();
   useLiveStatus();
-  const threadId = useStore((s) => s.threadId);
   const nonce = useStore((s) => s.threadNonce);
   const seed = useStore((s) => s.seedMessages);
+  const loadThread = useStore((s) => s.loadThread);
+  useEffect(() => {
+    void loadThread();
+  }, [loadThread]);
   return (
     <div className="flex h-full flex-col bg-ink-900 text-paper">
       <Header />
-      <ChatSession key={nonce} threadId={threadId} seed={seed} />
+      {nonce > 0 ? <ChatSession key={nonce} seed={seed} /> : <div className="flex-1" />}
       <Drawer />
     </div>
   );

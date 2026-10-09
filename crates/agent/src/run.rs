@@ -39,6 +39,8 @@ pub struct AgentEnv {
     pub index: Arc<dyn IndexControl>,
     // Profile used for `~` redaction and expansion; None = the real one (tests inject a fake).
     pub redact_profile: Option<String>,
+    // Milliseconds since the epoch; tests move it to cross the session gap.
+    pub clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 impl AgentEnv {
@@ -54,7 +56,12 @@ impl AgentEnv {
             secrets,
             index,
             redact_profile: None,
+            clock: Arc::new(now_ms),
         }
+    }
+
+    pub fn now(&self) -> i64 {
+        (self.clock)()
     }
 
     pub fn profile(&self) -> String {
@@ -69,7 +76,7 @@ const SMALL_GLOBAL_MEMORIES: usize = 10;
 const SMALL_SUMMARY_CHARS: usize = 1500;
 const MAX_SHEDS: usize = 3;
 
-pub const OVERFLOW_MESSAGE: &str = "This conversation no longer fits the model's context window, even after dropping old tool results. Start a new chat, or switch to a provider profile with a larger context window.";
+pub const OVERFLOW_MESSAGE: &str = "This conversation no longer fits the model's context window, even after dropping old tool results and earlier turns. Press Start fresh, or switch to a provider profile with a larger context window.";
 
 pub fn new_id() -> String {
     uuid::Uuid::now_v7().to_string()
@@ -308,15 +315,24 @@ impl Run {
         let conv = self.thread_id.clone();
         let provider_id = self.provider.id.clone();
         let messages = input.messages;
-        blocking(move || thread::ingest(&db, &conv, provider_id.as_deref(), &messages)).await?;
+        let now = self.env.now();
+        blocking(move || thread::ingest(&db, &conv, provider_id.as_deref(), &messages, now))
+            .await?;
 
         let max_steps = self.provider.max_tool_steps.max(1);
+        let context_tokens = thread::context_tokens(self.provider.context_window);
         let mut sheds = 0;
         let mut first_system: Option<String> = None;
         loop {
             let (system, mut stored) = self.load_context().await?;
             // The summary's "as of N minutes ago" ticks; a fixed prefix keeps a local server's prompt cache warm.
             let system = first_system.get_or_insert(system).clone();
+            let tools = self.registry.defs();
+            let overhead = system.len() + serde_json::to_string(&tools).map_or(0, |t| t.len());
+            if let Some(i) = thread::trim_point(&stored, overhead, context_tokens) {
+                self.move_window(&stored[i].id).await?;
+                stored.drain(..i);
+            }
             let db = self.env.db.clone();
             let conv = self.thread_id.clone();
             let snapshot = stored.clone();
@@ -327,7 +343,7 @@ impl Run {
             }
             let req = ChatRequest {
                 messages: msgs,
-                tools: self.registry.defs(),
+                tools,
                 tool_choice: None,
                 include_usage: false,
             };
@@ -335,10 +351,14 @@ impl Run {
                 Ok(t) => t,
                 Err(TurnErr::Stop(s)) => return Err(s),
                 Err(TurnErr::Provider(e)) if is_context_overflow(&e) => {
-                    if sheds >= MAX_SHEDS || !self.shed(&mut stored).await? {
-                        return Err(Stop::Fail(OVERFLOW_MESSAGE.into()));
+                    if sheds < MAX_SHEDS && self.shed(&mut stored).await? {
+                        sheds += 1;
+                        continue;
                     }
-                    sheds += 1;
+                    let Some(i) = thread::next_turn(&stored) else {
+                        return Err(Stop::Fail(OVERFLOW_MESSAGE.into()));
+                    };
+                    self.move_window(&stored[i].id).await?;
                     continue;
                 }
                 Err(TurnErr::Provider(e)) => return Err(Stop::Fail(describe(&e, &cfg))),
@@ -412,16 +432,25 @@ impl Run {
                     )
                 })
                 .collect();
+            let open_proposals = thread::open_proposals(&db, &conv).unwrap_or_default();
             let system = system_prompt(&PromptInput {
                 small,
                 today: fmt_date(now_ms()),
                 index_summary: summary,
                 refresh,
                 globals: notes,
+                open_proposals,
             });
-            Ok((system, thread::load(&conn, &conv)?))
+            Ok((system, thread::load_window(&conn, &conv)?))
         })
         .await
+    }
+
+    async fn move_window(&self, message_id: &str) -> Result<(), Stop> {
+        let db = self.env.db.clone();
+        let conv = self.thread_id.clone();
+        let id = message_id.to_string();
+        blocking(move || thread::set_window_start_at(&db.conn()?, &conv, &id)).await
     }
 
     async fn shed(&self, stored: &mut [Stored]) -> Result<bool, Stop> {
@@ -439,7 +468,8 @@ impl Run {
     async fn store(&self, msgs: Vec<Stored>) -> Result<(), Stop> {
         let db = self.env.db.clone();
         let conv = self.thread_id.clone();
-        blocking(move || thread::append_all(&mut db.conn()?, &conv, &msgs)).await
+        let now = self.env.now();
+        blocking(move || thread::append_all_at(&mut db.conn()?, &conv, &msgs, now)).await
     }
 
     async fn stream_turn(

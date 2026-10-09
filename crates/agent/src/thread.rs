@@ -19,60 +19,26 @@ pub struct Stored {
 pub const OMITTED_PREFIX: &str = "[omitted:";
 const MIN_SHED_CHARS: usize = 400;
 
-const TITLE_MAX: usize = 60;
-
-pub fn title_from(text: &str) -> String {
-    let line = text
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("");
-    let plain = strip_markdown(line);
-    let plain = plain.split_whitespace().collect::<Vec<_>>().join(" ");
-    if plain.chars().count() <= TITLE_MAX {
-        return plain;
-    }
-    let cut: String = plain.chars().take(TITLE_MAX - 3).collect();
-    let cut = match cut.rfind(' ') {
-        Some(i) if i > TITLE_MAX / 2 => &cut[..i],
-        _ => cut.as_str(),
-    };
-    format!("{}...", cut.trim_end_matches([' ', ',', ';', ':', '.']))
-}
-
-// Links keep their text; emphasis, code, heading and quote marks are dropped.
-fn strip_markdown(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line.trim_start_matches(['#', '>', '-', '*', ' ']);
-    while let Some(c) = rest.chars().next() {
-        if c == '['
-            && let Some(close) = rest.find("](")
-            && let Some(end) = rest[close..].find(')')
-        {
-            out.push_str(&rest[1..close]);
-            rest = &rest[close + end + 1..];
-            continue;
-        }
-        if !matches!(c, '*' | '`' | '~') {
-            out.push(c);
-        }
-        rest = &rest[c.len_utf8()..];
-    }
-    out
-}
+// The app keeps one conversation; the server uses this ID whatever a client sends.
+pub const MAIN: &str = "main";
+pub const SESSION_GAP_MS: i64 = 6 * 60 * 60 * 1000;
+pub const DEFAULT_CONTEXT_TOKENS: usize = 8_192;
+const CHARS_PER_TOKEN: usize = 4;
+const TRIM_HIGH_PCT: usize = 75;
+const TRIM_LOW_PCT: usize = 40;
+const EARLIER_DECISION: &str =
+    "(The user answered a proposal card from earlier in the chat, before the part you can see.)";
 
 pub fn ensure_conversation(
     conn: &Connection,
     id: &str,
-    title: Option<&str>,
     provider_id: Option<&str>,
 ) -> anyhow::Result<()> {
     let now = now_ms();
     conn.execute(
-        "INSERT INTO conversation(id, title, provider_id, created_ms, updated_ms) VALUES (?1, ?2, ?3, ?4, ?4)
-         ON CONFLICT(id) DO UPDATE SET title = COALESCE(conversation.title, excluded.title),
-           provider_id = COALESCE(excluded.provider_id, conversation.provider_id)",
-        params![id, title, provider_id, now],
+        "INSERT INTO conversation(id, provider_id, created_ms, updated_ms) VALUES (?1, ?2, ?3, ?3)
+         ON CONFLICT(id) DO UPDATE SET provider_id = COALESCE(excluded.provider_id, conversation.provider_id)",
+        params![id, provider_id, now],
     )?;
     Ok(())
 }
@@ -85,23 +51,37 @@ pub fn exists(conn: &Connection, id: &str) -> anyhow::Result<bool> {
 }
 
 pub fn append(conn: &Connection, conv: &str, id: &str, msg: &ChatMessage) -> anyhow::Result<()> {
-    let now = now_ms();
+    append_at(conn, conv, id, msg, now_ms())
+}
+
+pub fn append_at(
+    conn: &Connection,
+    conv: &str,
+    id: &str,
+    msg: &ChatMessage,
+    at_ms: i64,
+) -> anyhow::Result<()> {
     conn.execute(
         "INSERT INTO message(id, conversation_id, seq, role, json, created_ms)
          VALUES (?1, ?2, (SELECT COALESCE(MAX(seq), 0) + 1 FROM message WHERE conversation_id = ?2), ?3, ?4, ?5)",
-        params![id, conv, msg.role, serde_json::to_string(msg)?, now],
+        params![id, conv, msg.role, serde_json::to_string(msg)?, at_ms],
     )?;
     conn.execute(
         "UPDATE conversation SET updated_ms = ?2 WHERE id = ?1",
-        params![conv, now],
+        params![conv, at_ms],
     )?;
     Ok(())
 }
 
-pub fn append_all(conn: &mut Connection, conv: &str, msgs: &[Stored]) -> anyhow::Result<()> {
+pub fn append_all_at(
+    conn: &mut Connection,
+    conv: &str,
+    msgs: &[Stored],
+    at_ms: i64,
+) -> anyhow::Result<()> {
     let tx = conn.transaction()?;
     for s in msgs {
-        append(&tx, conv, &s.id, &s.msg)?;
+        append_at(&tx, conv, &s.id, &s.msg, at_ms)?;
     }
     tx.commit()?;
     Ok(())
@@ -115,9 +95,8 @@ pub fn replace(conn: &Connection, id: &str, msg: &ChatMessage) -> anyhow::Result
     Ok(())
 }
 
-pub fn load(conn: &Connection, conv: &str) -> anyhow::Result<Vec<Stored>> {
-    let mut st = conn
-        .prepare("SELECT id, json FROM message WHERE conversation_id = ?1 ORDER BY seq, rowid")?;
+fn query_stored(conn: &Connection, sql: &str, conv: &str) -> anyhow::Result<Vec<Stored>> {
+    let mut st = conn.prepare(sql)?;
     let rows = st
         .query_map([conv], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -131,6 +110,158 @@ pub fn load(conn: &Connection, conv: &str) -> anyhow::Result<Vec<Stored>> {
                 .map(|msg| Stored { id, msg })
         })
         .collect())
+}
+
+// The whole scrollback, including what the model no longer sees.
+pub fn load(conn: &Connection, conv: &str) -> anyhow::Result<Vec<Stored>> {
+    query_stored(
+        conn,
+        "SELECT id, json FROM message WHERE conversation_id = ?1 ORDER BY seq, rowid",
+        conv,
+    )
+}
+
+pub fn load_window(conn: &Connection, conv: &str) -> anyhow::Result<Vec<Stored>> {
+    query_stored(
+        conn,
+        "SELECT id, json FROM message WHERE conversation_id = ?1
+           AND seq >= COALESCE((SELECT window_start_seq FROM conversation WHERE id = ?1), 0)
+         ORDER BY seq, rowid",
+        conv,
+    )
+}
+
+pub fn window_start(conn: &Connection, conv: &str) -> anyhow::Result<i64> {
+    Ok(conn
+        .query_row(
+            "SELECT window_start_seq FROM conversation WHERE id = ?1",
+            [conv],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0))
+}
+
+pub fn set_window_start_at(conn: &Connection, conv: &str, message_id: &str) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE conversation SET window_start_seq =
+           (SELECT seq FROM message WHERE id = ?2 AND conversation_id = ?1)
+         WHERE id = ?1 AND EXISTS (SELECT 1 FROM message WHERE id = ?2 AND conversation_id = ?1)",
+        params![conv, message_id],
+    )?;
+    Ok(())
+}
+
+// The next message stored is the first one the model sees.
+pub fn start_fresh(conn: &Connection, conv: &str) -> anyhow::Result<()> {
+    ensure_conversation(conn, conv, None)?;
+    conn.execute(
+        "UPDATE conversation SET window_start_seq =
+           (SELECT COALESCE(MAX(seq), 0) + 1 FROM message WHERE conversation_id = ?1)
+         WHERE id = ?1",
+        [conv],
+    )?;
+    Ok(())
+}
+
+pub fn clear(conn: &mut Connection, conv: &str) -> anyhow::Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM message WHERE conversation_id = ?1", [conv])?;
+    // seq restarts at 1, so a leftover window start would hide every new message.
+    tx.execute(
+        "UPDATE conversation SET window_start_seq = 0 WHERE id = ?1",
+        [conv],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn last_message_ms(conn: &Connection, conv: &str) -> anyhow::Result<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT created_ms FROM message WHERE conversation_id = ?1 ORDER BY seq DESC, rowid DESC LIMIT 1",
+            [conv],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowView {
+    pub window_start_id: Option<String>,
+    pub has_hidden: bool,
+    pub fresh: bool,
+}
+
+pub fn view(conn: &Connection, conv: &str, now: i64) -> anyhow::Result<WindowView> {
+    let start = window_start(conn, conv)?;
+    let window_start_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM message WHERE conversation_id = ?1 AND seq >= ?2 ORDER BY seq, rowid LIMIT 1",
+            params![conv, start],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let has_hidden = conn
+        .query_row(
+            "SELECT 1 FROM message WHERE conversation_id = ?1 AND seq < ?2 LIMIT 1",
+            params![conv, start],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    let fresh = match last_message_ms(conn, conv)? {
+        None => true,
+        Some(t) => now - t > SESSION_GAP_MS || window_start_id.is_none(),
+    };
+    Ok(WindowView {
+        window_start_id,
+        has_hidden,
+        fresh,
+    })
+}
+
+pub fn context_tokens(context_window: u32) -> usize {
+    match context_window {
+        0 => DEFAULT_CONTEXT_TOKENS,
+        n => n as usize,
+    }
+}
+
+fn msg_chars(m: &ChatMessage) -> usize {
+    serde_json::to_string(m).map_or(0, |s| s.len())
+}
+
+// Index the window should start at after a trim, or None to keep it (AGENT-CONTEXT-WINDOW).
+pub fn trim_point(window: &[Stored], overhead_chars: usize, context_tokens: usize) -> Option<usize> {
+    let budget = context_tokens.saturating_mul(CHARS_PER_TOKEN);
+    let sizes: Vec<usize> = window.iter().map(|s| msg_chars(&s.msg)).collect();
+    let total: usize = sizes.iter().sum();
+    if (overhead_chars + total) * 100 <= budget * TRIM_HIGH_PCT {
+        return None;
+    }
+    let mut before = 0;
+    let mut last_user = None;
+    for (i, s) in window.iter().enumerate() {
+        if i > 0 && s.msg.role == "user" {
+            if (overhead_chars + total - before) * 100 <= budget * TRIM_LOW_PCT {
+                return Some(i);
+            }
+            last_user = Some(i);
+        }
+        before += sizes[i];
+    }
+    last_user
+}
+
+// Overflow's last step before giving up: drop the oldest user turn in the window.
+pub fn next_turn(window: &[Stored]) -> Option<usize> {
+    window
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, s)| s.msg.role == "user")
+        .map(|(i, _)| i)
 }
 
 pub fn tool_msg(call_id: &str, content: &str) -> ChatMessage {
@@ -242,6 +373,49 @@ pub fn describe_proposal(p: &Proposal) -> String {
     s
 }
 
+pub fn describe_open(p: &Proposal) -> String {
+    let mut target = p
+        .items
+        .first()
+        .map_or_else(|| "(no items)".to_string(), |i| i.path.clone());
+    if p.items.len() > 1 {
+        let _ = write!(target, " +{} more", p.items.len() - 1);
+    }
+    match (&p.destination, &p.format) {
+        (Some(d), _) => {
+            let _ = write!(target, " to {}", d.name);
+        }
+        (None, Some(f)) => {
+            let _ = write!(target, " as {f}");
+        }
+        _ => {}
+    }
+    format!(
+        "{} | {} | {target} | {}",
+        p.id,
+        p.kind.as_str(),
+        humanize_bytes(p.total_alloc.max(0) as u64)
+    )
+}
+
+// Cards can outlive the turn that made them, so the prompt names every one still waiting.
+pub fn open_proposals(db: &Db, conv: &str) -> anyhow::Result<Vec<String>> {
+    let ids: Vec<String> = db
+        .conn()?
+        .prepare(
+            "SELECT id FROM proposal WHERE conversation_id = ?1 AND status = 'pending' ORDER BY created_ms, id",
+        )?
+        .query_map([conv], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(p) = proposals::get(db, &id)? {
+            out.push(describe_open(&p));
+        }
+    }
+    Ok(out)
+}
+
 pub const NO_DECISION: &str =
     "No decision was recorded for this proposal. Treat it as not approved; nothing was changed.";
 
@@ -265,14 +439,10 @@ pub fn ingest(
     conv: &str,
     provider_id: Option<&str>,
     input: &[AgMessage],
+    now: i64,
 ) -> anyhow::Result<()> {
     let conn = db.conn()?;
-    let title = input
-        .iter()
-        .filter(|m| m.role == "user")
-        .find_map(|m| m.content.as_deref().filter(|c| !c.trim().is_empty()))
-        .map(title_from);
-    ensure_conversation(&conn, conv, title.as_deref(), provider_id)?;
+    ensure_conversation(&conn, conv, provider_id)?;
     for m in input {
         if m.id.trim().is_empty() || exists(&conn, &m.id)? {
             continue;
@@ -281,7 +451,11 @@ pub fn ingest(
             "user" => {
                 let text = m.content.as_deref().unwrap_or("");
                 if !text.trim().is_empty() {
-                    append(&conn, conv, &m.id, &ChatMessage::text("user", text))?;
+                    let gap = last_message_ms(&conn, conv)?.is_some_and(|t| now - t > SESSION_GAP_MS);
+                    append_at(&conn, conv, &m.id, &ChatMessage::text("user", text), now)?;
+                    if gap {
+                        set_window_start_at(&conn, conv, &m.id)?;
+                    }
                 }
             }
             "tool" => {
@@ -299,7 +473,7 @@ pub fn ingest(
                     continue;
                 }
                 let content = proposal_result(db, conv, call);
-                append(&conn, conv, &m.id, &tool_msg(call_id, &content))?;
+                append_at(&conn, conv, &m.id, &tool_msg(call_id, &content), now)?;
             }
             _ => {}
         }
@@ -309,10 +483,24 @@ pub fn ingest(
 
 // Every tool call gets exactly one result right after its assistant message, as providers require.
 pub fn context(db: &Db, conv: &str, stored: &[Stored]) -> Vec<ChatMessage> {
+    let calls = call_ids(stored);
     let mut used = vec![false; stored.len()];
     let mut out = Vec::with_capacity(stored.len());
     for (i, s) in stored.iter().enumerate() {
         match s.msg.role.as_str() {
+            // A card answered after its call left the window; the decision text names the proposal.
+            "tool"
+                if s.msg
+                    .tool_call_id
+                    .as_ref()
+                    .is_some_and(|id| !calls.contains(id)) =>
+            {
+                let text = s.msg.content.as_deref().unwrap_or(NO_DECISION);
+                out.push(ChatMessage::text(
+                    "user",
+                    &format!("{EARLIER_DECISION}\n{text}"),
+                ));
+            }
             "tool" => {}
             "assistant" => {
                 out.push(s.msg.clone());

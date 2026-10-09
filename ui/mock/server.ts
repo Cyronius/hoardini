@@ -118,18 +118,23 @@ const history: T.HistoryPoint[] = Array.from({ length: 14 }, (_, i) => {
 
 const settings: T.Settings = { threshold_bytes: 1 * MB, redact_paths: true, web_search_enabled: false, indexer_workers: 2, indexer_memory_cap_mb: 256, builtin_idle_minutes: 10, index_size_bytes: 184 * MB };
 
-type Thread = { id: string; title: string; updated_ms: number; messages: unknown[]; proposals: Record<string, T.Proposal> };
-const threads = new Map<string, Thread>();
+type Thread = { updated_ms: number; messages: ({ id: string } & Record<string, unknown>)[]; proposals: Record<string, T.Proposal>; windowStart: number };
+const thread: Thread = { updated_ms: 0, messages: [], proposals: {}, windowStart: 0 };
+const SESSION_GAP_MS = 6 * 3_600_000;
 const proposals = new Map<string, T.Proposal>();
 const cancelled = new Set<string>();
 
-function threadFor(id: string, title: string): Thread {
-  let t = threads.get(id);
-  if (!t) {
-    t = { id, title, updated_ms: now(), messages: [], proposals: {} };
-    threads.set(id, t);
-  }
-  return t;
+function threadDetail() {
+  const last = thread.messages.length ? thread.updated_ms : null;
+  const start = thread.messages[thread.windowStart]?.id ?? null;
+  return {
+    id: "main",
+    messages: thread.messages,
+    proposals: thread.proposals,
+    window_start_id: start,
+    has_hidden: thread.windowStart > 0,
+    fresh: last == null || now() - last > SESSION_GAP_MS || start == null,
+  };
 }
 
 function makeProposal(kind: T.ProposalKind): T.Proposal {
@@ -218,9 +223,9 @@ async function readTool(s: Sse, name: string, args: unknown, result: string, ms 
   return toolCallId;
 }
 
-async function agentRun(input: { threadId: string; runId: string; messages: { role: string; content?: unknown }[] }, s: Sse) {
-  const { threadId, runId } = input;
-  const thread = threadFor(threadId, "New chat");
+async function agentRun(input: { runId: string; messages: { id?: string; role: string; content?: unknown }[] }, s: Sse) {
+  const { runId } = input;
+  const threadId = "main";
   const last = input.messages[input.messages.length - 1];
   const started = now();
   status.running_runs += 1;
@@ -238,8 +243,8 @@ async function agentRun(input: { threadId: string; runId: string; messages: { ro
       await say(s, approved ? "Started. Watch the card and the header: the free-space bar will move as files go. I'll look at the result next time you ask." : "No problem. Nothing was changed.");
     } else {
       const text = String(last?.content ?? "");
-      thread.messages.push({ id: uuid(), role: "user", content: text });
-      if (thread.title === "New chat") thread.title = text.slice(0, 48);
+      if (thread.messages.length && now() - thread.updated_ms > SESSION_GAP_MS) thread.windowStart = thread.messages.length;
+      thread.messages.push({ id: last?.id ?? uuid(), role: "user", content: text });
       if (/^remember|remember that/i.test(text)) {
         await say(s, "Got it.");
         const toolCallId = await readTool(s, "remember", { scope: "global", kind: "preference", text }, JSON.stringify({ id: ++memSeq }), 300);
@@ -336,18 +341,23 @@ async function route(req: Request): Promise<Response> {
       break;
     case "agent":
       if (seg[1] === "run" && method === "POST") {
-        const input = await body<{ threadId: string; runId: string; messages: { role: string; content?: unknown }[] }>();
+        const input = await body<{ runId: string; messages: { id?: string; role: string; content?: unknown }[] }>();
         return sseResponse((s) => agentRun(input, s), () => cancelled.add(input.runId));
       }
       if (seg[1] === "runs") return json({ ok: true });
       break;
-    case "threads":
-      if (seg.length === 1) return json([...threads.values()].sort((a, b) => b.updated_ms - a.updated_ms).map(({ id, title, updated_ms }) => ({ id, title, updated_ms })));
-      if (method === "DELETE") return threads.delete(seg[1]!) ? json({ ok: true }) : err("not found", 404);
-      {
-        const t = threads.get(seg[1]!);
-        return t ? json({ id: t.id, title: t.title, messages: t.messages, proposals: t.proposals }) : err("not found", 404);
+    case "thread":
+      if (seg[1] === "fresh" && method === "POST") {
+        thread.windowStart = thread.messages.length;
+        return json({ ok: true });
       }
+      if (method === "DELETE") {
+        if (status.running_runs > 0) return err("a chat run is in progress; stop it first", 409);
+        thread.messages = [];
+        thread.windowStart = 0;
+        return json({ ok: true });
+      }
+      return json(threadDetail());
     case "proposals": {
       const p = proposals.get(seg[1]!);
       if (!p) return err("proposal not found", 404);

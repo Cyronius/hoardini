@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Message } from "@ag-ui/client";
 import { routes } from "./api/client";
-import type { IndexSummary, Job, Proposal, Status, StatusEvent } from "./api/types";
+import type { IndexSummary, Job, Proposal, Status, StatusEvent, ThreadDetail } from "./api/types";
 import { saveThemePref, themePref } from "./theme";
 
 export type DrawerTab = "memory" | "destinations" | "providers" | "search" | "theme" | "settings";
@@ -13,6 +13,13 @@ interface NotedMemory {
   text: string;
 }
 
+// The server keeps one conversation; the model sees only its window.
+export const THREAD_ID = "main";
+
+export type ThreadMeta = Pick<ThreadDetail, "window_start_id" | "has_hidden" | "fresh">;
+
+const metaOf = (d: ThreadDetail): ThreadMeta => ({ window_start_id: d.window_start_id, has_hidden: d.has_hidden, fresh: d.fresh });
+
 interface State {
   status: Status | null;
   connected: boolean;
@@ -23,9 +30,10 @@ interface State {
   drawer: DrawerTab | null;
   themePref: string;
 
-  threadId: string;
+  // Bumped when the chat must remount from `seedMessages` (page load, cleared history).
   threadNonce: number;
   seedMessages: Message[] | null;
+  threadMeta: ThreadMeta | null;
   chatBusy: boolean;
   runStats: Record<string, { elapsed_ms: number; steps: number }>;
   // The last run ended at the tool-step cap (run_stats.limit_reached), so "keep going" is offered.
@@ -49,11 +57,12 @@ interface State {
   markToolStart(id: string): void;
   markToolEnd(id: string): void;
   markCallsBefore(messageId: string, callIds: string[]): void;
-  newThread(): void;
-  openThread(id: string): Promise<void>;
+  loadThread(): Promise<void>;
+  refreshThreadMeta(): Promise<void>;
+  markAsked(): void;
+  startFresh(): Promise<void>;
+  clearHistory(): Promise<void>;
 }
-
-export const newThreadId = () => `thread-${crypto.randomUUID()}`;
 
 export const useStore = create<State>((set, get) => ({
   status: null,
@@ -65,9 +74,9 @@ export const useStore = create<State>((set, get) => ({
   drawer: null,
   themePref: themePref(),
 
-  threadId: newThreadId(),
   threadNonce: 0,
   seedMessages: null,
+  threadMeta: null,
   chatBusy: false,
   runStats: {},
   limitHit: false,
@@ -125,15 +134,36 @@ export const useStore = create<State>((set, get) => ({
       return t && !t.end ? { toolTimes: { ...s.toolTimes, [id]: { ...t, end: Date.now() } } } : s;
     }),
   markCallsBefore: (messageId, callIds) => set((s) => ({ callsBefore: { ...s.callsBefore, [messageId]: callIds } })),
-  newThread: () => set((s) => ({ threadId: newThreadId(), threadNonce: s.threadNonce + 1, seedMessages: null, limitHit: false })),
-  async openThread(id) {
-    const detail = await routes.thread(id);
-    set((s) => ({
-      threadId: detail.id,
-      threadNonce: s.threadNonce + 1,
-      limitHit: false,
-      seedMessages: detail.messages as Message[],
-      proposals: { ...s.proposals, ...detail.proposals },
-    }));
+  async loadThread() {
+    try {
+      const d = await routes.thread();
+      set((s) => ({
+        threadNonce: s.threadNonce + 1,
+        limitHit: false,
+        seedMessages: d.messages as Message[],
+        threadMeta: metaOf(d),
+        proposals: { ...s.proposals, ...d.proposals },
+      }));
+    } catch {
+      // Offline: still open an empty chat so the composer works once the server is back.
+      set((s) => ({ threadNonce: s.threadNonce + 1, seedMessages: null, threadMeta: null }));
+    }
+  },
+  async refreshThreadMeta() {
+    try {
+      const d = await routes.thread();
+      set((s) => ({ threadMeta: metaOf(d), proposals: { ...s.proposals, ...d.proposals } }));
+    } catch {
+      // keep the last known boundary
+    }
+  },
+  markAsked: () => set((s) => (s.threadMeta?.fresh ? { threadMeta: { ...s.threadMeta, fresh: false } } : s)),
+  async startFresh() {
+    await routes.startFresh();
+    await get().refreshThreadMeta();
+  },
+  async clearHistory() {
+    await routes.clearHistory();
+    await get().loadThread();
   },
 }));
