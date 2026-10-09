@@ -1,3 +1,4 @@
+mod apps;
 mod candidates;
 mod fake_rc;
 mod follow_up;

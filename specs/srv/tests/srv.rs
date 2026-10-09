@@ -1530,3 +1530,119 @@ async fn blank_timeout_steps_and_context_mean_the_defaults() {
     assert_eq!(list[0]["max_tool_steps"], 20);
     assert_eq!(list[0]["context_window"], 32768);
 }
+
+struct FakeApps {
+    inputs: hoardini_core::apps::AppInputs,
+    launched: Mutex<Vec<hoardini_core::apps::Uninstaller>>,
+}
+
+impl hoardini_core::apps::AppSource for FakeApps {
+    fn inputs(&self) -> hoardini_core::apps::AppInputs {
+        self.inputs.clone()
+    }
+    fn launch(&self, how: &hoardini_core::apps::Uninstaller) -> anyhow::Result<()> {
+        self.launched.lock().unwrap().push(how.clone());
+        Ok(())
+    }
+}
+
+// Traces: SRV-APPS
+#[tokio::test(flavor = "multi_thread")]
+async fn rarely_used_apps_list_as_json_and_uninstall_runs_only_the_registered_command() {
+    const GIB: u64 = 1 << 30;
+    const DAY: i64 = 86_400_000;
+    let f = Fixture::new().await;
+    {
+        let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+        let fs = hoardini_core::index::FakeFs::new(r"D:\");
+        fs.file(r"D:\Apps\Big\big.dat", 3 * GIB);
+        fs.file(r"D:\Apps\Busy\busy.dat", 3 * GIB);
+        let out = hoardini_core::index::refresh(
+            &db.conn().unwrap(),
+            &fs,
+            r"D:\",
+            &hoardini_core::index::RefreshOptions::default(),
+        )
+        .unwrap();
+        assert!(out.completed);
+    }
+    let ran = hoardini_core::store::now_ms() - 200 * DAY;
+    let program = |name: &str, loc: &str, cmd: &str| hoardini_win::InstalledProgram {
+        name: name.into(),
+        publisher: Some("Contoso".into()),
+        install_location: Some(loc.into()),
+        uninstall_key: format!(r"HKLM\Uninstall\{name}"),
+        uninstall_string: Some(cmd.into()),
+        ..Default::default()
+    };
+    let fake = Arc::new(FakeApps {
+        inputs: hoardini_core::apps::AppInputs {
+            programs: vec![
+                program(
+                    "Big Tool",
+                    r"D:\Apps\Big",
+                    r#""D:\Apps\Big\unins000.exe" /S"#,
+                ),
+                program("Busy", r"D:\Apps\Busy", r"D:\Apps\Busy\u.exe"),
+            ],
+            assist: vec![
+                hoardini_win::UserAssistEntry {
+                    name: r"D:\Apps\Big\big.exe".into(),
+                    run_count: 1,
+                    last_run_ms: Some(ran),
+                },
+                hoardini_win::UserAssistEntry {
+                    name: r"D:\Apps\Busy\busy.exe".into(),
+                    run_count: 9,
+                    last_run_ms: Some(hoardini_core::store::now_ms() - DAY),
+                },
+            ],
+            steam: Vec::new(),
+        },
+        launched: Mutex::new(Vec::new()),
+    });
+    hoardini_core::apps::set_source(Some(fake.clone()));
+
+    let (st, list) = f.call("GET", "/api/apps/rarely-used", None).await;
+    assert_eq!(st, 200, "{list}");
+    let id = list[0]["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("reg-"), "{id}");
+    assert_eq!(
+        list,
+        json!([{
+            "id": id,
+            "name": "Big Tool",
+            "publisher": "Contoso",
+            "source": "registry",
+            "path": r"D:\Apps\Big",
+            "size": 3 * GIB,
+            "last_run_ms": ran,
+            "last_run_from": r"last run of d:\apps\big\big.exe",
+        }])
+    );
+
+    let (st, r) = f
+        .call(
+            "POST",
+            &format!("/api/apps/{id}/uninstall"),
+            Some(json!({"command": "calc.exe", "file": r"C:\Windows\System32\calc.exe"})),
+        )
+        .await;
+    assert_eq!(st, 200, "{r}");
+    assert_eq!(r, json!({"started": true, "id": id, "name": "Big Tool"}));
+    assert_eq!(
+        *fake.launched.lock().unwrap(),
+        vec![hoardini_core::apps::Uninstaller::Command {
+            file: r"D:\Apps\Big\unins000.exe".into(),
+            params: Some("/S".into()),
+        }]
+    );
+
+    let (st, _) = f
+        .call("POST", "/api/apps/reg-0000000000000000/uninstall", None)
+        .await;
+    assert_eq!(st, 404);
+    assert_eq!(fake.launched.lock().unwrap().len(), 1);
+    hoardini_core::apps::set_source(None);
+    let _ = f.h.shutdown.send(());
+}

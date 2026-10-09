@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod apps;
 pub mod catalog;
 pub mod compress;
 pub mod destinations;

@@ -9,7 +9,7 @@ use windows::Win32::System::Registry::{
 use windows::core::{PCWSTR, PWSTR};
 
 use crate::util::{from_wide, wide_str, win32};
-use crate::{InstalledProgram, LastAccessSetting, UserAssistEntry, filetime_to_unix_ms};
+use crate::{InstalledProgram, LastAccessSetting, UserAssistEntry, WslDistro, filetime_to_unix_ms};
 
 struct Key(HKEY);
 
@@ -90,6 +90,28 @@ impl Key {
                 Some(s.to_string())
             };
         }
+    }
+
+    fn dword(&self, sub: Option<&str>, name: &str) -> Option<u32> {
+        let sub_w = sub.map(wide_str).transpose().ok()?;
+        let sub_p = sub_w
+            .as_ref()
+            .map_or(PCWSTR::null(), |w| PCWSTR(w.as_ptr()));
+        let name_w = wide_str(name).ok()?;
+        let mut raw = 0u32;
+        let mut bytes = 4u32;
+        let rc = unsafe {
+            RegGetValueW(
+                self.0,
+                sub_p,
+                PCWSTR(name_w.as_ptr()),
+                RRF_RT_REG_DWORD,
+                None,
+                Some((&mut raw as *mut u32).cast()),
+                Some(&mut bytes),
+            )
+        };
+        rc.is_ok().then_some(raw)
     }
 
     fn values(&self) -> io::Result<Vec<(Vec<u16>, Vec<u8>)>> {
@@ -201,10 +223,53 @@ pub fn installed_programs() -> io::Result<Vec<InstalledProgram>> {
                     .map(|s| s.trim_matches('"').to_string())
                     .filter(|s| !s.is_empty()),
                 uninstall_key: format!(r"{hive_name}\{path}\{sub}"),
+                uninstall_string: key.string(Some(&sub), "UninstallString"),
+                hidden: key.dword(Some(&sub), "SystemComponent") == Some(1)
+                    || key.string(Some(&sub), "ParentKeyName").is_some(),
             });
         }
     }
     Ok(out)
+}
+
+// Forward slashes and lower case as Steam writes it, e.g. "c:/program files (x86)/steam".
+pub fn steam_path() -> Option<String> {
+    Key::open(HKEY_CURRENT_USER, r"Software\Valve\Steam", KEY_READ)
+        .ok()?
+        .string(None, "SteamPath")
+}
+
+pub fn hibernate_enabled() -> Option<bool> {
+    Key::open(
+        HKEY_LOCAL_MACHINE,
+        r"SYSTEM\CurrentControlSet\Control\Power",
+        KEY_READ,
+    )
+    .ok()?
+    .dword(None, "HibernateEnabled")
+    .map(|v| v != 0)
+}
+
+pub fn wsl_distros() -> Vec<WslDistro> {
+    let Ok(root) = Key::open(
+        HKEY_CURRENT_USER,
+        r"Software\Microsoft\Windows\CurrentVersion\Lxss",
+        KEY_READ,
+    ) else {
+        return Vec::new();
+    };
+    root.subkeys()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|sub| {
+            Some(WslDistro {
+                name: root.string(Some(&sub), "DistributionName")?,
+                base_path: root.string(Some(&sub), "BasePath")?,
+                vhd_file: root.string(Some(&sub), "VhdFileName"),
+                version: root.dword(Some(&sub), "Version").unwrap_or(0),
+            })
+        })
+        .collect()
 }
 
 const USER_ASSIST: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist";

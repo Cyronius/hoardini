@@ -173,6 +173,22 @@ Aborting the `POST /api/agent/run` request, `POST /api/agent/runs/{id}/cancel`, 
 4. Repeat, ending with `POST /api/agent/runs/{runId}/cancel`: the stream ends with `RUN_FINISHED`.
 5. In the UI, ask something that streams for a while and press Stop: the stream closes at once, the question stays on screen (it is stored in the thread), `running_runs` returns to 0, the model server logs a client disconnect, and a new question in the same chat answers normally. (2026-10-08, scripted mock model: all as described.)
 
+### SRV-APPS: Rarely used apps and their uninstall route
+**Applies to:** hoardini-server
+**Verification:** test
+
+`GET /api/apps/rarely-used` returns the list from ACT-APPS-RARELY-USED as a JSON array of `{id, name, publisher,
+source, path, size, last_run_ms, last_run_from}` (paths shown with the profile as `~`), read fresh from the registry,
+UserAssist, and Steam on each call. `POST /api/apps/{id}/uninstall` starts the uninstaller registered for that id
+(ACT-UNINSTALL) and answers `{started: true, id, name}`; an id no installed app has answers 404 and starts nothing. The
+request body is ignored, so a client can never name the command. The app list and the launcher come from
+`apps::source()`, which tests replace through `apps::set_source`.
+
+**Acceptance criteria:**
+- With a fake app source (Big Tool, 3 GiB, run 200 days ago; Busy, 3 GiB, run yesterday) over an indexed fake `D:\`: the GET returns exactly one entry, Big Tool, with its `reg-` id, publisher, `source: "registry"`, path `D:\Apps\Big`, size, last run, and `last run of d:\apps\big\big.exe`.
+- POSTing its id with a body naming `calc.exe` answers `{started: true, id, name: "Big Tool"}` and launches exactly `D:\Apps\Big\unins000.exe` with `/S`, its registered uninstall string.
+- POSTing `reg-0000000000000000` answers 404 and launches nothing more.
+
 ### SRV-RUN-CANCEL: A cancelled run ends with a valid event sequence
 **Applies to:** hoardini-server
 **Verification:** test

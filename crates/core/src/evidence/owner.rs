@@ -52,7 +52,7 @@ pub fn is_under(prefix: &str, path: &str) -> bool {
             && (prefix.ends_with('\\') || path.as_bytes()[prefix.len()] == b'\\'))
 }
 
-fn broad(loc: &str) -> bool {
+pub(crate) fn broad(loc: &str) -> bool {
     let rest = loc
         .split_once(':')
         .map_or(loc, |(_, r)| r)

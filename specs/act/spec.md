@@ -59,6 +59,52 @@ SMB UNC path), compress, dedupe.
   `rclone:<remote>:<path>`. Server routes: `GET /api/runtime/rclone`, `POST /api/runtime/rclone/install` (a job),
   `POST /api/destinations/rclone/authorize`.
 
+### ACT-APPS-RARELY-USED: Big apps not run for 90 days are listed
+**Applies to:** hoardini
+**Verification:** test
+
+`apps::installed(inputs)` shall turn the uninstall registry and Steam's app manifests into apps with a stable id:
+`steam-<appid>` for a Steam game (its folder `<library>\steamapps\common\<installdir>`, uninstalled through
+`steam://uninstall/<appid>`), and `reg-<16 hex of BLAKE3 of the lower-cased uninstall key>` for a registry program,
+uninstalled by its own `UninstallString` split into program and arguments (`apps::split_command`: a quoted program, else
+the text up to the first `.exe` followed by a space or the end, else the first word). A registry program is left out
+when it is hidden (`SystemComponent = 1` or an update with `ParentKeyName`), has no `InstallLocation` or
+`UninstallString`, has an install location too broad to mean one app (a drive, `Program Files`, `Windows`, `Users`, ...;
+`evidence::owner`), or shares its folder with a Steam game or an earlier program. Steam libraries come from
+`libraryfolders.vdf` (current and old layouts) under the Steam folder in `HKCU\Software\Valve\Steam\SteamPath`, and
+games from each library's `appmanifest_*.acf` (`appid`, `name`, `installdir`, `LastPlayed` in seconds, 0 = never).
+
+`apps::rarely_used(conn, inputs, now)` shall size each app from the index (the allocated size of its folder, minus the
+folders of other apps installed inside it, so a launcher is not charged for its games), take its last run as the later
+of the latest UserAssist run of an exe in its folder and Steam's `LastPlayed`, and list, biggest first, the apps of at
+least 2 GiB (`MIN_APP_BYTES`) whose last run is more than 90 days ago (`IDLE_DAYS`) or unknown, each with `id`, `name`,
+`publisher`, `source` (`registry` or `steam`), `path` (as the index spells it), `size`, `last_run_ms`, and
+`last_run_from` (`last run of <exe>` or `Steam LastPlayed`). An app whose folder is not in the index is not listed.
+Tests: `specs/act/tests/apps.rs`.
+
+**Acceptance criteria:**
+- With fake registry, UserAssist, and Steam inputs over a fake `D:\`: Old Game (Steam, 5 GiB, played 100 days ago), Never Opened (4 GiB, no run), Big Tool (3 GiB, run 200 days ago), and Unplayed (Steam, 2.5 GiB, never) are listed in that order, and nothing else: not a 3 GiB app run 10 days ago, a 1 GiB app, a hidden one, one without an uninstaller, one at `D:\Program Files`, one not in the index, the Steam client (1 GiB once its three games are taken out, though run 300 days ago), or New Game (UserAssist 200 days ago, Steam 3 days ago). The registry entry "Steam App 1001" for Old Game's folder is not listed separately; Old Game's id is `steam-1001`, a registry id is `reg-` plus 16 hex digits, and a second call gives the same ids.
+- Old Game uninstalls through `steam://uninstall/1001`; Never Opened through `D:\Apps\Never\Uninstall Never.exe` with `/x`.
+- `split_command`: a quoted program keeps its arguments apart; an unquoted `C:\Program Files\My App\Uninstall My App.exe --remove now` splits after `.exe`; `MsiExec.exe /X{...}` splits after `MsiExec.exe`; `C:\Tools\app.exe.old\run.exe` stays whole; blank text and an unterminated quote give nothing.
+- `libraryfolders.vdf` in the current layout gives both library paths with single backslashes; the old layout gives its numbered path; an `appmanifest` gives the app id, name, folder under the library, and `LastPlayed` in ms (0 = none); one without `installdir` gives nothing.
+
+### ACT-UNINSTALL: Uninstall runs the app's own uninstaller and never deletes its folder
+**Applies to:** hoardini
+**Verification:** manual
+
+`POST /api/apps/{id}/uninstall` (SRV-APPS) shall look the id up among the installed apps (ACT-APPS-RARELY-USED) and start
+that app's registered uninstaller through the shell (`ShellExecuteExW`, so an uninstaller that needs admin rights shows
+its own UAC prompt), or `steam://uninstall/<appid>` for a Steam game, and return at once. The uninstaller asks for its
+own confirmation. Hoardini never deletes an app's folder or files itself, and the request body is never read.
+
+**Verification (manual):**
+1. Install a small throwaway app that registers an uninstaller (e.g. an Inno Setup or NSIS installer) into `D:\scratch\app`, then pad its folder past 2 GiB: `fsutil file createnew D:\scratch\app\pad.bin 2147483648`.
+2. With `D:\scratch` indexed (`hoardini index --volume D:\` or a watched folder) and the app never started, `GET /api/apps/rarely-used` lists it with `last_run_ms: null`.
+3. `POST /api/apps/<its id>/uninstall`: the app's own uninstaller window opens (with a UAC prompt first if it needs admin). Cancel it: the folder and `pad.bin` are unchanged.
+4. Repeat and confirm: the uninstaller removes what it installed; `pad.bin`, which it did not install, is still there, so Hoardini removed nothing itself.
+5. For a Steam game listed by the same route, the POST opens Steam's own "Uninstall <game>?" dialog.
+6. `POST /api/apps/reg-0000000000000000/uninstall` answers 404 and opens nothing.
+
 ### ACT-ARCHIVE-VERIFY: Archive deletes the source only after the copy verifies
 **Applies to:** hoardini
 **Verification:** test
