@@ -47,11 +47,11 @@ The chat shall show each run in the order it happened: text before a tool round,
 **Applies to:** hoardini
 **Verification:** manual
 
-The chat is one continuous scrollback. When messages lie before the model's window (`has_hidden`), the chat shall draw the divider "Hoardini doesn't remember above this line" before the first visible message at or after `window_start_id`, or at the end of the scrollback when `window_start_id` is null. The header's first button, where New chat was, is **Start fresh** (sunrise icon; tooltip "Start fresh: Hoardini forgets the chat so far (it stays on screen)"). It calls `POST /api/thread/fresh`, keeps every message on screen, and is disabled while a run streams or the server is offline. There is no Recent chats button. The thread is fetched again after each run ends and after Start fresh, so the divider follows trims and session gaps.
+The chat is one continuous scrollback. When messages lie before the model's window (`has_hidden`), the chat shall draw the divider "Hoardini doesn't remember above this line" before the first visible message at or after `window_start_id`, or at the end of the scrollback when `window_start_id` is null. **Start fresh** sits left of the message box (sunrise icon; tooltip "Start fresh: Hoardini forgets the chat so far (it stays on screen)"). It calls `POST /api/thread/fresh`, keeps every message on screen, and is disabled while a run streams or the server is offline. There is no Recent chats button. The thread is fetched again after each run ends and after Start fresh, so the divider follows trims and session gaps.
 
 **Verification (manual):**
 1. Start `hoardini serve` with `HOARDINI_DATA_DIR` and `--db` in a scratch folder and a provider pointing at a scripted OpenAI-compatible mock; open the UI.
-2. The header shows Start fresh and Settings, and no Recent chats button.
+2. Start fresh sits left of the message box; the header shows only Settings, with no New chat or Recent chats button.
 3. Ask two questions. No divider is shown. Press Start fresh: both turns stay on screen and the divider appears below them.
 4. Ask a third question: the divider now sits right above it, and the model request carries only that question (check the mock's captured request).
 5. Reload the page: the same scrollback opens with the divider in the same place.
