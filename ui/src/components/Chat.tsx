@@ -13,7 +13,7 @@ import { isProposeTool } from "../agent/toolDefs";
 import { friendlyToolName, humanElapsed } from "../format";
 import { THREAD_ID, useStore } from "../store";
 import { Greeting } from "./Greeting";
-import { FreshStartIcon, SendIcon, SpinnerIcon, StopIcon } from "./icons";
+import { EraserIcon, SendIcon, SpinnerIcon, StopIcon } from "./icons";
 import { IconButton } from "./IconButton";
 import { Markdown } from "./Markdown";
 import { ToolChip } from "./ToolChip";
@@ -98,7 +98,8 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   const activitySteps = useActivity((s) => s.steps);
   const meta = useStore((s) => s.threadMeta);
   const markAsked = useStore((s) => s.markAsked);
-  const startFresh = useStore((s) => s.startFresh);
+  const clearScreen = useStore((s) => s.clearScreen);
+  const loadThread = useStore((s) => s.loadThread);
   const connected = useStore((s) => s.connected);
 
   useEffect(() => {
@@ -303,6 +304,16 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         <div ref={contentRef} className="mx-auto w-full max-w-3xl space-y-3 px-4 py-4">
+          {!!meta?.earlier && !isStreaming && (
+            <div className="text-center">
+              <button
+                className="text-[length:var(--fs-xs)] font-semibold text-faint underline-offset-2 hover:text-paper hover:underline"
+                onClick={() => void loadThread(!meta.showing_all)}
+              >
+                {meta.showing_all ? "Hide earlier chat" : `Show earlier chat (${meta.earlier} message${meta.earlier === 1 ? "" : "s"})`}
+              </button>
+            </div>
+          )}
           {scrollback}
           {isStreaming && <LiveActivity />}
           {isStreaming && currentMessage && (
@@ -354,13 +365,13 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
       <div className="border-t border-line-soft bg-ink-900 px-4 py-3">
         <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
           <IconButton
-            title="Start fresh: Hoardini forgets the chat so far (it stays on screen)"
-            aria-label="Start fresh"
+            title="Clear the chat: Hoardini starts fresh, and earlier messages stay saved"
+            aria-label="Clear chat"
             className="!h-11 !w-11 !rounded-full text-muted hover:text-paper"
             disabled={isStreaming || !connected}
-            onClick={() => void startFresh().catch(() => {})}
+            onClick={() => void clearScreen().catch(() => {})}
           >
-            <FreshStartIcon />
+            <EraserIcon />
           </IconButton>
           <textarea
             ref={inputRef}

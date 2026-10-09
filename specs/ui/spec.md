@@ -47,27 +47,27 @@ The chat shall show each run in the order it happened: text before a tool round,
 **Applies to:** hoardini
 **Verification:** manual
 
-The chat is one continuous scrollback. When messages lie before the model's window (`has_hidden`), the chat shall draw the divider "Hoardini doesn't remember above this line" before the first visible message at or after `window_start_id`, or at the end of the scrollback when `window_start_id` is null. **Start fresh** sits left of the message box (sunrise icon; tooltip "Start fresh: Hoardini forgets the chat so far (it stays on screen)"). It calls `POST /api/thread/fresh`, keeps every message on screen, and is disabled while a run streams or the server is offline. There is no Recent chats button. The thread is fetched again after each run ends and after Start fresh, so the divider follows trims and session gaps.
+The chat is one continuous scrollback. When messages lie before the model's window (`has_hidden`), the chat shall draw the divider "Hoardini doesn't remember above this line" before the first visible message at or after `window_start_id`, or at the end of the scrollback when `window_start_id` is null. **Clear chat** sits left of the message box (eraser icon; tooltip "Clear the chat: Hoardini starts fresh, and earlier messages stay saved"). It calls `POST /api/thread/fresh` and empties the screen: the model forgets the chat so far, and the earlier messages stay stored behind a "Show earlier chat (N messages)" link at the top of the scrollback, which toggles to "Hide earlier chat". It is disabled while a run streams or the server is offline. Deleting messages for good is Settings' Clear chat history. There is no Recent chats button. The thread is fetched again after each run ends and after Clear chat, so the divider follows trims and session gaps.
 
 **Verification (manual):**
 1. Start `hoardini serve` with `HOARDINI_DATA_DIR` and `--db` in a scratch folder and a provider pointing at a scripted OpenAI-compatible mock; open the UI.
-2. Start fresh sits left of the message box; the header shows only Settings, with no New chat or Recent chats button.
-3. Ask two questions. No divider is shown. Press Start fresh: both turns stay on screen and the divider appears below them.
-4. Ask a third question: the divider now sits right above it, and the model request carries only that question (check the mock's captured request).
+2. The eraser (Clear chat) sits left of the message box; the header shows only Settings, with no New chat or Recent chats button.
+3. Ask two questions. No divider is shown. Press Clear chat: the screen empties, the welcome card shows, and "Show earlier chat (4 messages)" appears at the top. Click it: both turns come back with the divider below them; click "Hide earlier chat" to hide them again.
+4. Ask a third question: the model request carries only that question (check the mock's captured request); with the earlier chat shown, the divider sits right above it.
 5. Reload the page: the same scrollback opens with the divider in the same place.
 6. Set every stored message's `created_ms` 7 hours back in the database, reload, and ask again: the divider moves above the new question.
-(2026-10-09: steps 1–6 pass against `hoardini serve` with a scripted mock model, driven by Playwright; the requests after Start fresh and after the 7-hour gap carried only the new question.)
+(2026-10-09: steps 1–6 passed against `hoardini serve` with a scripted mock model, driven by Playwright, when the button was Start fresh; steps 2–4 were rewritten for Clear chat the same day and have not been re-run.)
 
 ### UI-WELCOME-BACK: The greeting welcomes the user back at a session start
 **Applies to:** hoardini
 **Verification:** manual
 
-The greeting card (index age, free-space change, biggest movers, duplicates, and the starters) shall show at the end of the scrollback, above the composer, whenever `GET /api/thread` reports `fresh`: on first launch, when the last message is more than 6 hours old, and right after Start fresh. It hides as soon as a question is sent. Its starters are Show hotspots, Show duplicates (when there are duplicates), and **Free space over time**, which asks `How has my free space changed over time?`.
+The greeting card (index age, free-space change, biggest movers, duplicates, and the starters) shall show at the end of the scrollback, above the composer, whenever `GET /api/thread` reports `fresh`: on first launch, when the last message is more than 6 hours old, and right after Clear chat. It hides as soon as a question is sent. Its starters are Show hotspots, Show duplicates (when there are duplicates), and **Free space over time**, which asks `How has my free space changed over time?`.
 
 **Verification (manual):**
 1. On a new scratch database with an index, open the UI: the card shows with Show hotspots and Free space over time.
 2. Press Free space over time: the question `How has my free space changed over time?` is sent and the card disappears.
-3. After the answer the card stays hidden. Press Start fresh: the card appears at the end, below the divider.
+3. After the answer the card stays hidden. Press Clear chat: the screen empties and the card appears.
 4. Set every stored message's `created_ms` 7 hours back and reload: the card shows at the end of the scrollback.
 (2026-10-09: steps 1–4 pass in the same session as UI-CONTEXT-BOUNDARY.)
 
@@ -229,7 +229,7 @@ While `meta.ai_setup_done` is unset and no provider exists, a pop-up asks how Ho
 **Applies to:** hoardini-ui, hoardini-app
 **Verification:** manual
 
-Right-aligned under the header's Start fresh and Settings icons, the header shows "♥ Like this? **Tip** my local NPR station", copied from BlabberStack. Only "Tip" is a link, to `https://www.kuaf.com/donate`; the heart uses the accent color, the text is muted and small. The tooltip reads "KUAF, the maintainer's local NPR member station. Not affiliated with Hoardini." It is hidden below the `sm` breakpoint (640 px), where the header wraps. In the desktop app, links that open a new window (`target="_blank"`) and navigations away from the loopback server open in the system browser, routed in Rust (`on_new_window`, `on_navigation` with `tauri-plugin-opener`); the page gets no IPC (UI-NO-IPC).
+Right-aligned under the header's Settings icon, the header shows "♥ Like this? **Tip** my local NPR station", copied from BlabberStack. Only "Tip" is a link, to `https://www.kuaf.com/donate`; the heart uses the accent color, the text is muted and small. The tooltip reads "KUAF, the maintainer's local NPR member station. Not affiliated with Hoardini." It is hidden below the `sm` breakpoint (640 px), where the header wraps. In the desktop app, links that open a new window (`target="_blank"`) and navigations away from the loopback server open in the system browser, routed in Rust (`on_new_window`, `on_navigation` with `tauri-plugin-opener`); the page gets no IPC (UI-NO-IPC).
 
 **Verification (manual):**
 1. Text, heart color, and tooltip match the above; hover shows the tooltip.

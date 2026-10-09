@@ -956,16 +956,30 @@ async fn the_conversation_routes_report_the_window_start_fresh_and_clear_only_me
     let (st, r) = f.call("POST", "/api/thread/fresh", None).await;
     assert_eq!((st, r), (200, json!({"ok": true})));
     let (_, t) = f.call("GET", "/api/thread", None).await;
-    assert_eq!(t["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(t["messages"], json!([]), "clearing empties the screen");
+    assert_eq!(t["earlier"], 2);
+    assert_eq!(t["showing_all"], false);
     assert_eq!(t["window_start_id"], Value::Null);
-    assert_eq!(t["has_hidden"], true);
+    assert_eq!(t["has_hidden"], false);
     assert_eq!(t["fresh"], true);
+    let (_, all) = f.call("GET", "/api/thread?all=1", None).await;
+    assert_eq!(
+        all["messages"].as_array().unwrap().len(),
+        2,
+        "earlier messages stay stored"
+    );
+    assert_eq!(all["showing_all"], true);
+    assert_eq!(all["has_hidden"], true);
 
     seed(&f, "u2", "user", "a new topic");
     let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["messages"].as_array().unwrap().len(), 1);
     assert_eq!(t["window_start_id"], "u2");
-    assert_eq!(t["has_hidden"], true);
+    assert_eq!(t["has_hidden"], false);
     assert_eq!(t["fresh"], false);
+    let (_, all) = f.call("GET", "/api/thread?all=1", None).await;
+    assert_eq!(all["messages"].as_array().unwrap().len(), 3);
+    assert_eq!(all["has_hidden"], true);
 
     let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
     let conn = db.conn().unwrap();
@@ -996,6 +1010,10 @@ async fn the_conversation_routes_report_the_window_start_fresh_and_clear_only_me
     assert_eq!(t["messages"], json!([]));
     assert_eq!(t["has_hidden"], false);
     assert_eq!(t["fresh"], true);
+    assert_eq!(
+        t["earlier"], 0,
+        "deleting the history also resets the cleared mark"
+    );
     assert_eq!(sql_count(&f, "SELECT COUNT(*) FROM message"), 0);
     assert_eq!(
         sql_count(&f, "SELECT COUNT(*) FROM proposal WHERE id = 'p-keep'"),

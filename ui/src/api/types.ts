@@ -179,6 +179,8 @@ export type ThreadDetail = {
   window_start_id: string | null;
   has_hidden: boolean;
   fresh: boolean;
+  earlier: number;
+  showing_all: boolean;
 };
 
 export type ApproveResponse = { approved: true; items: number[]; job_id: string };

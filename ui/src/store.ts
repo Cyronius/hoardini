@@ -16,9 +16,15 @@ interface NotedMemory {
 
 export const THREAD_ID = "main";
 
-export type ThreadMeta = Pick<ThreadDetail, "window_start_id" | "has_hidden" | "fresh">;
+export type ThreadMeta = Pick<ThreadDetail, "window_start_id" | "has_hidden" | "fresh" | "earlier" | "showing_all">;
 
-const metaOf = (d: ThreadDetail): ThreadMeta => ({ window_start_id: d.window_start_id, has_hidden: d.has_hidden, fresh: d.fresh });
+const metaOf = (d: ThreadDetail): ThreadMeta => ({
+  window_start_id: d.window_start_id,
+  has_hidden: d.has_hidden,
+  fresh: d.fresh,
+  earlier: d.earlier ?? 0,
+  showing_all: d.showing_all ?? false,
+});
 
 interface State {
   status: Status | null;
@@ -59,10 +65,10 @@ interface State {
   markToolStart(id: string): void;
   markToolEnd(id: string): void;
   markCallsBefore(messageId: string, callIds: string[]): void;
-  loadThread(): Promise<void>;
+  loadThread(all?: boolean): Promise<void>;
   refreshThreadMeta(): Promise<void>;
   markAsked(messageId: string, hadMessages: boolean): void;
-  startFresh(): Promise<void>;
+  clearScreen(): Promise<void>;
   clearHistory(): Promise<void>;
 }
 
@@ -138,9 +144,9 @@ export const useStore = create<State>((set, get) => ({
       return t && !t.end ? { toolTimes: { ...s.toolTimes, [id]: { ...t, end: Date.now() } } } : s;
     }),
   markCallsBefore: (messageId, callIds) => set((s) => ({ callsBefore: { ...s.callsBefore, [messageId]: callIds } })),
-  async loadThread() {
+  async loadThread(all = false) {
     try {
-      const d = await routes.thread();
+      const d = await routes.thread(all);
       set((s) => ({
         threadNonce: s.threadNonce + 1,
         limitHit: false,
@@ -155,7 +161,7 @@ export const useStore = create<State>((set, get) => ({
   },
   async refreshThreadMeta() {
     try {
-      const d = await routes.thread();
+      const d = await routes.thread(get().threadMeta?.showing_all ?? false);
       set((s) => ({ threadMeta: metaOf(d), proposals: { ...s.proposals, ...d.proposals } }));
     } catch {
       // keep the last known boundary
@@ -165,12 +171,12 @@ export const useStore = create<State>((set, get) => ({
   markAsked: (messageId, hadMessages) =>
     set((s) =>
       s.threadMeta?.fresh
-        ? { threadMeta: { window_start_id: messageId, has_hidden: s.threadMeta.has_hidden || hadMessages, fresh: false } }
+        ? { threadMeta: { ...s.threadMeta, window_start_id: messageId, has_hidden: s.threadMeta.has_hidden || hadMessages, fresh: false } }
         : s,
     ),
-  async startFresh() {
+  async clearScreen() {
     await routes.startFresh();
-    await get().refreshThreadMeta();
+    await get().loadThread(false);
   },
   async clearHistory() {
     await routes.clearHistory();

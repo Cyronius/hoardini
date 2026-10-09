@@ -125,8 +125,8 @@ inclusive; with neither, every point is returned. With no indexed volume the res
 **Verification:** test
 
 The conversation routes are:
-- `GET /api/thread` returns `{id: "main", messages, proposals, window_start_id, has_hidden, fresh}`. `messages` is the whole scrollback (AG-UI messages, profile shown as `~`) and `proposals` maps every proposal of the conversation by ID. `window_start_id` is the first message the model still sees, or null when its window is empty. `has_hidden` is true when some message lies before the window start. `fresh` is true when there are no messages, the last message is more than 6 hours old, or the window is empty (Start fresh was pressed).
-- `POST /api/thread/fresh` (Start fresh) moves the window start past the last message and returns `{ok: true}`.
+- `GET /api/thread` returns `{id: "main", messages, proposals, window_start_id, has_hidden, fresh, earlier, showing_all}`. `messages` is the scrollback from the last Clear chat on (`meta.chat_view_start_seq`), or all of it with `?all=1` (AG-UI messages, profile shown as `~`); `earlier` counts the stored messages before that mark and `showing_all` echoes `?all=1` and `proposals` maps every proposal of the conversation by ID. `window_start_id` is the first message the model still sees, or null when its window is empty. `has_hidden` is true when some returned message lies before the window start. `fresh` is true when there are no messages, the last message is more than 6 hours old, or the window is empty (Start fresh was pressed).
+- `POST /api/thread/fresh` (Clear chat) moves both the window start and the screen mark past the last message and returns `{ok: true}`; nothing is deleted. `DELETE /api/thread` also resets the screen mark.
 - `DELETE /api/thread` (Clear chat history) deletes the messages only, resets the window start, and returns `{ok: true}`. Proposals, memories, jobs and the archive journal stay. While a chat run is in progress it answers 409 and deletes nothing.
 - `POST /api/agent/run` always runs on `main`, whatever `threadId` the client sends; the run's events carry `threadId: "main"`.
 

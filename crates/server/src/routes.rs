@@ -238,13 +238,24 @@ fn display_proposal(mut p: Proposal) -> Value {
     v
 }
 
-async fn thread_get(State(s): State<AppState>) -> ApiResult {
+#[derive(Deserialize)]
+struct ThreadQuery {
+    #[serde(default)]
+    all: Option<u8>,
+}
+
+async fn thread_get(State(s): State<AppState>, Query(q): Query<ThreadQuery>) -> ApiResult {
     blocking(move || {
         let profile = hoardini_core::paths::profile_dir()
             .to_string_lossy()
             .into_owned();
-        let msgs = thread::agui_messages(&s.db, thread::MAIN, Some(&profile))?;
-        let view = thread::view(&s.db.conn()?, thread::MAIN, now_ms())?;
+        let conn = s.db.conn()?;
+        let cleared = thread::view_start(&conn);
+        let showing_all = q.all.is_some_and(|a| a != 0);
+        let from = if showing_all { 0 } else { cleared };
+        let msgs = thread::agui_messages_from(&s.db, thread::MAIN, Some(&profile), from)?;
+        let view = thread::view_from(&conn, thread::MAIN, now_ms(), from)?;
+        let earlier = thread::count_before(&conn, thread::MAIN, cleared)?;
         let props = match proposals::list_for_conversation(&s.db, thread::MAIN) {
             Ok(list) => list,
             Err(e) => {
@@ -263,6 +274,8 @@ async fn thread_get(State(s): State<AppState>) -> ApiResult {
             "window_start_id": view.window_start_id,
             "has_hidden": view.has_hidden,
             "fresh": view.fresh,
+            "earlier": earlier,
+            "showing_all": showing_all,
         })))
     })
     .await
@@ -270,7 +283,7 @@ async fn thread_get(State(s): State<AppState>) -> ApiResult {
 
 async fn thread_fresh(State(s): State<AppState>) -> ApiResult {
     blocking(move || {
-        thread::start_fresh(&s.db.conn()?, thread::MAIN)?;
+        thread::clear_screen(&s.db.conn()?, thread::MAIN)?;
         Ok(Json(json!({"ok": true})))
     })
     .await

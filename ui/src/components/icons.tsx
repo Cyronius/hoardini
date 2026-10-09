@@ -48,15 +48,11 @@ export const StopIcon = () => (
     <rect x="5" y="5" width="14" height="14" rx="3" />
   </svg>
 );
-export const FreshStartIcon = () => (
+export const EraserIcon = () => (
   <Svg>
-    <path d="M12 2v8" />
-    <path d="m8 6 4-4 4 4" />
-    <path d="m4.9 10.9 1.4 1.4" />
-    <path d="m19.1 10.9-1.4 1.4" />
-    <path d="M2 18h2M20 18h2" />
-    <path d="M16 18a4 4 0 0 0-8 0" />
-    <path d="M22 22H2" />
+    <path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l10-10a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L11 21" />
+    <path d="M22 21H7" />
+    <path d="m5 11 9 9" />
   </Svg>
 );
 export const ChevronRightIcon = () => (

@@ -75,7 +75,7 @@ export const routes = {
   putVolumes: (c: T.VolumeChoice) => put<T.VolumeView[]>("/api/volumes", c),
   cancelRun: (runId: string) => api<{ ok: true }>(`/api/agent/runs/${enc(runId)}/cancel`, { method: "POST", body: {} }),
 
-  thread: () => api<T.ThreadDetail>("/api/thread"),
+  thread: (all = false) => api<T.ThreadDetail>(`/api/thread${all ? "?all=1" : ""}`),
   startFresh: () => api<{ ok: true }>("/api/thread/fresh", { body: {} }),
   clearHistory: () => del("/api/thread"),
 

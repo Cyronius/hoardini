@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use hoardini_core::paths::humanize_bytes;
 use hoardini_core::proposals::{self, Proposal};
-use hoardini_core::store::{Db, now_ms};
+use hoardini_core::store::{Db, get_meta, now_ms, set_meta};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
@@ -121,6 +121,25 @@ pub fn load(conn: &Connection, conv: &str) -> anyhow::Result<Vec<Stored>> {
     )
 }
 
+pub fn load_from(conn: &Connection, conv: &str, from_seq: i64) -> anyhow::Result<Vec<Stored>> {
+    let mut st = conn.prepare(
+        "SELECT id, json FROM message WHERE conversation_id = ?1 AND seq >= ?2 ORDER BY seq, rowid",
+    )?;
+    let rows = st
+        .query_map(params![conv, from_seq], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, json)| {
+            serde_json::from_str::<ChatMessage>(&json)
+                .ok()
+                .map(|msg| Stored { id, msg })
+        })
+        .collect())
+}
+
 pub fn load_window(conn: &Connection, conv: &str) -> anyhow::Result<Vec<Stored>> {
     query_stored(
         conn,
@@ -163,6 +182,31 @@ pub fn start_fresh(conn: &Connection, conv: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+// Messages before this seq stay stored but are off screen until the user asks for them.
+const VIEW_START_KEY: &str = "chat_view_start_seq";
+
+pub fn view_start(conn: &Connection) -> i64 {
+    get_meta(conn, VIEW_START_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+pub fn clear_screen(conn: &Connection, conv: &str) -> anyhow::Result<()> {
+    start_fresh(conn, conv)?;
+    set_meta(conn, VIEW_START_KEY, &window_start(conn, conv)?.to_string())?;
+    Ok(())
+}
+
+pub fn count_before(conn: &Connection, conv: &str, seq: i64) -> anyhow::Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM message WHERE conversation_id = ?1 AND seq < ?2",
+        params![conv, seq],
+        |r| r.get(0),
+    )?)
+}
+
 pub fn clear(conn: &mut Connection, conv: &str) -> anyhow::Result<()> {
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM message WHERE conversation_id = ?1", [conv])?;
@@ -171,6 +215,7 @@ pub fn clear(conn: &mut Connection, conv: &str) -> anyhow::Result<()> {
         "UPDATE conversation SET window_start_seq = 0 WHERE id = ?1",
         [conv],
     )?;
+    set_meta(&tx, VIEW_START_KEY, "0")?;
     tx.commit()?;
     Ok(())
 }
@@ -193,6 +238,16 @@ pub struct WindowView {
 }
 
 pub fn view(conn: &Connection, conv: &str, now: i64) -> anyhow::Result<WindowView> {
+    view_from(conn, conv, now, 0)
+}
+
+// The divider only matters among the messages on screen, which begin at `from_seq`.
+pub fn view_from(
+    conn: &Connection,
+    conv: &str,
+    now: i64,
+    from_seq: i64,
+) -> anyhow::Result<WindowView> {
     let start = window_start(conn, conv)?;
     let window_start_id: Option<String> = conn
         .query_row(
@@ -203,8 +258,8 @@ pub fn view(conn: &Connection, conv: &str, now: i64) -> anyhow::Result<WindowVie
         .optional()?;
     let has_hidden = conn
         .query_row(
-            "SELECT 1 FROM message WHERE conversation_id = ?1 AND seq < ?2 LIMIT 1",
-            params![conv, start],
+            "SELECT 1 FROM message WHERE conversation_id = ?1 AND seq < ?2 AND seq >= ?3 LIMIT 1",
+            params![conv, start, from_seq],
             |_| Ok(()),
         )
         .optional()?
@@ -581,7 +636,16 @@ fn hidden_call(c: &ToolCallMsg) -> bool {
 
 // The UI's view of a stored thread; failed proposal calls stay LLM-only so no empty card renders.
 pub fn agui_messages(db: &Db, conv: &str, profile: Option<&str>) -> anyhow::Result<Vec<AgMessage>> {
-    let stored = load(&db.conn()?, conv)?;
+    agui_messages_from(db, conv, profile, 0)
+}
+
+pub fn agui_messages_from(
+    db: &Db,
+    conv: &str,
+    profile: Option<&str>,
+    from_seq: i64,
+) -> anyhow::Result<Vec<AgMessage>> {
+    let stored = load_from(&db.conn()?, conv, from_seq)?;
     let shown = |s: &str| match profile {
         Some(p) => redact_all(s, p),
         None => s.to_string(),
