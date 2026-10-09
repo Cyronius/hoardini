@@ -187,6 +187,36 @@ async fn idle_child_stops_after_the_setting_and_never_while_in_use() {
     assert!(!fake.alive(0));
 }
 
+// Traces: PROV-BUILTIN-IDLE
+#[tokio::test(start_paused = true)]
+async fn the_watchdog_lives_only_while_the_child_does() {
+    let (fake, b) = supervisor(0);
+    tokio::time::sleep(builtin::WATCHDOG_TICK * 3).await;
+    assert!(!b.watchdog_running(), "no child, no watchdog");
+    let lease = b.acquire("m").await.unwrap();
+    assert!(b.watchdog_running());
+    tokio::time::sleep(builtin::WATCHDOG_TICK * 2).await;
+    assert!(fake.alive(0), "a run holds it");
+    assert!(b.watchdog_running());
+    drop(lease);
+    tokio::time::sleep(builtin::WATCHDOG_TICK + Duration::from_secs(1)).await;
+    assert!(!fake.alive(0), "the next tick stops the idle child");
+    assert!(!b.is_running());
+    assert!(!b.watchdog_running(), "and the watchdog exits with it");
+
+    drop(b.acquire("m").await.unwrap());
+    assert!(b.watchdog_running(), "a new child brings it back");
+
+    let (fake, b) = supervisor(10);
+    drop(b.acquire("m").await.unwrap());
+    tokio::time::sleep(builtin::WATCHDOG_TICK * 2).await;
+    assert!(b.watchdog_running(), "not idle long enough yet");
+    fake.crash(0);
+    tokio::time::sleep(builtin::WATCHDOG_TICK + Duration::from_secs(1)).await;
+    assert!(!b.watchdog_running(), "a crashed child ends it too");
+    assert!(!b.is_running());
+}
+
 // Traces: PROV-BUILTIN-RESTART
 #[tokio::test]
 async fn crashed_child_is_restarted_on_next_use() {
@@ -226,7 +256,7 @@ fn child_command_line_is_loopback_cpu_only_with_cores_minus_two() {
     assert_eq!(pair("-t"), Some(cores.saturating_sub(2).max(1).to_string()));
     assert!(a.contains(&"--jinja".to_string()) && a.contains(&"--no-webui".to_string()));
     let p = builtin::profile("m");
-    assert!(p.small && p.redact_paths);
+    assert!(p.small);
 }
 
 #[derive(Default)]

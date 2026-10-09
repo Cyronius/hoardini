@@ -338,9 +338,7 @@ impl Run {
             let snapshot = stored.clone();
             let mut msgs = blocking(move || Ok(thread::context(&db, &conv, &snapshot))).await?;
             msgs.insert(0, ChatMessage::text("system", &system));
-            if self.provider.redact_paths {
-                redact_messages(&mut msgs, &self.profile);
-            }
+            redact_messages(&mut msgs, &self.profile);
             let req = ChatRequest {
                 messages: msgs,
                 tools,

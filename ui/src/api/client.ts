@@ -68,7 +68,8 @@ const del = <R = { ok: true }>(path: string) => api<R>(path, { method: "DELETE" 
 
 export const routes = {
   status: () => api<T.Status>("/api/status"),
-  refresh: (mode: "background" | "fast") => api<{ started: boolean }>("/api/index/refresh", { body: { mode } }),
+  refresh: () => api<{ started: boolean }>("/api/index/refresh", { method: "POST" }),
+  presence: (looking: boolean) => api<{ ok: true }>("/api/presence", { body: { looking } }),
   summary: () => api<T.IndexSummary>("/api/index/summary"),
   cancelRun: (runId: string) => api<{ ok: true }>(`/api/agent/runs/${enc(runId)}/cancel`, { method: "POST", body: {} }),
 
@@ -131,7 +132,7 @@ export const routes = {
     return api<T.HistoryPoint[]>(`/api/history${q.size ? `?${q}` : ""}`);
   },
   settings: () => api<T.Settings>("/api/settings"),
-  putSettings: (s: Partial<T.Settings>) => put<T.Settings>("/api/settings", s),
+  putSettings: (s: Partial<Omit<T.Settings, "index_size_bytes">>) => put<T.Settings>("/api/settings", s),
 };
 
 // EventSource cannot send headers; fetch streaming keeps the token out of the URL.

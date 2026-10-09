@@ -4,7 +4,7 @@ mod support;
 use std::path::Path;
 use std::sync::Arc;
 
-use hoardini_agent::provider::{ChatMessage, ToolCallMsg};
+use hoardini_agent::provider::{ChatMessage, ProviderConfig, ToolCallMsg};
 use hoardini_agent::run::{IndexControl, OVERFLOW_MESSAGE};
 use hoardini_agent::thread::{self, NO_DECISION, Stored};
 use hoardini_agent::tools::util::{MAX_RESULT_CHARS, untrusted};
@@ -389,15 +389,20 @@ async fn with_redaction_on_the_profile_path_is_sent_as_tilde() {
 
 // Traces: AGENT-REDACT
 #[tokio::test]
-async fn with_redaction_off_the_profile_path_is_sent_unchanged() {
+async fn a_stored_profile_with_redaction_off_still_loads_and_is_redacted() {
     let h = redaction_harness();
     let mock = MockLlm::start(redaction_run_script()).await;
-    let mut p = h.provider(&mock.base_url);
-    p.redact_paths = false;
+    let mut stored = serde_json::to_value(h.provider(&mock.base_url)).unwrap();
+    stored["redact_paths"] = json!(false);
+    let p: ProviderConfig = serde_json::from_value(stored).unwrap();
     h.run(p, user("t-plain", "u1", "what is in lmstudio?"))
         .await;
     let reqs = mock.requests();
-    assert!(tool_content(&reqs[1], "c1").contains(r"C:\Users\zq_owner\.lmstudio\models\big.gguf"));
+    let content = tool_content(&reqs[1], "c1");
+    assert!(content.contains(r"~\.lmstudio\models\big.gguf"), "{content}");
+    for r in &reqs {
+        assert!(!r.body.to_lowercase().contains("zq_owner"), "{}", r.body);
+    }
 }
 
 // Traces: AGENT-STEP-CAP
@@ -1152,17 +1157,21 @@ async fn searxng_standin() -> String {
 
 // Traces: AGENT-WEB-SEARCH
 #[tokio::test(flavor = "multi_thread")]
-async fn web_search_is_offered_only_when_enabled_with_an_active_provider() {
+async fn web_search_is_offered_whenever_a_search_provider_is_active() {
     let h = Harness::new(None);
     let base = searxng_standin().await;
     let conn = h.db.conn().unwrap();
-    conn.execute(
-        "INSERT INTO search_provider(id, kind, config_json, is_active, created_ms) VALUES ('searxng', 'searxng', ?1, 1, 0)",
-        [json!({"base_url": base}).to_string()],
-    )
-    .unwrap();
+    let off = Registry::full().call(
+        &ctx(&h, FAKE_PROFILE, "w0"),
+        "web_search",
+        r#"{"query": "x"}"#,
+    );
+    match off {
+        Err(ToolError::Failed(m)) => assert!(m.contains("Search tab"), "{m}"),
+        other => panic!("expected the off-state error, got {other:?}"),
+    }
     let mock = MockLlm::start(vec![
-        Turn::Text("search is off".into()),
+        Turn::Text("no provider yet".into()),
         Turn::Calls(
             None,
             vec![call(
@@ -1178,7 +1187,11 @@ async fn web_search_is_offered_only_when_enabled_with_an_active_provider() {
     let has = |r: &Captured| r.tool_names().iter().any(|n| n == "web_search");
     h.run(h.provider(&mock.base_url), user("t-ws1", "u1", "hi"))
         .await;
-    hoardini_core::store::set_meta(&conn, "web_search_enabled", "true").unwrap();
+    conn.execute(
+        "INSERT INTO search_provider(id, kind, config_json, is_active, created_ms) VALUES ('searxng', 'searxng', ?1, 1, 0)",
+        [json!({"base_url": base}).to_string()],
+    )
+    .unwrap();
     let ev = h
         .run(
             h.provider(&mock.base_url),
@@ -1192,7 +1205,7 @@ async fn web_search_is_offered_only_when_enabled_with_an_active_provider() {
         .await;
     let reqs = mock.requests();
     assert_eq!(reqs.len(), 4);
-    assert!(!has(&reqs[0]), "off by default");
+    assert!(!has(&reqs[0]), "off with no provider set up");
     assert!(has(&reqs[1]), "on with an active provider");
     assert!(!has(&reqs[3]), "off without an active provider");
     let content = tool_content(&reqs[2], "w1");

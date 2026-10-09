@@ -41,7 +41,6 @@ async function saveProvider(existing: ProviderView[], preset: { name: string; ba
     timeout_s: old?.timeout_s ?? 0,
     max_tool_steps: old?.max_tool_steps ?? 0,
     small: old?.small ?? false,
-    redact_paths: old?.redact_paths ?? true,
     params: old?.params ?? {},
     headers: old?.headers ?? {},
     extra_body: old?.extra_body ?? {},

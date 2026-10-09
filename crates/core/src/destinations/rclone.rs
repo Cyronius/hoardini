@@ -5,7 +5,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -423,16 +423,21 @@ impl RcloneDaemon {
         self.kill(&mut run);
     }
 
-    fn reap_idle(&self) {
+    // True while a child is still running afterwards.
+    fn reap_idle(&self) -> bool {
         let mut run = self.running.lock();
+        let dead = run
+            .as_mut()
+            .is_some_and(|r| !matches!(r.child.try_wait(), Ok(None)));
         let idle = self
             .usage
             .last_used
             .lock()
             .is_none_or(|t| t.elapsed() >= IDLE_STOP);
-        if run.is_some() && idle && self.usage.active.load(Ordering::SeqCst) == 0 {
+        if dead || (idle && self.usage.active.load(Ordering::SeqCst) == 0) {
             self.kill(&mut run);
         }
+        run.is_some()
     }
 
     pub fn client(&self, secrets: &dyn SecretStore) -> Result<RcClient> {
@@ -452,7 +457,10 @@ impl RcloneDaemon {
             child,
             ep: ep.clone(),
         });
-        Ok(RcClient::with_lease(ep, Some(Lease::new(&self.usage))))
+        let lease = Lease::new(&self.usage);
+        drop(run);
+        ensure_reaper();
+        Ok(RcClient::with_lease(ep, Some(lease)))
     }
 
     fn launch(&self, secrets: &dyn SecretStore) -> Result<(Child, Endpoint)> {
@@ -506,7 +514,8 @@ impl RcloneDaemon {
 
 type Registry = Vec<(PathBuf, Arc<RcloneDaemon>)>;
 static DAEMONS: LazyLock<Mutex<Registry>> = LazyLock::new(|| Mutex::new(Vec::new()));
-static REAPER: OnceLock<()> = OnceLock::new();
+// True while the reaper thread runs; it lives only as long as some daemon child does.
+static REAPER: Mutex<bool> = Mutex::new(false);
 
 pub fn daemon() -> Arc<RcloneDaemon> {
     let root = crate::paths::data_dir();
@@ -516,23 +525,36 @@ pub fn daemon() -> Arc<RcloneDaemon> {
     }
     let d = Arc::new(RcloneDaemon::new(&root));
     all.push((root, d.clone()));
-    REAPER.get_or_init(|| {
-        let spawned = std::thread::Builder::new()
-            .name("hoardini-rclone-reaper".into())
-            .spawn(|| {
-                loop {
-                    std::thread::sleep(Duration::from_secs(30));
-                    let daemons: Vec<_> = DAEMONS.lock().iter().map(|(_, d)| d.clone()).collect();
-                    for d in daemons {
-                        d.reap_idle();
-                    }
-                }
-            });
-        if let Err(e) = spawned {
-            tracing::warn!(error = %e, "rclone idle reaper did not start");
-        }
-    });
     d
+}
+
+// Called after a launch with no daemon lock held; the reaper checks and exits under REAPER, so none is missed.
+fn ensure_reaper() {
+    let mut on = REAPER.lock();
+    if *on {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("hoardini-rclone-reaper".into())
+        .spawn(|| {
+            loop {
+                std::thread::sleep(Duration::from_secs(30));
+                let mut on = REAPER.lock();
+                let daemons: Vec<_> = DAEMONS.lock().iter().map(|(_, d)| d.clone()).collect();
+                let mut alive = false;
+                for d in daemons {
+                    alive |= d.reap_idle();
+                }
+                if !alive {
+                    *on = false;
+                    return;
+                }
+            }
+        });
+    match spawned {
+        Ok(_) => *on = true,
+        Err(e) => tracing::warn!(error = %e, "rclone idle reaper did not start"),
+    }
 }
 
 pub fn stop_all() {
@@ -824,6 +846,10 @@ pub fn authorize(
         .stderr(Stdio::null())
         .spawn()
         .context("could not start rclone authorize")?;
+    // It waits on the browser's OAuth callback; closing the app mid sign-in must not leave it behind.
+    if let Err(e) = hoardini_win::kill_child_on_exit(&child) {
+        tracing::debug!(error = %e, "rclone authorize is not tied to this process's lifetime");
+    }
     let stdout = child
         .stdout
         .take()

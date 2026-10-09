@@ -42,7 +42,7 @@ impl Tool for WebSearch {
         let conn = conn(ctx)?;
         if !search::enabled(&conn) {
             return Err(failed(
-                "web search is off; the user can turn it on in Settings and pick a provider under Search",
+                "web search is off; the user can set up and activate a provider in the Search tab",
             ));
         }
         let (cfg, key) = search::configured(&conn, ctx.secrets.as_ref(), None)

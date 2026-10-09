@@ -89,19 +89,21 @@ shall equal its small totals plus its counted children (`index::verify_totals` r
 - The root's allocated, logical, and file-count totals equal the sums over all files.
 - `verify_totals` is empty.
 
-### INDEX-THRESHOLD: File-row threshold is a setting
+### INDEX-THRESHOLD: File-row threshold is a fixed 1 MiB
 **Applies to:** hoardini
 **Verification:** test
 
-The file-row threshold shall be the `meta.threshold_bytes` setting, default 1 MiB (1,048,576 bytes); `hoardini index
---threshold` overrides it for one run. The threshold used by the last completed refresh is stored on the volume.
-After a change, the next full refresh shall produce the same index as a fresh build at the new threshold.
+The file-row threshold shall be a fixed 1 MiB (1,048,576 bytes), tuned by measurement (C: indexes to about 132 MiB).
+There is no setting; a `meta.threshold_bytes` left by an older build is ignored. `hoardini index --threshold`
+overrides it for one run, for testing. The threshold used by the last completed refresh is stored on the volume; a
+journal refresh keeps it, and an `auto` refresh whose stored threshold differs runs full. A full refresh at any
+threshold shall produce the same index as a fresh build at that threshold.
 
 **Acceptance criteria:**
-- With no setting, the completed refresh records threshold 1,048,576; a file of exactly 1 MiB has a row, one of
-  1 MiB − 1 does not.
-- After setting 64 KiB, then 4 MiB, then 1 MiB, each following refresh's snapshot equals a fresh build at that
-  threshold, and totals verify.
+- With `meta.threshold_bytes` set to 64 KiB, the completed refresh records threshold 1,048,576; a file of exactly
+  1 MiB has a row, one of 1 MiB − 1 does not.
+- Refreshing with an override of 64 KiB, then 4 MiB, then none, each snapshot equals a fresh build at that
+  threshold, totals verify, and the volume ends at 1,048,576.
 
 ### INDEX-REFRESH-EQUIV: A refresh equals a fresh build
 **Applies to:** hoardini
@@ -286,9 +288,11 @@ volume space is unknown.
 **Verification:** manual
 
 In background mode the indexer shall run with process background mode (low CPU, very low I/O and memory priority) and
-EcoQoS, with 2 workers by default (`meta.indexer_workers`). Fast mode runs at normal priority with one lister per two
-logical CPUs, at most 12: a single writer applies every listing, and more listers only add kernel contention. If the
-OS calls fail, the refresh logs a warning and continues.
+EcoQoS, with 2 workers. Fast mode runs at normal priority with one lister per two logical CPUs, at most 12: a single
+writer applies every listing, and more listers only add kernel contention. `--workers` overrides the count for testing.
+The Settings tab's Fast / Lean switch (`index_speed`) picks the mode for the launch refresh, timer-driven journal
+refreshes, and Rescan now: Lean is background mode, Fast is fast mode, and the very first full scan is always fast
+(SRV-ONE-REFRESH). If the OS calls fail, the refresh logs a warning and continues.
 
 **Verification (manual):**
 1. Start `hoardini index --db %TEMP%\h-polite.db --volume C:\ --mode background`.
@@ -302,8 +306,8 @@ OS calls fail, the refresh logs a warning and continues.
 **Verification:** manual
 
 A background refresh of C: shall keep the indexer's working set under 100 MB, and the index database of C: at the
-default 1 MiB threshold shall stay under 150 MB on disk. A Job Object caps the process at
-`meta.indexer_memory_cap_mb` (default 256 MB, `--memory-cap-mb`) as a backstop. Bounded channels and a depth-first
+1 MiB threshold shall stay under 150 MB on disk. A Job Object caps the process at a fixed 256 MB in both modes as a
+backstop (`--memory-cap-mb` overrides it for testing; measured peaks are 46–56 MB). Bounded channels and a depth-first
 work stack keep the pending tree small; the SQLite page cache is 16 MB.
 
 **Verification (manual):**

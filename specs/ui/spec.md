@@ -119,6 +119,23 @@ The header mascot is a sumo wrestler whose body girth tracks the used fraction (
 5. Post `{"running_runs":1}`; confirm he alternately lifts and stomps left then right, with dust at each stomp. Post `{"running_runs":0}` to stop.
 6. Enable reduced motion in the OS or browser; confirm no looping animation.
 
+### UI-SETTINGS-AUTOSAVE: Settings save themselves; one Rescan now control
+**Applies to:** hoardini
+**Verification:** manual
+
+The Settings tab shall have no Save button. A toggle or switch saves when it changes; a text field saves when it loses focus or 500 ms after the last keystroke (`drawer/autosave.tsx`). A "Saved" tick appears beside the control that saved, or the server's error appears inline under it and the control shows the stored value again. The tab holds the Fast / Lean switch ("Slower, stays out of your way" / "Finishes sooner, uses more CPU"; SRV-SETTINGS `index_speed`), the read-only index size, and Clear chat history; the threshold, worker, memory-cap, redaction, and web-search settings are gone. The AI tab's provider form has no "Redact paths" toggle (AGENT-REDACT). The header shows one small "Rescan now" button while the index is idle, which runs a refresh at the switch's speed (SRV-ONE-REFRESH); while a refresh runs, its progress bar takes the button's place, with the leaf icon marking Lean, and there is no Scan fast button.
+
+**Verification (manual):**
+1. Start `hoardini serve --port 72xx --ui-dir ui/dist` against a scratch `HOARDINI_DATA_DIR` whose meta `indexed_volumes` points at a small folder, and open the printed URL.
+2. Header: once the first scan is done, "Index just now" and a "Rescan now" button; no refresh icon and no Scan fast.
+3. Settings: the switch shows Lean with its hint and the index size; no Save button and none of the removed settings. Click Fast: "Saved" appears beside the switch and fades; reopen the drawer and it is still Fast; `GET /api/settings` says `fast`.
+4. Click Lean, then Rescan now: the leaf and the progress bar replace the button until it finishes. With Fast set, Rescan now shows "Scanning fast" without the leaf.
+5. During a Lean refresh, flip to Fast: the leaf disappears and the label becomes "Scanning fast" (takeover). Flip back to Lean: the fast refresh finishes.
+6. Stop the server and flip the switch: an inline error appears under it and no tick.
+7. AI tab → add or edit a provider: no "Redact paths" toggle.
+8. In DevTools → Network, switch to another window and back, then minimize the browser and restore it: `/api/presence` is posted with `looking: false` on blur and `true` on focus, and the `/api/status/stream` request ends while the page is hidden and a new one starts when it is shown, without the header's "offline" badge.
+(2026-10-09, partial: headless Chromium against `hoardini serve --port 7231 --ui-dir ui/dist` with scratch data. Steps 2 and 3 pass; Rescan now in Lean started a `background` refresh. Step 7 was checked in code only, since no provider form was opened. Step 8 passed with a simulated `visibilitychange`: the stream ended and reopened with no badge, and presence posted `false` then `true`. Steps 5 and 6 were not run; SRV-ONE-REFRESH covers the takeover server-side.)
+
 ### UI-FIRST-RUN: First-run AI setup
 **Applies to:** hoardini-ui, hoardini-server
 **Verification:** manual
@@ -190,4 +207,3 @@ same data. The `range_ms` line is not shown in the card's result text.
 2. Reload the page: the same chart is drawn from the stored tool result.
 3. Run another refresh, then scroll back to that card: it still ends at the refresh the call saw.
 4. With only 2 refreshes in the index, ask again: the card shows no chart, only the numbers.
-

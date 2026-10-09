@@ -97,7 +97,7 @@ let memLimit = 200;
 let memSeq = 10;
 
 const providers: T.ProviderView[] = [
-  { id: "prov-lmstudio", name: "LM Studio", base_url: "http://127.0.0.1:1234/v1", model: "qwen3.8-27b", api_key: null, context_window: 32768, timeout_s: 180, max_tool_steps: 20, small: false, redact_paths: true, params: { temperature: 0.2 }, headers: {}, extra_body: {}, is_active: true, has_key: false, caps: { tools: true, streaming: true, streamed_tool_calls: true, tool_choice: true } },
+  { id: "prov-lmstudio", name: "LM Studio", base_url: "http://127.0.0.1:1234/v1", model: "qwen3.8-27b", api_key: null, context_window: 32768, timeout_s: 180, max_tool_steps: 20, small: false, params: { temperature: 0.2 }, headers: {}, extra_body: {}, is_active: true, has_key: false, caps: { tools: true, streaming: true, streamed_tool_calls: true, tool_choice: true } },
 ];
 const presets: T.Preset[] = [
   { id: "cerebras", name: "Cerebras", base_url: "https://api.cerebras.ai/v1", needs_key: true, default_model: "gpt-oss-120b", key_url: "https://cloud.cerebras.ai/platform/" },
@@ -120,7 +120,7 @@ const history: T.HistoryPoint[] = Array.from({ length: 14 }, (_, i) => {
   return { finished_ms: now() - (14 - i) * 2 * 86_400_000, total_bytes: 1906 * GB, free_bytes: free, used_bytes: 1906 * GB - free, indexed_bytes: 1906 * GB - free - 20 * GB };
 });
 
-const settings: T.Settings = { threshold_bytes: 1 * MB, redact_paths: true, web_search_enabled: false, indexer_workers: 2, indexer_memory_cap_mb: 256, builtin_idle_minutes: 10, index_size_bytes: 184 * MB };
+const settings: T.Settings = { index_speed: "lean", builtin_idle_minutes: 10, index_size_bytes: 184 * MB };
 
 type Thread = { updated_ms: number; messages: ({ id: string } & Record<string, unknown>)[]; proposals: Record<string, T.Proposal>; windowStart: number };
 const thread: Thread = { updated_ms: 0, messages: [], proposals: {}, windowStart: 0 };
@@ -337,9 +337,8 @@ async function route(req: Request): Promise<Response> {
     case "index":
       if (seg[1] === "summary") return json(summary);
       if (seg[1] === "refresh") {
-        const { mode } = await body<{ mode: "background" | "fast" }>();
-        if (status.index.state === "refreshing" && mode === "fast") startRefresh("fast", status.index.progress?.fraction ?? 0);
-        else if (status.index.state === "idle") startRefresh(mode);
+        if (status.index.state !== "idle") return json({ started: false });
+        startRefresh(settings.index_speed === "fast" ? "fast" : "background");
         return json({ started: true });
       }
       break;
@@ -503,8 +502,14 @@ async function route(req: Request): Promise<Response> {
     case "history":
       return json(history);
     case "settings":
-      if (method === "PUT") Object.assign(settings, await body<Partial<T.Settings>>(), { index_size_bytes: settings.index_size_bytes });
+      if (method === "PUT") {
+        Object.assign(settings, await body<Partial<T.Settings>>(), { index_size_bytes: settings.index_size_bytes });
+        if (settings.index_speed === "fast" && status.index.state === "refreshing" && status.index.mode === "background")
+          startRefresh("fast", status.index.progress?.fraction ?? 0);
+      }
       return json(settings);
+    case "presence":
+      return json({ ok: true });
     case "archive":
       return json([]);
     case "builtin":

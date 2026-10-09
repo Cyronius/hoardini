@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hoardini_core::vault::SecretStore;
-use hoardini_server::{ServerHandle, ServerOptions, route_list, start_with};
+use hoardini_server::{ServerHandle, ServerOptions, journal_wait, route_list, start_with};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 
@@ -52,7 +52,15 @@ impl Fixture {
     }
 
     async fn with(ui_dir: Option<PathBuf>, indexer: Option<PathBuf>) -> Fixture {
-        let dir = tempfile::tempdir().unwrap();
+        Self::in_dir(tempfile::tempdir().unwrap(), ui_dir, indexer, false).await
+    }
+
+    async fn in_dir(
+        dir: tempfile::TempDir,
+        ui_dir: Option<PathBuf>,
+        indexer: Option<PathBuf>,
+        refresh_on_start: bool,
+    ) -> Fixture {
         let h = start_with(
             ServerOptions {
                 port: 0,
@@ -60,7 +68,7 @@ impl Fixture {
                 db_path: dir.path().join("h.db"),
                 ui_dir,
                 dialogs: None,
-                refresh_on_start: false,
+                refresh_on_start,
                 indexer_exe: Some(
                     indexer.unwrap_or_else(|| dir.path().join("no-such-indexer.exe")),
                 ),
@@ -76,6 +84,64 @@ impl Fixture {
             http: reqwest::Client::new(),
         }
     }
+
+    async fn stream(&self) -> reqwest::Response {
+        let r = self.authed("GET", "/api/status/stream").send().await.unwrap();
+        assert_eq!(r.status(), 200);
+        r
+    }
+
+    async fn presence(&self, looking: bool) {
+        let (st, _) = self
+            .call("POST", "/api/presence", Some(json!({"looking": looking})))
+            .await;
+        assert_eq!(st, 200);
+    }
+}
+
+// A completed index of a fake C:\, last refreshed `age` ago.
+fn seed_index(db_path: &Path, age: Duration) {
+    let db = hoardini_core::store::Db::open(db_path).unwrap();
+    let conn = db.conn().unwrap();
+    let fs = hoardini_core::index::FakeFs::new(r"C:\");
+    fs.file(r"C:\data\big.bin", 3 << 20);
+    let out = hoardini_core::index::refresh(
+        &conn,
+        &fs,
+        r"C:\",
+        &hoardini_core::index::RefreshOptions::default(),
+    )
+    .unwrap();
+    assert!(out.completed);
+    set_index_age(&conn, age);
+}
+
+fn set_index_age(conn: &rusqlite::Connection, age: Duration) {
+    let at = hoardini_core::store::now_ms() - age.as_millis() as i64;
+    conn.execute("UPDATE volume SET last_refresh_ms = ?1", [at])
+        .unwrap();
+}
+
+fn lines(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .collect()
+}
+
+async fn wait_for(path: &Path, pred: impl Fn(&[String]) -> bool, secs: u64) -> Vec<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    loop {
+        let l = lines(path);
+        if pred(&l) || std::time::Instant::now() > deadline {
+            return l;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+impl Fixture {
 
     fn req(&self, method: &str, path: &str) -> reqwest::RequestBuilder {
         let m = reqwest::Method::from_bytes(method.as_bytes()).unwrap();
@@ -299,11 +365,13 @@ async fn a_key_in_a_provider_header_must_be_a_vault_reference() {
 async fn settings_round_trip() {
     let f = Fixture::new().await;
     let (_, s) = f.call("GET", "/api/settings", None).await;
-    assert_eq!(s["threshold_bytes"], 1_048_576);
-    assert_eq!(s["redact_paths"], true);
-    assert_eq!(s["web_search_enabled"], false);
-    assert_eq!(s["indexer_workers"], 2);
-    assert_eq!(s["indexer_memory_cap_mb"], 256);
+    let mut keys: Vec<&str> = s.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["builtin_idle_minutes", "index_size_bytes", "index_speed"]
+    );
+    assert_eq!(s["index_speed"], "lean");
     assert_eq!(s["builtin_idle_minutes"], 10);
     assert!(s["index_size_bytes"].as_u64().unwrap() > 0);
 
@@ -311,22 +379,28 @@ async fn settings_round_trip() {
         .call(
             "PUT",
             "/api/settings",
-            Some(json!({"threshold_bytes": 2_097_152, "redact_paths": false, "indexer_workers": 4, "index_size_bytes": 1})),
+            Some(json!({"index_speed": "fast", "builtin_idle_minutes": 0, "index_size_bytes": 1, "threshold_bytes": 5})),
         )
         .await;
     assert_eq!(st, 200);
-    assert_eq!(s["threshold_bytes"], 2_097_152);
-    assert_eq!(s["redact_paths"], false);
-    assert_eq!(s["indexer_workers"], 4);
+    assert_eq!(s["index_speed"], "fast");
+    assert_eq!(s["builtin_idle_minutes"], 0);
     assert_ne!(s["index_size_bytes"], 1);
+    assert!(s.get("threshold_bytes").is_none());
 
     let (_, again) = f.call("GET", "/api/settings", None).await;
-    assert_eq!(again["threshold_bytes"], 2_097_152);
-    let (st, e) = f
-        .call("PUT", "/api/settings", Some(json!({"redact_paths": "yes"})))
-        .await;
-    assert_eq!(st, 400);
-    assert!(e["error"].is_string());
+    assert_eq!(again["index_speed"], "fast");
+    for bad in [
+        json!({"index_speed": "turbo"}),
+        json!({"index_speed": true}),
+        json!({"builtin_idle_minutes": "x"}),
+    ] {
+        let (st, e) = f.call("PUT", "/api/settings", Some(bad.clone())).await;
+        assert_eq!(st, 400, "{bad}");
+        assert!(e["error"].is_string());
+    }
+    let (_, again) = f.call("GET", "/api/settings", None).await;
+    assert_eq!(again["index_speed"], "fast", "a rejected PUT changes nothing");
     let _ = f.h.shutdown.send(());
 }
 
@@ -440,26 +514,16 @@ async fn index_state(f: &Fixture) -> (String, Value) {
 
 // Traces: SRV-ONE-REFRESH
 #[tokio::test(flavor = "multi_thread")]
-async fn one_refresh_at_a_time_and_fast_preempts_background() {
+async fn one_refresh_at_a_time_and_fast_takes_over_lean() {
     let dir = tempfile::tempdir().unwrap();
     let exe = fake_indexer(dir.path(), 10);
-    let f = Fixture::with(None, Some(exe)).await;
+    let fdir = tempfile::tempdir().unwrap();
+    seed_index(&fdir.path().join("h.db"), Duration::ZERO);
+    let f = Fixture::in_dir(fdir, None, Some(exe), false).await;
 
-    let (st, r) = f
-        .call(
-            "POST",
-            "/api/index/refresh",
-            Some(json!({"mode": "background"})),
-        )
-        .await;
+    let (st, r) = f.call("POST", "/api/index/refresh", None).await;
     assert_eq!((st, &r["started"]), (200, &json!(true)));
-    let (_, r) = f
-        .call(
-            "POST",
-            "/api/index/refresh",
-            Some(json!({"mode": "background"})),
-        )
-        .await;
+    let (_, r) = f.call("POST", "/api/index/refresh", None).await;
     assert_eq!(r["started"], false, "a second refresh must not start");
 
     let mut progress = Value::Null;
@@ -475,34 +539,40 @@ async fn one_refresh_at_a_time_and_fast_preempts_background() {
     assert_eq!(progress["phase"], "walk");
     assert_eq!(progress["files"], 2);
 
-    let (_, r) = f
-        .call("POST", "/api/index/refresh", Some(json!({"mode": "fast"})))
+    let (st, _) = f
+        .call("PUT", "/api/settings", Some(json!({"index_speed": "fast"})))
         .await;
-    assert_eq!(
-        r["started"], true,
-        "fast must take over a background refresh"
-    );
-    let (_, r) = f
-        .call("POST", "/api/index/refresh", Some(json!({"mode": "fast"})))
-        .await;
+    assert_eq!(st, 200);
+    let (_, r) = f.call("POST", "/api/index/refresh", None).await;
     assert_eq!(r["started"], false);
 
     let spawns = dir.path().join("spawns.txt");
-    let mut modes = Vec::new();
-    for _ in 0..50 {
-        modes = std::fs::read_to_string(&spawns)
-            .unwrap_or_default()
-            .lines()
-            .map(|l| l.trim().to_string())
-            .collect();
-        if modes.len() >= 2 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert_eq!(modes, ["background", "fast"]);
+    let modes = wait_for(&spawns, |l| l.len() >= 2, 5).await;
+    assert_eq!(modes, ["background", "fast"], "fast takes over a lean refresh");
     let (_, idx) = index_state(&f).await;
     assert_eq!(idx["mode"], "fast");
+
+    f.call("PUT", "/api/settings", Some(json!({"index_speed": "lean"})))
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(lines(&spawns).len(), 2, "lean lets a fast refresh finish");
+    let (state, idx) = index_state(&f).await;
+    assert_eq!((state.as_str(), &idx["mode"]), ("refreshing", &json!("fast")));
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-ONE-REFRESH
+#[tokio::test(flavor = "multi_thread")]
+async fn the_first_full_scan_runs_fast_even_when_lean() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = fake_indexer(dir.path(), 0);
+    let f = Fixture::with(None, Some(exe)).await;
+    let (_, s) = f.call("GET", "/api/settings", None).await;
+    assert_eq!(s["index_speed"], "lean");
+    let (_, r) = f.call("POST", "/api/index/refresh", None).await;
+    assert_eq!(r["started"], true);
+    let modes = wait_for(&dir.path().join("spawns.txt"), |l| !l.is_empty(), 5).await;
+    assert_eq!(modes, ["fast"]);
     let _ = f.h.shutdown.send(());
 }
 
@@ -632,6 +702,7 @@ fn journal_fake_indexer(dir: &Path) -> PathBuf {
 async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("h.db");
+    seed_index(&db_path, Duration::ZERO);
     let db = hoardini_core::store::Db::open(&db_path).unwrap();
     hoardini_core::store::set_meta(&db.conn().unwrap(), "journal_every_s", "1").unwrap();
     let h = start_with(
@@ -650,6 +721,20 @@ async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
     .unwrap();
     let http = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{}/api/status", h.port);
+    let _stream = http
+        .get(format!("http://127.0.0.1:{}/api/status/stream", h.port))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap();
+    let r = http
+        .post(format!("http://127.0.0.1:{}/api/presence", h.port))
+        .bearer_auth(TOKEN)
+        .json(&json!({"looking": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
     let log = dir.path().join("kinds.txt");
     let mut kinds: Vec<String> = Vec::new();
     let mut loud_after_launch = false;
@@ -685,6 +770,131 @@ async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
         "a short timer-driven refresh must not show as refreshing"
     );
     let _ = h.shutdown.send(());
+}
+
+// Logs "<mode> <kind>" per spawn and "end <kind>" when a child finishes uncancelled; `auto` runs `auto_s` seconds.
+fn presence_fake_indexer(dir: &Path, auto_s: u32) -> PathBuf {
+    let log = dir.join("presence.txt");
+    let script = dir.join("presence-indexer.cmd");
+    let body = format!(
+        "@echo off\r\necho %7 %9>>\"{log}\"\r\nif not \"%9\"==\"auto\" goto quick\r\necho {{\"type\":\"start\",\"volume\":\"C:\\\\\",\"mode\":\"%7\",\"gen\":1,\"kind\":\"full\"}}\r\nping -n {n} 127.0.0.1 >nul\r\n:quick\r\necho {{\"type\":\"done\",\"kind\":\"%9\",\"scan_id\":1,\"duration_ms\":5}}\r\necho end %9>>\"{log}\"\r\nexit /b 0\r\n",
+        log = log.display(),
+        n = auto_s + 1
+    );
+    std::fs::write(&script, body).unwrap();
+    script
+}
+
+fn journal_spawns(l: &[String]) -> usize {
+    l.iter()
+        .filter(|x| x.ends_with(" journal") && !x.starts_with("end "))
+        .count()
+}
+
+// Traces: SRV-PRESENCE
+#[test]
+fn the_next_journal_refresh_is_due_when_the_index_reaches_the_interval() {
+    let min = |m: u64| Duration::from_secs(m * 60);
+    assert_eq!(journal_wait(None, min(3)), Duration::ZERO, "never completed");
+    assert_eq!(journal_wait(Some(min(4)), min(3)), Duration::ZERO);
+    assert_eq!(journal_wait(Some(min(3)), min(3)), Duration::ZERO);
+    assert_eq!(journal_wait(Some(min(1)), min(3)), min(2));
+    assert_eq!(journal_wait(Some(Duration::ZERO), min(3)), min(3));
+}
+
+// Traces: SRV-PRESENCE
+#[tokio::test(flavor = "multi_thread")]
+async fn the_journal_timer_runs_only_while_someone_is_looking() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = presence_fake_indexer(dir.path(), 3);
+    let fdir = tempfile::tempdir().unwrap();
+    let db = hoardini_core::store::Db::open(fdir.path().join("h.db")).unwrap();
+    hoardini_core::store::set_meta(&db.conn().unwrap(), "journal_every_s", "1").unwrap();
+    let f = Fixture::in_dir(fdir, None, Some(exe), true).await;
+    let log = dir.path().join("presence.txt");
+
+    wait_for(&log, |l| !l.is_empty(), 5).await;
+    let s = f.stream().await;
+    f.presence(true).await;
+    drop(s);
+    f.presence(false).await;
+    let (state, _) = index_state(&f).await;
+    assert_eq!(
+        state, "refreshing",
+        "presence never cancels a running refresh"
+    );
+    let l = wait_for(&log, |l| l.iter().any(|x| x == "end auto"), 10).await;
+    assert_eq!(
+        l[1..],
+        ["end auto"],
+        "the launch refresh ran to its end: {l:?}"
+    );
+
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(journal_spawns(&lines(&log)), 0, "nobody looking: no timer");
+    f.presence(true).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        journal_spawns(&lines(&log)),
+        0,
+        "no open stream counts as not looking"
+    );
+
+    let s = f.stream().await;
+    let l = wait_for(&log, |l| journal_spawns(l) >= 1, 3).await;
+    assert!(
+        journal_spawns(&l) >= 1,
+        "looking with a stale index refreshes: {l:?}"
+    );
+    drop(s);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let settled = lines(&log).len();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(
+        lines(&log).len(),
+        settled,
+        "the stream closing stops the timer"
+    );
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-PRESENCE
+#[tokio::test(flavor = "multi_thread")]
+async fn arriving_with_a_stale_index_starts_one_journal_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = presence_fake_indexer(dir.path(), 0);
+    let fdir = tempfile::tempdir().unwrap();
+    let db_path = fdir.path().join("h.db");
+    seed_index(&db_path, Duration::from_secs(10));
+    let db = hoardini_core::store::Db::open(&db_path).unwrap();
+    hoardini_core::store::set_meta(&db.conn().unwrap(), "journal_every_s", "60").unwrap();
+    let f = Fixture::in_dir(fdir, None, Some(exe), true).await;
+    let log = dir.path().join("presence.txt");
+    let l = wait_for(&log, |l| l.iter().any(|x| x == "end auto"), 5).await;
+    assert_eq!(l[0], "background auto");
+
+    let _s = f.stream().await;
+    f.presence(true).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        journal_spawns(&lines(&log)),
+        0,
+        "an index 10 s old is not due"
+    );
+
+    set_index_age(&db.conn().unwrap(), Duration::from_secs(300));
+    f.presence(false).await;
+    f.presence(true).await;
+    let l = wait_for(&log, |l| journal_spawns(l) >= 1, 3).await;
+    assert_eq!(journal_spawns(&l), 1, "{l:?}");
+    assert!(l.contains(&"background journal".to_string()), "{l:?}");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        journal_spawns(&lines(&log)),
+        1,
+        "one refresh, then the interval"
+    );
+    let _ = f.h.shutdown.send(());
 }
 
 fn seed(f: &Fixture, id: &str, role: &str, text: &str) {

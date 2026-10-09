@@ -61,6 +61,7 @@ pub async fn status_stream(State(s): State<AppState>) -> Response {
 }
 
 async fn status_pump(s: AppState, tx: mpsc::Sender<Result<Bytes, Infallible>>) {
+    let _watcher = s.supervisor.watch();
     let mut changes = s.change.subscribe();
     let mut jobs = s.exec.subscribe();
     let mut shutdown = s.shutdown.subscribe();
