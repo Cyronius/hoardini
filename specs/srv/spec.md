@@ -92,6 +92,24 @@ inclusive; with neither, every point is returned. With no indexed volume the res
   3000, with their `free_bytes`; `since_ms=3000` starts at 3000; `until_ms=1000` ends at 1000.
 - No parameters returns every point in ascending order; an empty database returns `[]`.
 
+### SRV-THREAD: One conversation and its window
+**Applies to:** hoardini-server
+**Verification:** test
+
+The conversation routes are:
+- `GET /api/thread` returns `{id: "main", messages, proposals, window_start_id, has_hidden, fresh}`. `messages` is the whole scrollback (AG-UI messages, profile shown as `~`) and `proposals` maps every proposal of the conversation by ID. `window_start_id` is the first message the model still sees, or null when its window is empty. `has_hidden` is true when some message lies before the window start. `fresh` is true when there are no messages, the last message is more than 6 hours old, or the window is empty (Start fresh was pressed).
+- `POST /api/thread/fresh` (Start fresh) moves the window start past the last message and returns `{ok: true}`.
+- `DELETE /api/thread` (Clear chat history) deletes the messages only, resets the window start, and returns `{ok: true}`. Proposals, memories, jobs and the archive journal stay. While a chat run is in progress it answers 409 and deletes nothing.
+- `POST /api/agent/run` always runs on `main`, whatever `threadId` the client sends; the run's events carry `threadId: "main"`.
+
+`GET /api/threads`, `GET /api/threads/{id}` and `DELETE /api/threads/{id}` do not exist.
+
+**Acceptance criteria:**
+- `route_list()` has no `/api/threads` path. On a new database `GET /api/thread` is `id: "main"`, no messages, `window_start_id` null, `has_hidden` false, `fresh` true.
+- With `u1` and `a1` stored just now: `window_start_id` `u1`, `has_hidden` false, `fresh` false. After `POST /api/thread/fresh`: both messages still listed, `window_start_id` null, `has_hidden` true, `fresh` true. After a new `u2`: `window_start_id` `u2`, `fresh` false. With every message 7 hours old: `fresh` true.
+- `DELETE /api/thread` leaves no message rows, keeps a stored proposal and the memory count, and reports `has_hidden` false; the next stored message is `window_start_id`.
+- A run posted with `threadId` `t-other` streams `threadId: "main"`, its user message is listed by `GET /api/thread`, and `DELETE /api/thread` during the run answers 409.
+
 ### SRV-MEMORY-CRUD: Memory routes
 **Applies to:** hoardini-server
 **Verification:** test

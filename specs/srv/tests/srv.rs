@@ -687,6 +687,141 @@ async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
     let _ = h.shutdown.send(());
 }
 
+fn seed(f: &Fixture, id: &str, role: &str, text: &str) {
+    use hoardini_agent::{provider::ChatMessage, thread};
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let conn = db.conn().unwrap();
+    thread::ensure_conversation(&conn, thread::MAIN, None).unwrap();
+    thread::append(&conn, thread::MAIN, id, &ChatMessage::text(role, text)).unwrap();
+}
+
+fn sql_count(f: &Fixture, sql: &str) -> i64 {
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    db.conn().unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
+}
+
+// Traces: SRV-THREAD
+#[tokio::test(flavor = "multi_thread")]
+async fn the_conversation_routes_report_the_window_start_fresh_and_clear_only_messages() {
+    let f = Fixture::new().await;
+    assert!(
+        route_list()
+            .iter()
+            .all(|(_, p)| !p.starts_with("/api/threads")),
+        "the per-thread routes are gone"
+    );
+    let (st, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(st, 200, "{t}");
+    assert_eq!(t["id"], "main");
+    assert_eq!(t["messages"], json!([]));
+    assert_eq!(t["window_start_id"], Value::Null);
+    assert_eq!(t["has_hidden"], false);
+    assert_eq!(t["fresh"], true);
+
+    seed(&f, "u1", "user", "hello");
+    seed(&f, "a1", "assistant", "hi there");
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(t["window_start_id"], "u1");
+    assert_eq!(t["has_hidden"], false);
+    assert_eq!(t["fresh"], false);
+
+    let (st, r) = f.call("POST", "/api/thread/fresh", None).await;
+    assert_eq!((st, r), (200, json!({"ok": true})));
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(t["window_start_id"], Value::Null);
+    assert_eq!(t["has_hidden"], true);
+    assert_eq!(t["fresh"], true);
+
+    seed(&f, "u2", "user", "a new topic");
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["window_start_id"], "u2");
+    assert_eq!(t["has_hidden"], true);
+    assert_eq!(t["fresh"], false);
+
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let conn = db.conn().unwrap();
+    conn.execute(
+        "UPDATE message SET created_ms = created_ms - 7 * 3600 * 1000",
+        [],
+    )
+    .unwrap();
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["fresh"], true, "the last message is 7 h old");
+
+    conn.execute(
+        "INSERT INTO proposal(id, conversation_id, kind, params_json, status, created_ms)
+         VALUES ('p-keep', 'main', 'delete', '{}', 'pending', 0)",
+        [],
+    )
+    .unwrap();
+    f.call(
+        "POST",
+        "/api/memory",
+        Some(json!({"scope": "global", "key": "k", "kind": "fact", "text": "stays"})),
+    )
+    .await;
+    let memories = sql_count(&f, "SELECT COUNT(*) FROM memory");
+    let (st, r) = f.call("DELETE", "/api/thread", None).await;
+    assert_eq!((st, r), (200, json!({"ok": true})));
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["messages"], json!([]));
+    assert_eq!(t["has_hidden"], false);
+    assert_eq!(t["fresh"], true);
+    assert_eq!(sql_count(&f, "SELECT COUNT(*) FROM message"), 0);
+    assert_eq!(
+        sql_count(&f, "SELECT COUNT(*) FROM proposal WHERE id = 'p-keep'"),
+        1
+    );
+    assert_eq!(sql_count(&f, "SELECT COUNT(*) FROM memory"), memories);
+
+    seed(&f, "u3", "user", "after clearing");
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["window_start_id"], "u3", "the window start was reset");
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-THREAD
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_always_uses_main_and_clearing_is_refused_while_it_runs() {
+    let f = Fixture::new().await;
+    let base = stalled_llm().await;
+    let (_, p) = f
+        .call(
+            "POST",
+            "/api/providers",
+            Some(json!({"name": "stall", "base_url": base, "model": "m"})),
+        )
+        .await;
+    let id = p["id"].as_str().unwrap();
+    f.call("POST", &format!("/api/providers/{id}/activate"), None)
+        .await;
+    let mut resp = f
+        .authed("POST", "/api/agent/run")
+        .json(&json!({"threadId": "t-other", "runId": "r-main", "messages": [{"id": "u-main", "role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    let mut text = String::new();
+    while !text.contains("TEXT_MESSAGE_CONTENT") {
+        let chunk = tokio::time::timeout(Duration::from_secs(10), resp.chunk())
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("stream open");
+        text.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    assert!(text.contains(r#""threadId":"main""#), "{text}");
+    let (st, _) = f.call("DELETE", "/api/thread", None).await;
+    assert_eq!(st, 409);
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["messages"][0]["id"], "u-main");
+    f.call("POST", "/api/agent/runs/r-main/cancel", None).await;
+    drop(resp);
+    let _ = f.h.shutdown.send(());
+}
+
 // Traces: SRV-HISTORY-RANGE
 #[tokio::test(flavor = "multi_thread")]
 async fn history_filters_by_range() {

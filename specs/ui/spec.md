@@ -31,7 +31,7 @@ Test: `specs/ui/tests/markdown.test.ts`.
 **Applies to:** hoardini
 **Verification:** manual
 
-The chat shall show each run in the order it happened: text before a tool round, the round's chips (name, short argument, elapsed time), then the text after it, each text segment in its own paragraph. Stop ends a run at once and keeps the question on screen. A run that ends at the tool-step cap (`run_stats.limit_reached`) offers "Keep going"; a model that is silent for the profile's timeout gets the "Keep waiting / Stop" prompt. A reloaded thread shows the same messages, chips, and card states.
+The chat shall show each run in the order it happened: text before a tool round, the round's chips (name, short argument, elapsed time), then the text after it, each text segment in its own paragraph. Stop ends a run at once and keeps the question on screen. A run that ends at the tool-step cap (`run_stats.limit_reached`) offers "Keep going"; a model that is silent for the profile's timeout gets the "Keep waiting / Stop" prompt. A page load opens the one conversation (`GET /api/thread`) with the same messages, chips, and card states.
 
 **Verification (manual):**
 1. Point a provider at a scripted OpenAI-compatible mock (or a real model) and ask for something that calls a tool without text first, then answers: the chip renders above the answer, not below it.
@@ -39,9 +39,49 @@ The chat shall show each run in the order it happened: text before a tool round,
 3. Ask for a long streamed answer and press Stop: streaming stops at once, the question stays, no "no content" prompt appears, `GET /api/status` shows `running_runs: 0`, and a new question answers normally.
 4. With `max_tool_steps = 3` and a model that always calls a tool: three rounds of chips, then "Hoardini used its 3 tool steps for this turn before finishing." with Keep going; Keep going sends "Continue.".
 5. With a model that takes longer than the timeout to answer: "No response from the model for 2 minutes." with Keep waiting and Stop.
-6. Open the thread again from Recent chats (or reload the page and open it): messages, chips, and every proposal card's status are as before.
-7. Leave a proposal card pending, reload, open the thread, and approve or decline the card: the decision is recorded and a new run starts from the answer (a `tool_*` message for the proposal's tool call), so the agent continues in the same chat.
+6. Reload the page: the conversation opens by itself, and messages, chips, and every proposal card's status are as before.
+7. Leave a proposal card pending, reload, and approve or decline the card: the decision is recorded and a new run starts from the answer (a `tool_*` message for the proposal's tool call), so the agent continues in the same chat.
 (2026-10-08: steps 1–4 and 6 pass against a scripted mock; 1 and 5 against LM Studio `minicpm5-2b`.)
+
+### UI-CONTEXT-BOUNDARY: The chat shows where Hoardini's memory of it starts
+**Applies to:** hoardini
+**Verification:** manual
+
+The chat is one continuous scrollback. When messages lie before the model's window (`has_hidden`), the chat shall draw the divider "Hoardini doesn't remember above this line" before the first visible message at or after `window_start_id`, or at the end of the scrollback when `window_start_id` is null. The header's first button, where New chat was, is **Start fresh** (sunrise icon; tooltip "Start fresh: Hoardini forgets the chat so far (it stays on screen)"). It calls `POST /api/thread/fresh`, keeps every message on screen, and is disabled while a run streams or the server is offline. There is no Recent chats button. The thread is fetched again after each run ends and after Start fresh, so the divider follows trims and session gaps.
+
+**Verification (manual):**
+1. Start `hoardini serve` with `HOARDINI_DATA_DIR` and `--db` in a scratch folder and a provider pointing at a scripted OpenAI-compatible mock; open the UI.
+2. The header shows Start fresh and Settings, and no Recent chats button.
+3. Ask two questions. No divider is shown. Press Start fresh: both turns stay on screen and the divider appears below them.
+4. Ask a third question: the divider now sits right above it, and the model request carries only that question (check the mock's captured request).
+5. Reload the page: the same scrollback opens with the divider in the same place.
+6. Set every stored message's `created_ms` 7 hours back in the database, reload, and ask again: the divider moves above the new question.
+(2026-10-09: steps 1–6 pass against `hoardini serve` with a scripted mock model, driven by Playwright; the requests after Start fresh and after the 7-hour gap carried only the new question.)
+
+### UI-WELCOME-BACK: The greeting welcomes the user back at a session start
+**Applies to:** hoardini
+**Verification:** manual
+
+The greeting card (index age, free-space change, biggest movers, duplicates, and the starters) shall show at the end of the scrollback, above the composer, whenever `GET /api/thread` reports `fresh`: on first launch, when the last message is more than 6 hours old, and right after Start fresh. It hides as soon as a question is sent. Its starters are Show hotspots, Show duplicates (when there are duplicates), and **Free space over time**, which asks `How has my free space changed over time?`.
+
+**Verification (manual):**
+1. On a new scratch database with an index, open the UI: the card shows with Show hotspots and Free space over time.
+2. Press Free space over time: the question `How has my free space changed over time?` is sent and the card disappears.
+3. After the answer the card stays hidden. Press Start fresh: the card appears at the end, below the divider.
+4. Set every stored message's `created_ms` 7 hours back and reload: the card shows at the end of the scrollback.
+(2026-10-09: steps 1–4 pass in the same session as UI-CONTEXT-BOUNDARY.)
+
+### UI-CLEAR-HISTORY: Clear chat history deletes only the chat text
+**Applies to:** hoardini
+**Verification:** manual
+
+`ClearHistorySection` (rendered in the Settings tab) shall offer **Clear chat history** behind a confirm step ("Delete every chat message?" with Delete messages and Cancel). Confirming calls `DELETE /api/thread`, then reopens the conversation, so the chat is empty and the welcome-back card shows. Memories, proposals, jobs, and the archive list stay. The button is disabled while a run streams; an error from the server (409 while a run is in progress) shows inline.
+
+**Verification (manual):**
+1. With a few messages, a saved memory, and a decided proposal, open Settings and press Clear chat history: the confirm step appears; Cancel leaves everything as it was.
+2. Press it again and confirm: "Cleared" shows, the chat is empty with the welcome-back card and no divider.
+3. The Memory tab still lists the memory, `GET /api/proposals/<id>` still returns the proposal, and the next question starts a normal chat.
+(2026-10-09: steps 1–3 pass with the section rendered in the Settings tab for the check; the memory was read back through `GET /api/memory` and the proposal row through the database.)
 
 ### UI-NO-IPC: The app page has no usable Tauri IPC
 **Applies to:** hoardini-app

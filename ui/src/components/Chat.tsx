@@ -11,7 +11,7 @@ import { proposalTools } from "../agent/proposalTools";
 import { classifySettledTurn, describeRunError, isAbortError } from "../agent/runError";
 import { isProposeTool } from "../agent/toolDefs";
 import { friendlyToolName, humanElapsed } from "../format";
-import { useStore } from "../store";
+import { THREAD_ID, useStore } from "../store";
 import { Greeting } from "./Greeting";
 import { SendIcon, SpinnerIcon, StopIcon } from "./icons";
 import { IconButton } from "./IconButton";
@@ -70,7 +70,17 @@ function Prompt({ children, actions }: { children: ReactNode; actions: ReactNode
   );
 }
 
-const btnAccent = "rounded-lg border border-brass/40 px-2.5 py-1 font-bold text-brass hover:bg-brass/10";
+function Boundary() {
+  return (
+    <div role="separator" className="flex items-center gap-3 py-1 text-[length:var(--fs-xs)] font-semibold text-faint">
+      <span className="h-px flex-1 bg-line" />
+      <span>Hoardini doesn't remember above this line</span>
+      <span className="h-px flex-1 bg-line" />
+    </div>
+  );
+}
+
+const btnAccent ="rounded-lg border border-brass/40 px-2.5 py-1 font-bold text-brass hover:bg-brass/10";
 const btnQuiet = "rounded-lg border border-line px-2.5 py-1 font-semibold text-muted hover:text-paper";
 
 function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
@@ -86,6 +96,8 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   const stuckRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activitySteps = useActivity((s) => s.steps);
+  const meta = useStore((s) => s.threadMeta);
+  const markAsked = useStore((s) => s.markAsked);
 
   useEffect(() => {
     const content = contentRef.current;
@@ -113,6 +125,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
       const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: text };
       askedRef.current = userMsg;
       stuckRef.current = true;
+      markAsked(userMsg.id, messages.length > 0);
       addMessage(userMsg);
       useActivity.getState().clear();
       agentClient.startNewRun();
@@ -228,51 +241,67 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
     });
   }, [messages]);
 
+  const renderMessage = (m: Message, key: string): ReactNode => {
+    const toolCalls = (m as unknown as { toolCalls?: ToolCallLike[] }).toolCalls;
+    if (m.role === "assistant" && toolCalls?.length) {
+      const before = callsBefore[m.id] ?? [];
+      return (
+        <div key={key} className="fade-up">
+          {toolCalls.filter((tc) => before.includes(tc.id)).map(renderCall)}
+          {typeof m.content === "string" && m.content && (
+            <div className="break-words leading-relaxed">
+              <Markdown text={m.content} />
+            </div>
+          )}
+          {toolCalls.filter((tc) => !before.includes(tc.id)).map(renderCall)}
+        </div>
+      );
+    }
+    if (m.role === "tool") return null;
+    if (m.role === "user") {
+      return (
+        <div key={key} className="text-right">
+          <span className="inline-block max-w-[85%] break-words rounded-2xl rounded-br-md bg-brass/15 px-3 py-1.5 text-left text-paper">
+            {typeof m.content === "string" ? m.content : "[attachment]"}
+          </span>
+        </div>
+      );
+    }
+    const content = typeof m.content === "string" ? m.content : "";
+    if (m.role === "assistant" && m.id.startsWith("error_")) {
+      return (
+        <div key={key} className="fade-up break-words rounded-xl border border-err/30 bg-err/10 px-3 py-2 text-[length:var(--fs-sm)] text-err">
+          {content}
+        </div>
+      );
+    }
+    return (
+      <div key={key} className="fade-up break-words leading-relaxed">
+        <Markdown text={content} />
+      </div>
+    );
+  };
+
+  // The window can start at a tool answer, which renders nothing; the divider goes before the next visible message.
+  const scrollback: ReactNode[] = [];
+  let boundaryDue = false;
+  for (const { m, key } of rendered) {
+    if (meta?.has_hidden && m.id === meta.window_start_id) boundaryDue = true;
+    const body = renderMessage(m, key);
+    if (!body) continue;
+    if (boundaryDue) {
+      scrollback.push(<Boundary key={`boundary-${key}`} />);
+      boundaryDue = false;
+    }
+    scrollback.push(body);
+  }
+  const boundaryAtEnd = boundaryDue || (!!meta?.has_hidden && meta.window_start_id == null);
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         <div ref={contentRef} className="mx-auto w-full max-w-3xl space-y-3 px-4 py-4">
-          {messages.length === 0 && !isStreaming && <Greeting onAsk={(t) => void sendText(t)} />}
-          {rendered.map(({ m, key }) => {
-            const toolCalls = (m as unknown as { toolCalls?: ToolCallLike[] }).toolCalls;
-            if (m.role === "assistant" && toolCalls?.length) {
-              const before = callsBefore[m.id] ?? [];
-              return (
-                <div key={key} className="fade-up">
-                  {toolCalls.filter((tc) => before.includes(tc.id)).map(renderCall)}
-                  {typeof m.content === "string" && m.content && (
-                    <div className="break-words leading-relaxed">
-                      <Markdown text={m.content} />
-                    </div>
-                  )}
-                  {toolCalls.filter((tc) => !before.includes(tc.id)).map(renderCall)}
-                </div>
-              );
-            }
-            if (m.role === "tool") return null;
-            if (m.role === "user") {
-              return (
-                <div key={key} className="text-right">
-                  <span className="inline-block max-w-[85%] break-words rounded-2xl rounded-br-md bg-brass/15 px-3 py-1.5 text-left text-paper">
-                    {typeof m.content === "string" ? m.content : "[attachment]"}
-                  </span>
-                </div>
-              );
-            }
-            const content = typeof m.content === "string" ? m.content : "";
-            if (m.role === "assistant" && m.id.startsWith("error_")) {
-              return (
-                <div key={key} className="fade-up break-words rounded-xl border border-err/30 bg-err/10 px-3 py-2 text-[length:var(--fs-sm)] text-err">
-                  {content}
-                </div>
-              );
-            }
-            return (
-              <div key={key} className="fade-up break-words leading-relaxed">
-                <Markdown text={content} />
-              </div>
-            );
-          })}
+          {scrollback}
           {isStreaming && <LiveActivity />}
           {isStreaming && currentMessage && (
             <div className="break-words leading-relaxed">
@@ -316,6 +345,8 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
                   : `Hoardini stopped without a final answer. It may have hit the tool call limit (${limits.maxSteps}).`}
             </Prompt>
           )}
+          {boundaryAtEnd && <Boundary />}
+          {(meta ? meta.fresh : messages.length === 0) && !isStreaming && <Greeting onAsk={(t) => void sendText(t)} />}
         </div>
       </div>
       <div className="border-t border-line-soft bg-ink-900 px-4 py-3">
@@ -355,8 +386,9 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   );
 }
 
-export function ChatSession({ threadId, seed }: { threadId: string; seed: Message[] | null }) {
+export function ChatSession({ seed }: { seed: Message[] | null }) {
   const setChatBusy = useStore((s) => s.setChatBusy);
+  const refreshThreadMeta = useStore((s) => s.refreshThreadMeta);
   const [err, setErr] = useState<string | null>(null);
   const [limits, setLimits] = useState({ stallMs: resolveStallMs(null), maxSteps: resolveMaxSteps(null) });
   const drawer = useStore((s) => s.drawer);
@@ -369,7 +401,7 @@ export function ChatSession({ threadId, seed }: { threadId: string; seed: Messag
     tokenProvider: async () => getToken(),
     requestHandler,
     sendFullHistory: false,
-    initialThreadId: threadId,
+    initialThreadId: THREAD_ID,
     idleTimeoutMs: WATCHDOG_BACKSTOP_MS,
     safetyTimeoutMs: WATCHDOG_BACKSTOP_MS,
     pruneOutboundMessages: pruneOutbound,
@@ -384,9 +416,13 @@ export function ChatSession({ threadId, seed }: { threadId: string; seed: Messag
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only; the component is keyed by thread
   }, []);
 
+  const wasStreaming = useRef(false);
   useEffect(() => {
     setChatBusy(agent.isStreaming);
-  }, [agent.isStreaming, setChatBusy]);
+    // A finished run may have trimmed the window or crossed the session gap.
+    if (wasStreaming.current && !agent.isStreaming) void refreshThreadMeta();
+    wasStreaming.current = agent.isStreaming;
+  }, [agent.isStreaming, setChatBusy, refreshThreadMeta]);
   useEffect(() => () => setChatBusy(false), [setChatBusy]);
 
   useEffect(() => {

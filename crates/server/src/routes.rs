@@ -5,6 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::handler::Handler;
 use axum::http::StatusCode;
 use axum::routing::{MethodRouter, delete, get, post, put};
+use hoardini_agent::thread;
 use hoardini_core::actions::Job;
 use hoardini_core::destinations::{self, NewDestination};
 use hoardini_core::history::{self, Since};
@@ -12,7 +13,7 @@ use hoardini_core::index;
 use hoardini_core::memory::{self, Kind, MemoryPatch, NewMemory, Scope};
 use hoardini_core::paths::redact;
 use hoardini_core::proposals::{self, Proposal};
-use hoardini_core::store::{get_meta, set_meta};
+use hoardini_core::store::{get_meta, now_ms, set_meta};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -82,9 +83,9 @@ fn entries() -> Vec<Entry> {
         get_("/api/index/summary", index_summary),
         post_("/api/agent/run", stream::agent_run),
         post_("/api/agent/runs/{run_id}/cancel", stream::cancel_run),
-        get_("/api/threads", threads_list),
-        get_("/api/threads/{id}", thread_get),
-        delete_("/api/threads/{id}", thread_delete),
+        get_("/api/thread", thread_get),
+        post_("/api/thread/fresh", thread_fresh),
+        delete_("/api/thread", thread_clear),
         get_("/api/proposals/{id}", proposal_get),
         post_("/api/proposals/{id}/approve", proposal_approve),
         post_("/api/proposals/{id}/decline", proposal_decline),
@@ -207,42 +208,6 @@ async fn index_summary(State(s): State<AppState>) -> ApiResult {
     .await
 }
 
-async fn threads_list(State(s): State<AppState>) -> ApiResult {
-    blocking(move || {
-        let conn = s.db.conn()?;
-        let mut q = conn.prepare(
-            "SELECT c.id, c.title, c.updated_ms,
-                    (SELECT json FROM message m WHERE m.conversation_id = c.id AND m.role = 'user' ORDER BY seq LIMIT 1)
-             FROM conversation c ORDER BY c.updated_ms DESC",
-        )?;
-        let rows = q
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, Option<String>>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, Option<String>>(3)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let out: Vec<Value> = rows
-            .into_iter()
-            .map(|(id, title, updated_ms, first)| {
-                let title = title.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| {
-                    first
-                        .and_then(|j| serde_json::from_str::<Value>(&j).ok())
-                        .and_then(|v| v.get("content").and_then(Value::as_str).map(str::to_string))
-                        .map(|t| t.chars().take(60).collect::<String>())
-                        .unwrap_or_else(|| "New chat".into())
-                });
-                json!({"id": id, "title": title, "updated_ms": updated_ms})
-            })
-            .collect();
-        Ok(Json(json!(out)))
-    })
-    .await
-}
-
 fn display_proposal(mut p: Proposal) -> Value {
     p.summary = redact(&p.summary);
     for it in &mut p.items {
@@ -259,26 +224,14 @@ fn display_proposal(mut p: Proposal) -> Value {
     v
 }
 
-async fn thread_get(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult {
+async fn thread_get(State(s): State<AppState>) -> ApiResult {
     blocking(move || {
-        let conn = s.db.conn()?;
-        let head: Option<(Option<String>, i64)> = {
-            use rusqlite::OptionalExtension;
-            conn.query_row(
-                "SELECT title, updated_ms FROM conversation WHERE id = ?1",
-                [&id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?
-        };
-        let Some((title, _)) = head else {
-            return Err(ApiError::not_found("thread"));
-        };
         let profile = hoardini_core::paths::profile_dir()
             .to_string_lossy()
             .into_owned();
-        let msgs = hoardini_agent::thread::agui_messages(&s.db, &id, Some(&profile))?;
-        let props = match proposals::list_for_conversation(&s.db, &id) {
+        let msgs = thread::agui_messages(&s.db, thread::MAIN, Some(&profile))?;
+        let view = thread::view(&s.db.conn()?, thread::MAIN, now_ms())?;
+        let props = match proposals::list_for_conversation(&s.db, thread::MAIN) {
             Ok(list) => list,
             Err(e) => {
                 tracing::warn!(error = %e, "listing proposals for thread failed");
@@ -290,22 +243,35 @@ async fn thread_get(State(s): State<AppState>, Path(id): Path<String>) -> ApiRes
             map.insert(p.id.clone(), display_proposal(p));
         }
         Ok(Json(json!({
-            "id": id,
-            "title": title.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "New chat".into()),
+            "id": thread::MAIN,
             "messages": msgs,
             "proposals": map,
+            "window_start_id": view.window_start_id,
+            "has_hidden": view.has_hidden,
+            "fresh": view.fresh,
         })))
     })
     .await
 }
 
-async fn thread_delete(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult {
+async fn thread_fresh(State(s): State<AppState>) -> ApiResult {
     blocking(move || {
-        let conn = s.db.conn()?;
-        conn.execute("DELETE FROM message WHERE conversation_id = ?1", [&id])?;
-        if conn.execute("DELETE FROM conversation WHERE id = ?1", [&id])? == 0 {
-            return Err(ApiError::not_found("thread"));
-        }
+        thread::start_fresh(&s.db.conn()?, thread::MAIN)?;
+        Ok(Json(json!({"ok": true})))
+    })
+    .await
+}
+
+async fn thread_clear(State(s): State<AppState>) -> ApiResult {
+    let running = s.runs.lock().map(|r| !r.is_empty()).unwrap_or(true);
+    if running {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "a chat run is in progress; stop it first",
+        ));
+    }
+    blocking(move || {
+        thread::clear(&mut s.db.conn()?, thread::MAIN)?;
         Ok(Json(json!({"ok": true})))
     })
     .await

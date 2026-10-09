@@ -1,6 +1,8 @@
 import { fileName, humanAge, humanBytes } from "../format";
 import { useStore } from "../store";
 
+const starter = "rounded-full border border-brass/40 bg-brass/10 px-3 py-1 text-[length:var(--fs-sm)] font-bold text-brass hover:bg-brass/20";
+
 export function Greeting({ onAsk }: { onAsk: (text: string) => void }) {
   const summary = useStore((s) => s.summary);
   const status = useStore((s) => s.status);
@@ -60,20 +62,17 @@ export function Greeting({ onAsk }: { onAsk: (text: string) => void }) {
         )}
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          className="rounded-full border border-brass/40 bg-brass/10 px-3 py-1 text-[length:var(--fs-sm)] font-bold text-brass hover:bg-brass/20"
-          onClick={() => onAsk("Show me the biggest hotspots and what changed since the last refresh.")}
-        >
+        <button className={starter} onClick={() => onAsk("Show me the biggest hotspots and what changed since the last refresh.")}>
           Show hotspots
         </button>
         {summary.duplicate_hint && (
-          <button
-            className="rounded-full border border-brass/40 bg-brass/10 px-3 py-1 text-[length:var(--fs-sm)] font-bold text-brass hover:bg-brass/20"
-            onClick={() => onAsk("Show me the largest duplicate files.")}
-          >
+          <button className={starter} onClick={() => onAsk("Show me the largest duplicate files.")}>
             Show duplicates
           </button>
         )}
+        <button className={starter} onClick={() => onAsk("How has my free space changed over time?")}>
+          Free space over time
+        </button>
       </div>
     </div>
   );
