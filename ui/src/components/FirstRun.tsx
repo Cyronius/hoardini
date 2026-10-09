@@ -8,9 +8,9 @@ import { useStore } from "../store";
 type Cloud = { id: string; blurb: string; recommended?: boolean };
 
 const CLOUD: Cloud[] = [
-  { id: "cerebras", recommended: true, blurb: "Free to start and very fast. Cerebras sets the limits and they change; read its terms for how it treats your data." },
   { id: "gemini", blurb: "Free and generous. Google uses free-tier prompts, including folder and file names, to improve its products." },
-  { id: "openrouter", blurb: "Free models, 50 requests a day (1,000 after a one-time $10 top-up)." },
+  { id: "openrouter", blurb: "Free models, 50 requests a day (1,000 after a one-time $10 top-up). Some free models' providers may keep or train on prompts; OpenRouter's privacy settings can block them." },
+  { id: "cerebras", blurb: "Very fast. Needs a payment method for a one-time $5 credit that lasts 30 days; after that it's paid." },
 ];
 
 const SEND_NOTE = "Cloud choices send your questions, and the file and folder names Hoardini looks up to answer them, to that provider.";
