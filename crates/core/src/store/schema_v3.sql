@@ -37,8 +37,3 @@ CREATE TRIGGER memory_au AFTER UPDATE OF text, key ON memory BEGIN
   INSERT INTO memory_fts(memory_fts, rowid, text, key) VALUES ('delete', old.id, old.text, old.key);
   INSERT INTO memory_fts(rowid, text, key) VALUES (new.id, new.text, new.key);
 END;
-
--- Refreshed follow-up cards (ACT-FOLLOW-UP) and the memory shown on each item (POLICY-ITEM-MEMORY).
-ALTER TABLE proposal ADD COLUMN parent_id TEXT;
-CREATE INDEX proposal_parent ON proposal(parent_id);
-ALTER TABLE proposal_item ADD COLUMN memory_note TEXT;
