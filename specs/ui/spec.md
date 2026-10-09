@@ -119,6 +119,60 @@ The header mascot is a sumo wrestler whose body girth tracks the used fraction (
 5. Post `{"running_runs":1}`; confirm he alternately lifts and stomps left then right, with dust at each stomp. Post `{"running_runs":0}` to stop.
 6. Enable reduced motion in the OS or browser; confirm no looping animation.
 
+### UI-MASCOT-POKE: The sumo reacts when poked
+**Applies to:** hoardini
+**Verification:** manual
+
+The header sumo is a button whose accessible name ends in "Poke me!". A click, or Enter or Space while he has focus, plays one reaction and then returns him to the state he was in (idle, salt, stomp, or celebrating); his announced state does not change, and poking never triggers anything else in the app. The reaction to a single poke is a jump whose height falls as his girth grows: skinny, a high jump with a tuck; middling, a hop; fat, he barely leaves the ground, lands with a thud and dust, and the header jolts 1–2 px; at the girth cap (about 97% full or more) he crouches and strains with a sweat drop and a creaking belt and does not jump. Pokes less than 1.5 s apart count as a combo: the 3rd is a shiko (one leg high, slammed down with dust) and the 6th or later makes him dizzy (stars, wobble, plop onto his bottom, about 2.5 s of sulking with arms crossed, then up). With `prefers-reduced-motion` a poke gives a happy-eyes blink and a 6-poke combo a still sulking face; nothing moves. While an approved job runs his girth stays at its pre-job size; when it ends he deflates to the new size over about 1.5 s with puffs of air. After at least 3 quiet minutes (no click or key press) he sometimes yawns, scratches his belly, or stretches, but only while the window is focused and visible: the one fidget timer exists only then.
+
+**Verification (manual):**
+1. In `ui/`, run `MOCK_IDLE=1 MOCK_FILL=0.30 bun run mock` and `bun run dev`; open http://localhost:5193/.
+2. Hover the sumo: the tooltip reads "Hoardini, a sumo wrestler — C: is 30% full, relaxing. Poke me!". Click him once: a high jump with tucked legs and arms flung up. Nothing else in the app changes.
+3. `curl -X POST "http://127.0.0.1:7043/api/mock?token=dev" -d '{"fill":0.8}'`, wait 2 s, click: a lower hop. Post `{"fill":0.93}`, click: a small, slow hop that lands with dust and nudges the header down. Post `{"fill":0.985}`, click: he crouches with gritted teeth, a sweat drop, and creak marks at the belt, and his feet stay down.
+4. Post `{"fill":0.5}`. Click 3 times quickly: shiko. Click 6 times quickly: stars circle his head, he wobbles, plops down, sulks with crossed arms, and gets up after about 4 s. Click again 2 s later: a normal jump.
+5. Press Tab until he has a focus ring, then press Enter and then Space: each plays a jump.
+6. Turn on reduced motion in the OS or browser and reload. Click: his eyes turn happy for a moment and nothing moves. Click 6 times quickly: a still sulking face for about 2 s.
+7. Approve a delete card (UI-MASCOT-JOBS step 2). His girth stays put while the job runs; after the finisher he slims to the new size over about 1.5 s with puffs of air at his sides.
+8. Leave the window focused and idle without clicking or typing for 4 minutes: he yawns, scratches his belly, or stretches once. With DevTools, wrap `window.setTimeout` before load to count pending timers of 170 s or more: there is exactly one while the window is focused, none after it loses focus or is minimized, and one again when it is focused.
+(2026-10-09: steps 2–6 and 8 checked against the mock in headless Chromium through Playwright; step 8 used a fake clock for the 3 minutes, timer counts 1/0/1/0/1 across focus, blur, focus, hidden, visible.)
+
+### UI-MASCOT-JOBS: The sumo does the job himself
+**Applies to:** hoardini
+**Verification:** manual
+
+When an approved job from a proposal card starts running and the card's top edge is on screen, the header sumo hides and a travelling copy climbs down a ladder from the header to stand on the card's top edge (about 1 s; a fat sumo bends the rungs). A parcel pops out of the card next to him with a file or folder icon, the first item's name, the size, and "×N" for several items. The card never moves and keeps its text, controls, and result; he stands above its top edge, never over its controls. While the job runs he works the parcel in a loop, and when it finishes he plays the move for its kind:
+
+| Job | Move | Parcel |
+|---|---|---|
+| Delete | oshidashi: charge and belly bump | flies off the right edge, spinning |
+| Compress | belly flop onto it | squashes into a pancake, then hops back into the card |
+| Archive to a local or SMB destination | overarm throw | lands in a cardboard box whose lid shuts |
+| Archive to an rclone destination | the throw aimed up | sails into a cloud, which puffs |
+| Dedupe | kashiwade clap | the twin parcels are clapped into one |
+| Failed | slips, lands on his bottom, rubs his head | stays put, then goes back into the card |
+| Cancelled | stops and shrugs | hops back into the card |
+
+He then climbs back up, deflating on the way if space was freed, and in the header is pleased with himself for about 2 s (chin up, eyes closed, arms crossed, a pat-pat of the hands); the rest of that celebration is skipped. A declined proposal gets no trip, only a head shake in the header. If the card's top edge is not on screen when the job starts, or the page is hidden, there is no trip: he stomps in the header while the job runs, plays the move there when it ends, then celebrates. After about 30 s of work he climbs back and the move plays in the header when the job ends. Only one trip happens at a time; a job that starts while he is out runs without one. After 3 trips within 10 minutes later jobs get the header version. Clicking anywhere sends him home quickly, and the job carries on from the header. With `prefers-reduced-motion` there is no trip and no parcel: he holds the still stomp pose while the job runs and shows the pleased face when it succeeds. The overlay never takes pointer input, and the mascot never delays or drives a job.
+
+**Verification (manual):**
+1. In `ui/`, run `MOCK_IDLE=1 MOCK_FILL=0.9 bun run mock` and `bun run dev`; open http://localhost:5193/ at about 1000 × 800.
+2. Ask "what is in lmstudio", wait for the Delete card, and hold "Hold to delete". The header sumo vanishes and a copy climbs down a ladder whose rungs sag under him, lands on the card's top edge, and a parcel ("llama-3.3-…", "52.4 GB", "×2") pops out beside him. He pushes it while the progress bar runs, then charges and bumps it off the right edge, spinning. He climbs back, slimming with puffs of air, and stands in the header with arms crossed and eyes closed for about 2 s, then idles.
+3. Before each new card's approval, post one of these to `http://127.0.0.1:7043/api/mock?token=dev` (the mock changes the kind when you approve, so the card's heading switches then), ask again, and approve:
+   - `{"next_job":{"kind":"compress"}}`: he hops onto the parcel and bounces on it, then belly flops and the parcel goes flat.
+   - `{"next_job":{"kind":"archive"}}`: he windmills his arm, then lifts the parcel overhead and throws it into a box that pops up to his right; the lid shuts.
+   - `{"next_job":{"kind":"archive","cloud":true}}`: the same throw goes up into a cloud, which puffs.
+   - `{"next_job":{"kind":"dedupe"}}`: two parcels, arms spread, then a clap that merges them into one, held up over his head.
+   - `{"next_job":{"outcome":"failed"}}`: he slips onto his bottom with crossed-out eyes and rubs his head; the parcel stays, then sinks back into the card; the card shows the error.
+   - `{"next_job":{"outcome":"cancelled"}}`: the parcel hops back into the card and he shrugs.
+4. Press Cancel on a pending card: no trip; the header sumo shakes his head.
+5. Make the window short (about 480 px), scroll the chat to the bottom so the card's top edge is hidden, and approve: no trip. He stomps in the header, plays the move there at the end, then celebrates.
+6. Post `{"next_job":{"ms":40000}}` and approve: after about 30 s he climbs back and stomps in the header; at the end the move plays in the header.
+7. During a trip, click anywhere on the page: he climbs home at once, the click still lands, and the job finishes with the move in the header.
+8. Approve 5 jobs within 10 minutes: the first 3 get trips, the rest the header version.
+9. Turn on reduced motion and approve: no ladder or parcel; the header sumo holds the stomp pose while the job runs and shows the pleased face at the end.
+10. During a trip, type in the chat box and scroll the chat: input works, he stays on the card's edge as it moves, and the progress bar and the job's finish time are the same as with no trip.
+(2026-10-09: steps 2–10 checked against the mock in headless Chromium through Playwright, with compress, dedupe, failed, cancelled, and long jobs also driven through the store directly.)
+
 ### UI-SETTINGS-AUTOSAVE: Settings save themselves; one Rescan now control
 **Applies to:** hoardini
 **Verification:** manual

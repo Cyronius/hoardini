@@ -165,7 +165,19 @@ function makeProposal(kind: T.ProposalKind): T.Proposal {
   return p;
 }
 
+// Set through POST /api/mock {"next_job": ...}; shapes the next approval for checking the mascot's moves.
+type NextJob = { kind?: T.ProposalKind; outcome?: "failed" | "cancelled"; ms?: number; cloud?: boolean };
+let nextJob: NextJob | null = null;
+
 function runJob(p: T.Proposal, itemIds: number[]): T.Job {
+  const plan = nextJob;
+  nextJob = null;
+  if (plan?.kind) p.kind = plan.kind;
+  if (plan?.cloud) {
+    let d = destinations.find((x) => x.kind === "rclone");
+    if (!d) destinations.push((d = { id: "dest-drive", name: "Drive", kind: "rclone", config: {}, created_ms: now() }));
+    p.destination = { id: d.id, name: d.name };
+  }
   const chosen = p.items.filter((i) => itemIds.includes(i.id) && !i.block_reason);
   const total = chosen.reduce((a, i) => a + i.alloc, 0);
   const job: T.Job = { id: uuid(), kind: p.kind, proposal_id: p.id, status: "running", progress: { done_bytes: 0, total_bytes: total, done_items: 0, total_items: chosen.length, current: chosen[0]?.path ?? null }, freed_bytes: 0, error: null, created_ms: now(), finished_ms: null };
@@ -180,7 +192,7 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
     for (let n = 0; n < chosen.length; n++) {
       const it = chosen[n]!;
       for (let s = 1; s <= 5; s++) {
-        await sleep(450);
+        await sleep(plan?.ms ? plan.ms / 5 / chosen.length : 450);
         job.progress.done_bytes = done + (it.alloc * s) / 5;
         job.progress.current = it.path;
         emitJob(job);
@@ -188,6 +200,13 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
       done += it.alloc;
       it.status = "done";
       job.progress.done_items = n + 1;
+    }
+    if (plan?.outcome) {
+      Object.assign(job, { status: plan.outcome, error: plan.outcome === "failed" ? "Access is denied" : null, finished_ms: now() });
+      p.status = "failed";
+      emitJob(job);
+      dirty = true;
+      return;
     }
     job.status = "done";
     job.freed_bytes = total;
@@ -325,7 +344,8 @@ async function route(req: Request): Promise<Response> {
 
   switch (seg[0]) {
     case "mock": {
-      const b = await body<{ fill?: number; running_runs?: number; idle?: boolean }>();
+      const b = await body<{ fill?: number; running_runs?: number; idle?: boolean; next_job?: NextJob }>();
+      if (b.next_job) nextJob = b.next_job;
       if (b.fill != null) setFill(b.fill);
       if (b.running_runs != null) status.running_runs = b.running_runs;
       if (b.idle) Object.assign(status.index, { state: "idle", mode: null, progress: null });

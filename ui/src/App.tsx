@@ -4,6 +4,7 @@ import { AiNotices } from "./components/AiNotices";
 import { ChatSession } from "./components/Chat";
 import { FirstRun } from "./components/FirstRun";
 import { Header } from "./components/Header";
+import { Stage } from "./components/mascot/Stage";
 import { Drawer } from "./drawer/Drawer";
 import { useStore } from "./store";
 import { applyTheme, resolveTheme } from "./theme";
@@ -91,6 +92,7 @@ export function App() {
       {nonce > 0 ? <ChatSession key={nonce} seed={seed} /> : <div className="flex-1" />}
       <Drawer />
       <FirstRun />
+      <Stage />
     </div>
   );
 }

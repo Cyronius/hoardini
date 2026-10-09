@@ -26,6 +26,8 @@ interface State {
   summary: IndexSummary | null;
   jobs: Record<string, Job>;
   tadaUntil: number;
+  mascotAway: boolean;
+  setMascotAway(away: boolean): void;
 
   drawer: DrawerTab | null;
   themePref: string;
@@ -70,6 +72,8 @@ export const useStore = create<State>((set, get) => ({
   summary: null,
   jobs: {},
   tadaUntil: 0,
+  mascotAway: false,
+  setMascotAway: (mascotAway) => set({ mascotAway }),
 
   drawer: null,
   themePref: themePref(),
