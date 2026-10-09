@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::evidence::owner;
-use crate::index::{self, NodeKind, normalize_path};
+use crate::index::{self, NodeKind, TopFilesQuery, normalize_path};
 
 pub use steam::{SteamApp, parse_app_manifest, parse_library_folders};
 
@@ -132,6 +132,61 @@ fn under(parent: &str, child: &str) -> bool {
         && !parent.eq_ignore_ascii_case(child)
 }
 
+fn exe_names(conn: &Connection, location: &str) -> Vec<String> {
+    let q = TopFilesQuery {
+        under: Some(location.to_string()),
+        min_size: 0,
+        ext: Some("exe".into()),
+        not_used_for_days: None,
+        limit: 500,
+    };
+    index::top_files(conn, &q)
+        .map(|r| {
+            r.items
+                .into_iter()
+                .filter_map(|f| f.path.rsplit('\\').next().map(str::to_lowercase))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn squash(s: &str) -> String {
+    s.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+// Taskbar and Start launches are recorded as a shortcut or an app id, not the exe path, so names count too.
+fn run_of(entry: &str, location: &str, name: &str, exes: &[String]) -> bool {
+    let n = owner::expand_assist_name(entry);
+    if owner::is_under(&owner::norm(location), &n) {
+        return true;
+    }
+    let leaf = n.rsplit('\\').next().unwrap_or(&n);
+    let stem = squash(
+        leaf.strip_suffix(".lnk")
+            .or_else(|| leaf.strip_suffix(".exe"))
+            .unwrap_or(leaf),
+    );
+    let app = squash(name);
+    if (stem.len() >= 5 && app.contains(&stem)) || (app.len() >= 5 && stem.contains(&app)) {
+        return true;
+    }
+    !n.contains('\\') && exes.iter().any(|e| n.contains(e.as_str()))
+}
+
+fn last_assist(entries: &[UserAssistEntry], a: &App, exes: &[String]) -> Option<(i64, String)> {
+    entries
+        .iter()
+        .filter(|e| run_of(&e.name, &a.location, &a.name, exes))
+        .filter_map(|e| {
+            e.last_run_ms
+                .map(|ms| (ms, owner::expand_assist_name(&e.name)))
+        })
+        .max_by_key(|(ms, _)| *ms)
+}
+
 pub fn rarely_used(
     conn: &Connection,
     inputs: &AppInputs,
@@ -163,14 +218,14 @@ pub fn rarely_used(
         if size < MIN_APP_BYTES {
             continue;
         }
-        let assist = owner::last_run_under(&inputs.assist, &a.location);
-        let steam = |p: i64| (Some(p), Some("Steam LastPlayed".to_string()));
-        let (last_run_ms, last_run_from) = match (assist, a.last_played_ms) {
-            (Some((ms, _)), Some(p)) if p > ms => steam(p),
-            (Some((ms, exe)), _) => (Some(ms), Some(format!("last run of {exe}"))),
-            (None, Some(p)) => steam(p),
-            (None, None) => (None, None),
-        };
+        let exes = exe_names(conn, &a.location);
+        let signals = [
+            last_assist(&inputs.assist, a, &exes).map(|(ms, e)| (ms, format!("last run of {e}"))),
+            a.last_played_ms
+                .map(|p| (p, "Steam LastPlayed".to_string())),
+        ];
+        let last = signals.into_iter().flatten().max_by_key(|(ms, _)| *ms);
+        let (last_run_ms, last_run_from) = (last.as_ref().map(|l| l.0), last.map(|l| l.1));
         if last_run_ms.is_some_and(|t| t >= now - IDLE_DAYS * DAY_MS) {
             continue;
         }

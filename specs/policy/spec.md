@@ -23,6 +23,10 @@ least the cap (`Verdict::capped`). `policy::cap_for(conn, path, catalog_cap, in_
 The locations below come from `PolicyEnv` (`system()` reads the real environment; `with_paths(profile, data_dir)` lets
 tests point the profile and data folder at temp directories).
 
+`system_cleanup` proposals (ACT-WINDOWS-CLEANUP) hold operations that Windows' own tools carry out, not paths, so they do
+not go through the gate at creation or execution; the elevated helper runs only its fixed list of operations
+(ACT-WINDOWS-CLEANUP-RUN).
+
 ### POLICY-DENY: Deny-listed locations are never proposed
 **Applies to:** hoardini
 **Verification:** test

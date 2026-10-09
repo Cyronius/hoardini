@@ -51,6 +51,12 @@ pub fn fake_disk(db: &Db) {
         (r"D:\Steam\steamapps\common\Old Game\game.pak", 5 * GIB),
         (r"D:\Steam\steamapps\common\New Game\game.pak", 6 * GIB),
         (r"D:\Steam\steamapps\common\Unplayed\u.pak", 5 * GIB / 2),
+        (r"D:\Apps\Code\Code.exe", 100 * (1 << 20)),
+        (r"D:\Apps\Code\resources.dat", 3 * GIB),
+        (r"D:\Apps\Office\root\WINWORD.EXE", 2 * (1 << 20)),
+        (r"D:\Apps\Office\data.dat", 3 * GIB),
+        (r"D:\Apps\Shortcut\s.dat", 3 * GIB),
+        (r"D:\Apps\Never\setup.exe", 2 * (1 << 20)),
     ] {
         fs.file(path, size);
     }
@@ -85,6 +91,21 @@ pub fn fake_inputs() -> AppInputs {
             program("Tiny", Some(r"D:\Apps\Tiny"), Some(r"D:\Apps\Tiny\u.exe")),
             hidden,
             program("No Uninstaller", Some(r"D:\Apps\NoUninstall"), None),
+            program(
+                "Microsoft Visual Studio Code (User)",
+                Some(r"D:\Apps\Code"),
+                Some(r"D:\Apps\Code\unins000.exe"),
+            ),
+            program(
+                "Contoso 365 Apps",
+                Some(r"D:\Apps\Office"),
+                Some(r"D:\Apps\Office\setup.exe /uninstall"),
+            ),
+            program(
+                "Shortcut App",
+                Some(r"D:\Apps\Shortcut"),
+                Some(r"D:\Apps\Shortcut\u.exe"),
+            ),
             program("Everything", Some(r"D:\Program Files"), Some(r"D:\x\u.exe")),
             program(
                 "Not Indexed",
@@ -103,6 +124,13 @@ pub fn fake_inputs() -> AppInputs {
             ran(r"D:\Apps\Fresh\fresh.exe", 10),
             ran(r"D:\Steam\steam.exe", 300),
             ran(r"D:\Steam\steamapps\common\New Game\new.exe", 200),
+            ran("Microsoft.VisualStudioCode", 2),
+            ran("Microsoft.Office.WINWORD.EXE.15", 12),
+            ran(
+                r"{A77F5D77-2E2B-44C3-A6A2-ABA601054A51}\Shortcut App.lnk",
+                20,
+            ),
+            ran(r"C:\Users\me\Downloads\setup.exe", 1),
         ],
         steam: vec![
             steam_game(1001, "Old Game", Some(100)),
@@ -147,9 +175,9 @@ fn big_apps_not_run_for_90_days_are_listed_from_registry_userassist_and_steam() 
                 "Never Opened",
                 "registry",
                 r"D:\Apps\Never",
-                4 * GIB,
+                4 * GIB + 2 * (1 << 20),
                 None,
-                None
+                None,
             ),
             (
                 "Big Tool",

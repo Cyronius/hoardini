@@ -6,6 +6,7 @@ mod rclone;
 mod safety;
 #[path = "../../policy/tests/support.rs"]
 mod support;
+mod system;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

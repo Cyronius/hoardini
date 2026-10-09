@@ -55,6 +55,7 @@ pub enum Action {
     Archive,
     Compress,
     Dedupe,
+    SystemCleanup,
 }
 
 impl Action {

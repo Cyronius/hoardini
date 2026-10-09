@@ -301,6 +301,11 @@ fn main() -> ExitCode {
         stderr_logging();
         return ExitCode::from(index::run_child(&argv[2..]).clamp(0, 255) as u8);
     }
+    // The executor relaunches this exe elevated for system_cleanup jobs (ACT-WINDOWS-CLEANUP).
+    if argv.get(1).is_some_and(|a| a == "system-cleanup") {
+        let code = hoardini_core::syscleanup::run_helper(&argv[2..]);
+        return ExitCode::from(code.clamp(0, 255) as u8);
+    }
     let cli = Cli::parse();
     // `serve` installs the file logger itself, also when a global flag precedes it (`--db x serve`).
     if !matches!(cli.cmd, Cmd::Serve(_)) {

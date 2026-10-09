@@ -13,4 +13,5 @@ pub mod policy;
 pub mod proposals;
 pub mod runtime;
 pub mod store;
+pub mod syscleanup;
 pub mod vault;

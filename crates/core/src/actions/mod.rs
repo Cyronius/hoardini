@@ -6,6 +6,7 @@ mod handler;
 mod install;
 mod journal;
 mod rclone;
+mod system;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -25,6 +26,7 @@ use crate::store::{Db, now_ms};
 use crate::vault::SecretStore;
 
 pub use handler::{CopyHook, supports};
+pub use system::{SystemRunner, WindowsRunner};
 
 use handler::{Cancelled, ItemCx, JobCx, handler_for};
 
@@ -80,6 +82,7 @@ struct Shared {
     run_lock: Mutex<()>,
     hook: Mutex<Option<CopyHook>>,
     rclone: Mutex<Option<Endpoint>>,
+    system: Mutex<Option<Arc<dyn SystemRunner>>>,
 }
 
 // Process-wide so a second Executor's startup recovery never fails a job that is still running here.
@@ -239,6 +242,7 @@ impl Executor {
                 run_lock: Mutex::new(()),
                 hook: Mutex::new(None),
                 rclone: Mutex::new(None),
+                system: Mutex::new(None),
             }),
         }
     }
@@ -264,6 +268,12 @@ impl Executor {
         *self.shared.rclone.lock() = ep;
     }
 
+    #[doc(hidden)]
+    // Replaces the Windows tools and the admin prompt for system_cleanup jobs.
+    pub fn set_system_runner(&self, runner: Option<Arc<dyn SystemRunner>>) {
+        *self.shared.system.lock() = runner;
+    }
+
     // The only entry point that changes the filesystem: revalidates, then starts a job.
     pub fn approve(&self, proposal_id: &str, item_ids: &[i64]) -> anyhow::Result<ApproveResult> {
         let mut conn = self.db.conn()?;
@@ -273,7 +283,7 @@ impl Executor {
         if p.status != "pending" {
             anyhow::bail!("proposal {proposal_id} is {}, not pending", p.status);
         }
-        if handler_for(p.kind).is_none() {
+        if !supports(p.kind) {
             anyhow::bail!("{} proposals cannot run yet", p.kind.as_str());
         }
         let mut chosen: Vec<i64> = Vec::new();
@@ -359,6 +369,10 @@ impl Executor {
         proposal_id: &str,
         chosen: &[i64],
     ) -> Vec<i64> {
+        // Operations have no file state to compare; the Windows tools check their own preconditions.
+        if action == policy::Action::SystemCleanup {
+            return chosen.to_vec();
+        }
         let items = match proposals::stored_items(conn, proposal_id) {
             Ok(items) => items,
             Err(e) => {
@@ -592,12 +606,15 @@ fn run_items(
 ) -> anyhow::Result<()> {
     let p = proposals::load(conn, proposal_id)?
         .ok_or_else(|| anyhow::anyhow!("proposal {proposal_id} vanished"))?;
-    let handler = handler_for(p.kind)
-        .ok_or_else(|| anyhow::anyhow!("{} proposals cannot run yet", p.kind.as_str()))?;
     let items: Vec<StoredItem> = proposals::stored_items(conn, proposal_id)?
         .into_iter()
         .filter(|i| i.selected && i.status == "pending")
         .collect();
+    if p.kind == proposals::ProposalKind::SystemCleanup {
+        return system::run_job(ctx, conn, job, &p, &items, cancel);
+    }
+    let handler = handler_for(p.kind)
+        .ok_or_else(|| anyhow::anyhow!("{} proposals cannot run yet", p.kind.as_str()))?;
     job.progress.total_items = items.len() as i64;
     job.progress.total_bytes = items.iter().map(|i| handler.weight(i)).sum();
     job.status = "running".into();

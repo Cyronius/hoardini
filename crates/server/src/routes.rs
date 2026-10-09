@@ -15,6 +15,7 @@ use hoardini_core::memory::{self, Kind, MemoryPatch, NewMemory, Scope};
 use hoardini_core::paths::redact;
 use hoardini_core::proposals::{self, Proposal};
 use hoardini_core::store::{get_meta, now_ms, set_meta};
+use hoardini_core::syscleanup::SystemOp;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -232,6 +233,9 @@ fn display_proposal(mut p: Proposal) -> Value {
         it.reason = it.reason.as_deref().map(redact);
         it.block_reason = it.block_reason.as_deref().map(redact);
         it.memory_note = it.memory_note.as_deref().map(redact);
+        if let Some(SystemOp::CompactVhdx { path }) = it.op.as_mut().map(|o| &mut o.op) {
+            *path = redact(path);
+        }
     }
     let mut v = serde_json::to_value(&p).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
