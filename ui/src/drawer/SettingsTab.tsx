@@ -4,6 +4,7 @@ import type { IndexSpeed, Settings } from "../api/types";
 import { LeafIcon } from "../components/icons";
 import { humanBytes } from "../format";
 import { SavedTick, useAutoSave } from "./autosave";
+import { ClearHistorySection } from "./ClearHistory";
 import { ErrorLine, errMsg, Section } from "./ui";
 
 const SPEEDS: { id: IndexSpeed; label: string; hint: string }[] = [
@@ -78,6 +79,7 @@ export function SettingsTab() {
         </div>
         <ErrorLine error={speed.error} />
       </Section>
+      <ClearHistorySection />
     </div>
   );
 }

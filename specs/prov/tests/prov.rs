@@ -520,7 +520,12 @@ fn cfg_for(base: &str) -> ProviderConfig {
 #[tokio::test]
 async fn retry_after_is_honored_then_the_request_succeeds() {
     let hits = Arc::new(AtomicUsize::new(0));
-    let base = serve(limited("application/json\r\nRetry-After: 7", hits.clone(), true)).await;
+    let base = serve(limited(
+        "application/json\r\nRetry-After: 7",
+        hits.clone(),
+        true,
+    ))
+    .await;
     let (client, waits, noticed) = recording_client();
     let turn = client
         .chat(&cfg_for(&base), None, &user_req("hi"))
@@ -528,7 +533,10 @@ async fn retry_after_is_honored_then_the_request_succeeds() {
         .expect("retried");
     assert_eq!(turn.text, "hello");
     assert_eq!(hits.load(Ordering::SeqCst), 2);
-    assert_eq!(*waits.lock().unwrap(), vec![std::time::Duration::from_secs(7)]);
+    assert_eq!(
+        *waits.lock().unwrap(),
+        vec![std::time::Duration::from_secs(7)]
+    );
     assert_eq!(*noticed.lock().unwrap(), vec![7]);
 }
 
@@ -537,7 +545,11 @@ async fn retry_after_is_honored_then_the_request_succeeds() {
 async fn retry_after_http_date_and_streaming_path() {
     let at = std::time::SystemTime::now() + std::time::Duration::from_secs(30);
     let ctype: &'static str = Box::leak(
-        format!("application/json\r\nRetry-After: {}", httpdate::fmt_http_date(at)).into_boxed_str(),
+        format!(
+            "application/json\r\nRetry-After: {}",
+            httpdate::fmt_http_date(at)
+        )
+        .into_boxed_str(),
     );
     let hits = Arc::new(AtomicUsize::new(0));
     let base = serve(limited(ctype, hits.clone(), true)).await;
@@ -557,8 +569,14 @@ async fn waits_are_capped_at_sixty_seconds() {
     let hits = Arc::new(AtomicUsize::new(0));
     let base = serve(limited("application/json\r\nRetry-After: 3600", hits, true)).await;
     let (client, waits, _) = recording_client();
-    client.chat(&cfg_for(&base), None, &user_req("hi")).await.expect("ok");
-    assert_eq!(*waits.lock().unwrap(), vec![std::time::Duration::from_secs(60)]);
+    client
+        .chat(&cfg_for(&base), None, &user_req("hi"))
+        .await
+        .expect("ok");
+    assert_eq!(
+        *waits.lock().unwrap(),
+        vec![std::time::Duration::from_secs(60)]
+    );
 }
 
 // Traces: PROV-RATE-LIMIT
@@ -599,7 +617,10 @@ async fn daily_quota_429s_end_at_once() {
             .await
             .err()
             .expect("error");
-        assert!(matches!(err, ProviderError::DailyQuota(_)), "{body}: {err:?}");
+        assert!(
+            matches!(err, ProviderError::DailyQuota(_)),
+            "{body}: {err:?}"
+        );
         assert_eq!(hits.load(Ordering::SeqCst), 1);
         assert!(waits.lock().unwrap().is_empty());
     }
@@ -620,6 +641,10 @@ fn cerebras_and_gemini_presets_have_base_urls_and_models() {
         "https://generativelanguage.googleapis.com/v1beta/openai/"
     );
     assert!(g.default_model.is_some_and(|m| m.contains("flash")));
-    assert!(get("openrouter").default_model.is_some_and(|m| m.ends_with(":free")));
+    assert!(
+        get("openrouter")
+            .default_model
+            .is_some_and(|m| m.ends_with(":free"))
+    );
     assert!(get("ollama").default_model.is_none());
 }

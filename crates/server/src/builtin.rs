@@ -822,7 +822,7 @@ pub async fn resolve(
         });
     let Some(model) = model.filter(|_| runtime::is_installed(&LLAMA_SERVER, &root)) else {
         return Err(
-            "The built-in model is not installed. Download it in Settings, Providers, or pick another provider."
+            "The built-in model is not installed. Download it in Settings, AI, or pick another provider."
                 .into(),
         );
     };

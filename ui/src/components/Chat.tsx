@@ -339,7 +339,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
               }
             >
               {producedNothing
-                ? "The model replied with no content. Check the provider's base URL and that its server is reachable (Settings, Providers)."
+                ? "The model replied with no content. Check the provider's base URL and that its server is reachable (Settings, AI)."
                 : limitHit
                   ? `Hoardini used its ${limits.maxSteps} tool steps for this turn before finishing.`
                   : `Hoardini stopped without a final answer. It may have hit the tool call limit (${limits.maxSteps}).`}

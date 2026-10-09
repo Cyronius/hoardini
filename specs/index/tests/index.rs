@@ -403,7 +403,11 @@ fn threshold_is_a_fixed_1_mib_and_an_override_applies_to_one_refresh() {
     hoardini_core::store::set_meta(&conn, "threshold_bytes", &(64 * KIB).to_string()).unwrap();
     run(&e, &fs, r"C:\", 2);
     let st = index::index_status(&conn, Some(r"C:\")).unwrap().unwrap();
-    assert_eq!(st.threshold_bytes, Some(MIB), "a leftover setting is ignored");
+    assert_eq!(
+        st.threshold_bytes,
+        Some(MIB),
+        "a leftover setting is ignored"
+    );
     assert!(node_by_path(&conn, r"C:\edge\exact.bin").unwrap().is_some());
     assert!(node_by_path(&conn, r"C:\edge\below.bin").unwrap().is_none());
 

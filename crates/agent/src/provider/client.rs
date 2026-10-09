@@ -45,7 +45,10 @@ fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
         return Some(Duration::from_secs(secs));
     }
     let at = httpdate::parse_http_date(v).ok()?;
-    Some(at.duration_since(std::time::SystemTime::now()).unwrap_or_default())
+    Some(
+        at.duration_since(std::time::SystemTime::now())
+            .unwrap_or_default(),
+    )
 }
 
 pub(super) fn map_reqwest(e: reqwest::Error) -> ProviderError {

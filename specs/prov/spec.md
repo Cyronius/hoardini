@@ -127,7 +127,7 @@ The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <rand
 Nothing shall be downloaded until the user clicks the card's download button. The card shows the runtime size, the model size, the free space and the model's license link; while the job runs it shows progress from the status stream and a Cancel button; when done the Built-in row appears in the provider list (active when it is the only provider). The card stays hidden while `recommended` is null and nothing is installed.
 
 **Verification (manual):**
-1. With `RECOMMENDED` set (or a model installed), open Settings, Providers: the "Built-in model" card lists runtime size, model size, free space and a license link that opens the model's license.
+1. With `RECOMMENDED` set (or a model installed), open Settings, AI: the "Built-in model" card lists runtime size, model size, free space and a license link that opens the model's license.
 2. Click "Download": a progress bar advances (`builtin_install` job frames on `/api/status/stream`); Cancel stops it and leaves no `.part` file in the data folder.
 3. Download again to the end: the card shows "idle", the provider list gains "Built-in · on this PC, CPU", and the first chat turn on it answers after the model loads.
 4. Click "Remove built-in model" and confirm: the card reports the freed size, and `%LOCALAPPDATA%\hoardini\runtime\` and `models\` no longer hold the files.

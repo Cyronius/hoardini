@@ -399,7 +399,10 @@ async fn a_stored_profile_with_redaction_off_still_loads_and_is_redacted() {
         .await;
     let reqs = mock.requests();
     let content = tool_content(&reqs[1], "c1");
-    assert!(content.contains(r"~\.lmstudio\models\big.gguf"), "{content}");
+    assert!(
+        content.contains(r"~\.lmstudio\models\big.gguf"),
+        "{content}"
+    );
     for r in &reqs {
         assert!(!r.body.to_lowercase().contains("zq_owner"), "{}", r.body);
     }

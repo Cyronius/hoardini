@@ -268,11 +268,11 @@ pub fn configured(
 // Setting up a provider is the opt-in; deactivating or removing it is the off switch.
 pub fn enabled(conn: &Connection) -> bool {
     conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM search_provider WHERE is_active = 1)",
-            [],
-            |r| r.get::<_, bool>(0),
-        )
-        .unwrap_or(false)
+        "SELECT EXISTS(SELECT 1 FROM search_provider WHERE is_active = 1)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )
+    .unwrap_or(false)
 }
 
 pub async fn test(cfg: &ProviderCfg, key: Option<&str>) -> SearchTest {

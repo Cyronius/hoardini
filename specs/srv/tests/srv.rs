@@ -86,7 +86,11 @@ impl Fixture {
     }
 
     async fn stream(&self) -> reqwest::Response {
-        let r = self.authed("GET", "/api/status/stream").send().await.unwrap();
+        let r = self
+            .authed("GET", "/api/status/stream")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(r.status(), 200);
         r
     }
@@ -142,7 +146,6 @@ async fn wait_for(path: &Path, pred: impl Fn(&[String]) -> bool, secs: u64) -> V
 }
 
 impl Fixture {
-
     fn req(&self, method: &str, path: &str) -> reqwest::RequestBuilder {
         let m = reqwest::Method::from_bytes(method.as_bytes()).unwrap();
         self.http.request(m, format!("{}{path}", self.base))
@@ -400,7 +403,10 @@ async fn settings_round_trip() {
         assert!(e["error"].is_string());
     }
     let (_, again) = f.call("GET", "/api/settings", None).await;
-    assert_eq!(again["index_speed"], "fast", "a rejected PUT changes nothing");
+    assert_eq!(
+        again["index_speed"], "fast",
+        "a rejected PUT changes nothing"
+    );
     let _ = f.h.shutdown.send(());
 }
 
@@ -548,7 +554,11 @@ async fn one_refresh_at_a_time_and_fast_takes_over_lean() {
 
     let spawns = dir.path().join("spawns.txt");
     let modes = wait_for(&spawns, |l| l.len() >= 2, 5).await;
-    assert_eq!(modes, ["background", "fast"], "fast takes over a lean refresh");
+    assert_eq!(
+        modes,
+        ["background", "fast"],
+        "fast takes over a lean refresh"
+    );
     let (_, idx) = index_state(&f).await;
     assert_eq!(idx["mode"], "fast");
 
@@ -557,7 +567,10 @@ async fn one_refresh_at_a_time_and_fast_takes_over_lean() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(lines(&spawns).len(), 2, "lean lets a fast refresh finish");
     let (state, idx) = index_state(&f).await;
-    assert_eq!((state.as_str(), &idx["mode"]), ("refreshing", &json!("fast")));
+    assert_eq!(
+        (state.as_str(), &idx["mode"]),
+        ("refreshing", &json!("fast"))
+    );
     let _ = f.h.shutdown.send(());
 }
 
@@ -795,7 +808,11 @@ fn journal_spawns(l: &[String]) -> usize {
 #[test]
 fn the_next_journal_refresh_is_due_when_the_index_reaches_the_interval() {
     let min = |m: u64| Duration::from_secs(m * 60);
-    assert_eq!(journal_wait(None, min(3)), Duration::ZERO, "never completed");
+    assert_eq!(
+        journal_wait(None, min(3)),
+        Duration::ZERO,
+        "never completed"
+    );
     assert_eq!(journal_wait(Some(min(4)), min(3)), Duration::ZERO);
     assert_eq!(journal_wait(Some(min(3)), min(3)), Duration::ZERO);
     assert_eq!(journal_wait(Some(min(1)), min(3)), min(2));

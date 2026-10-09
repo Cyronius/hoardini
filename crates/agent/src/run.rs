@@ -280,7 +280,7 @@ impl Run {
                 Ok(v)
             }
             Ok(None) => Err(Stop::Fail(format!(
-                "{reference} is not in the vault. Set it in Settings, Providers."
+                "{reference} is not in the vault. Set it in Settings, AI."
             ))),
             Err(e) => Err(Stop::Fail(format!(
                 "Could not read {reference} from the vault: {e}"
@@ -698,7 +698,7 @@ pub fn describe(e: &ProviderError, cfg: &ProviderConfig) -> String {
     let base = cfg.base_url.trim();
     match e {
         ProviderError::Http { status, body } if matches!(status, 401 | 403) => format!(
-            "The provider at {base} rejected the request (HTTP {status}): {body}. Check the API key in Settings, Providers."
+            "The provider at {base} rejected the request (HTTP {status}): {body}. Check the API key in Settings, AI."
         ),
         ProviderError::Http { status, body } => {
             format!("The provider at {base} returned HTTP {status}: {body}")
@@ -706,7 +706,7 @@ pub fn describe(e: &ProviderError, cfg: &ProviderConfig) -> String {
         ProviderError::Api(m) => format!("The model provider reported an error: {m}"),
         ProviderError::Transport(m) => format!("Could not reach the model server at {base}: {m}"),
         ProviderError::Timeout(m) => format!(
-            "The model server at {base} did not respond in time ({m}). Try again, or raise the timeout in Settings, Providers."
+            "The model server at {base} did not respond in time ({m}). Try again, or raise the timeout in Settings, AI."
         ),
         ProviderError::Protocol(m) => {
             format!("The model server sent a response Hoardini could not read: {m}")

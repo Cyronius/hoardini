@@ -74,7 +74,12 @@ fn norm_mode(mode: &str) -> Option<&'static str> {
 
 // The Fast / Lean switch; Lean runs the indexer in background mode.
 pub fn index_speed(conn: &Connection) -> &'static str {
-    match get_meta(conn, "index_speed").ok().flatten().as_deref().map(str::trim) {
+    match get_meta(conn, "index_speed")
+        .ok()
+        .flatten()
+        .as_deref()
+        .map(str::trim)
+    {
         Some("fast") => "fast",
         _ => "lean",
     }
