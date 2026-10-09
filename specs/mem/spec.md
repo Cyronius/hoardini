@@ -68,6 +68,7 @@ The Memory drawer shall list every memory row sorted by last used, each with a "
 10. Toggle a row's pin off and on; the state persists across a reload.
 11. With a location row (`~\Pictures`, "your photos and videos", `keep`) and a file-type row (`**\*.q4nx`, app FastFlowLM) present, open the drawer: the location row shows the chips "your photos and videos" and "keep", the type row shows "FastFlowLM" and no verdict chip, and a plain note shows neither.
 (2026-10-08, scripted mock model, sandbox folder: 1-5, 7, 8 as described; 6 not run, no web-sourced row. Steps 9-10 and the pin text in 1-2 are new and unrun.)
+(2026-10-09: step 11 passes against the UI mock (`MOCK_IDLE=1 bun run mock` + `vite`, Playwright headless): `~\Pictures` shows "your photos and videos" and "keep", `**\*.q4nx` shows "FastFlowLM" with no verdict chip, the plain notes show neither; step 6's web URL also shows on the `.q4nx` row.)
 
 ### MEM-USAGE: Reads mark a note as used
 **Applies to:** hoardini
