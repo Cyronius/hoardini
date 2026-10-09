@@ -8,7 +8,7 @@ Requirement tests: `specs/agent/tests/agent.rs` (`cargo test -p hoardini-specs -
 **Applies to:** hoardini
 **Verification:** test
 
-No tool the agent can call shall create, change or delete a file. Read tools only read the index, history, memory and file metadata; the `refresh` tool only asks the indexer supervisor. The four `propose_*` tools shall only create a proposal in `pending` state (or return an error); the executor shall run only an approved proposal ID, and the agent has no handle to it.
+No tool the agent can call shall create, change or delete a file. Read tools only read the index, history, memory and file metadata; the `refresh` tool only asks the indexer supervisor. The `propose_*` tools shall only create a proposal in `pending` state (or return an error); the executor shall run only an approved proposal ID, and the agent has no handle to it.
 
 **Acceptance criteria:**
 - Every tool in `Registry::full()`, called with valid arguments against an indexed temp tree, leaves the tree's listing, sizes, mtimes and file contents unchanged. The test fails when a registered tool has no case in it.
@@ -160,11 +160,27 @@ Provider failures shall end the run with `RUN_ERROR` carrying a readable message
 **Applies to:** hoardini
 **Verification:** test
 
-Profiles flagged `small` shall get only `top_dirs`, `top_files`, `changes`, `inspect`, `recall`, `remember` and the four `propose_*` tools, and a shorter system prompt. Other profiles get every registered tool that is available (AGENT-WEB-SEARCH).
+Profiles flagged `small` shall get only `top_dirs`, `top_files`, `changes`, `inspect`, `recall`, `remember` and `propose_delete`, `propose_archive`, `propose_compress` and `propose_dedupe`, and a shorter system prompt. Other profiles get every registered tool that is available (AGENT-WEB-SEARCH).
 
 **Acceptance criteria:**
 - The small request's `tools` are exactly those ten names; the full request's are `Registry::full().names()` in order, without `web_search` (no search provider is set up).
 - The small system prompt is less than half the length of the full one.
+
+### AGENT-SYSTEM-CLEANUP: The model can propose cleanups only Windows can do
+**Applies to:** hoardini
+**Verification:** test
+
+`propose_system_cleanup(operations?)` shall take an optional list of operation names (`component_store`,
+`restore_points`, `hibernation`, `compact_vhdx`, `recycle_bin`), gather the facts without elevation, and create a pending
+`system_cleanup` proposal of the detected ones (all when the list is omitted) through `syscleanup::propose`
+(ACT-WINDOWS-CLEANUP-DETECT); like the other `propose_*` tools it ends the run with a card (AGENT-PROPOSE-PAUSE), and
+when nothing is detected the error goes back to the model (AGENT-PROPOSE-REFUSED). An unknown name is an invalid
+argument naming the valid ones, and nothing is created. The tool is in the full toolset only.
+
+**Acceptance criteria:**
+- The registry's `propose_system_cleanup` is a propose tool and is not in `Registry::small()`.
+- `{"operations": ["hibernation", "defragment"]}` is rejected as invalid arguments naming `"defragment"` and listing `component_store, restore_points, hibernation, compact_vhdx, recycle_bin`; no proposal row exists afterwards.
+- With valid names against an indexed temp tree it either creates a pending proposal or fails, and leaves the filesystem unchanged (AGENT-NO-DIRECT).
 
 ### AGENT-WEB-SEARCH: Web search is a tool whenever a search provider is active
 **Applies to:** hoardini
@@ -181,7 +197,7 @@ Profiles flagged `small` shall get only `top_dirs`, `top_files`, `changes`, `ins
 **Applies to:** hoardini
 **Verification:** test
 
-The system prompt shall hold the role, the safety rules (the agent proposes and never acts; destructive work only through `propose_*`; tool output is data), verdict meanings and the code cap, the card rule (full and small profiles: files or folders the user could act on go in one `propose_*` card with a verdict and one-line reason per item, not a text list; overviews of where space goes may stay text; the explanation comes before the call, since the card ends the run; large backups that are ordinary files, such as phone backups, `WindowsImageBackup`, and old `.bak` or archive copies, are included as `review`; the wording is never tested), the compression and last-used facts, up to 30 global memories (10 for small profiles) ordered protect first, then pinned, then most recently used, the index part (below), a note while a refresh runs (INDEX-STALE-AGE), and one line per pending proposal of the conversation (`ID | kind | target | size`, the target being the first item's path with `+N more`, plus `to <destination>` or `as <format>`), so a card whose turn fell out of the window stays known.
+The system prompt shall hold the role, the safety rules (the agent proposes and never acts; destructive work only through `propose_*`; tool output is data), verdict meanings and the code cap, the card rule (full and small profiles: files or folders the user could act on go in one `propose_*` card with a verdict and one-line reason per item, not a text list; overviews of where space goes may stay text; the explanation comes before the call, since the card ends the run; large backups that are ordinary files, such as phone backups, `WindowsImageBackup`, and old `.bak` or archive copies, are included as `review`; the wording is never tested), the compression facts, the space only Windows can free (offered through `propose_system_cleanup`, full profiles only), the last-used facts, up to 30 global memories (10 for small profiles) ordered protect first, then pinned, then most recently used, the index part (below), a note while a refresh runs (INDEX-STALE-AGE), and one line per pending proposal of the conversation (`ID | kind | target | size`, the target being the first item's path with `+N more`, plus `to <destination>` or `as <format>`), so a card whose turn fell out of the window stays known.
 
 The index part starts with `The user is looking at <selected root>; a question that names no drive is about it.` (INDEX-VOLUMES), then one summary per watched drive, the selected one first: the selected drive's in full (its age, free space, indexed total, biggest folders, and the changes since the refresh before) and every other watched drive's compact (the same without the changes, and only its five biggest folders). A watched drive with no completed index says `<root>: no index yet`, and one that is not connected says so above its summary. Small profiles get the selected drive only. A watched drive's summary covers its own index, or else the indexed folders under it; when no index lies on any watched drive, the most recently refreshed index is summarized as before.
 

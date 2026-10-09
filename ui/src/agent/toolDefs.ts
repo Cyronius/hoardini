@@ -1,6 +1,6 @@
 import type { StandardTool } from "@itkennel/lm-ag-ui";
 
-export const PROPOSE_TOOLS = ["propose_delete", "propose_archive", "propose_compress", "propose_dedupe"] as const;
+export const PROPOSE_TOOLS = ["propose_delete", "propose_archive", "propose_compress", "propose_dedupe", "propose_system_cleanup"] as const;
 export const isProposeTool = (name: string | undefined): boolean => !!name && (PROPOSE_TOOLS as readonly string[]).includes(name);
 
 const strArray = { type: "array", items: { type: "string" } };
@@ -37,5 +37,10 @@ export const proposeToolDefs: Record<(typeof PROPOSE_TOOLS)[number], StandardToo
       properties: { group: { type: "string" }, keep: { type: "string" }, mode: { type: "string" } },
       required: ["group", "keep", "mode"],
     },
+  },
+  propose_system_cleanup: {
+    name: "propose_system_cleanup",
+    description: "Propose cleanups only Windows can do; one administrator prompt when approved.",
+    parameters: { type: "object", properties: { operations: strArray }, required: [] },
   },
 };

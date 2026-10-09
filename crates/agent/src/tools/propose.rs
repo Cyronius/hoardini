@@ -1,6 +1,7 @@
 use hoardini_core::destinations;
 use hoardini_core::policy::Verdict;
 use hoardini_core::proposals::{self, DedupeParams, NewItem, NewProposal, ProposalKind};
+use hoardini_core::syscleanup;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -11,6 +12,7 @@ pub struct ProposeDelete;
 pub struct ProposeArchive;
 pub struct ProposeCompress;
 pub struct ProposeDedupe;
+pub struct ProposeSystemCleanup;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -370,5 +372,61 @@ impl Tool for ProposeDedupe {
             mode,
         });
         submit(ctx, req)
+    }
+}
+
+#[derive(Deserialize)]
+struct SystemArgs {
+    #[serde(default)]
+    operations: Option<Vec<String>>,
+}
+
+impl Tool for ProposeSystemCleanup {
+    fn name(&self) -> &'static str {
+        "propose_system_cleanup"
+    }
+
+    fn description(&self) -> &'static str {
+        "Propose cleanups only Windows can do: component store cleanup (WinSxS), deleting older System Restore points, the reduced hibernation file, compacting WSL and Docker virtual disks, emptying the Recycle Bin. Only what Hoardini detects on this PC goes on the card; approving shows one Windows admin prompt. Stop after calling it."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({"type": "object", "properties": {
+            "operations": {"type": "array", "items": {"type": "string", "enum": syscleanup::OP_NAMES},
+                           "description": "Which cleanups; omit for every one detected"}
+        }})
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::Propose
+    }
+
+    fn run(&self, ctx: &ToolCtx, args: Value) -> Result<Outcome, ToolError> {
+        let a: SystemArgs = parse(args)?;
+        let wanted: Vec<String> = a
+            .operations
+            .unwrap_or_default()
+            .iter()
+            .map(|o| o.trim().to_lowercase())
+            .collect();
+        if let Some(bad) = wanted
+            .iter()
+            .find(|w| !syscleanup::OP_NAMES.contains(&w.as_str()))
+        {
+            return Err(ToolError::BadArgs(format!(
+                "unknown operation {bad:?}; use {}",
+                syscleanup::OP_NAMES.join(", ")
+            )));
+        }
+        let wanted: Vec<&str> = wanted.iter().map(String::as_str).collect();
+        let p = syscleanup::propose(
+            &ctx.db,
+            &syscleanup::SystemFacts::gather(),
+            &wanted,
+            ctx.conversation_id.clone(),
+            Some(ctx.tool_call_id.clone()),
+        )
+        .map_err(|e| ToolError::Failed(format!("the proposal was not created: {e}")))?;
+        Ok(Outcome::Proposal { proposal_id: p.id })
     }
 }

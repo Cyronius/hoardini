@@ -48,7 +48,18 @@ export type IndexSummary = {
 };
 
 export type Verdict = "safe" | "redownload" | "review" | "keep";
-export type ProposalKind = "delete" | "archive" | "compress" | "dedupe";
+export type ProposalKind = "delete" | "archive" | "compress" | "dedupe" | "system_cleanup";
+export type SystemOpView = {
+  op: "component_store" | "restore_points" | "hibernation" | "compact_vhdx" | "recycle_bin";
+  volume?: string;
+  path?: string;
+  label: string;
+  explain: string;
+  elevated: boolean;
+  irreversible: boolean;
+  estimate_known: boolean;
+  size: number | null;
+};
 export type ProposalItem = {
   id: number;
   path: string;
@@ -63,6 +74,17 @@ export type ProposalItem = {
   detail: string | null;
   small: boolean;
   memory_note: string | null;
+  op?: SystemOpView;
+};
+export type RarelyUsedApp = {
+  id: string;
+  name: string;
+  publisher: string | null;
+  source: "registry" | "steam";
+  path: string;
+  size: number;
+  last_run_ms: number | null;
+  last_run_from: string | null;
 };
 export type Proposal = {
   id: string;

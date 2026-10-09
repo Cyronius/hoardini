@@ -176,6 +176,63 @@ function makeProposal(kind: T.ProposalKind): T.Proposal {
   return p;
 }
 
+function makeSystemProposal(): T.Proposal {
+  const op = (o: T.SystemOpView["op"], label: string, explain: string, extra: Partial<T.SystemOpView>): T.SystemOpView => ({
+    op: o,
+    label,
+    explain,
+    elevated: o !== "recycle_bin",
+    irreversible: o === "restore_points" || o === "recycle_bin",
+    estimate_known: false,
+    size: null,
+    ...extra,
+  });
+  const mk = (id: number, path: string, alloc: number, selected: boolean, reason: string, o: T.SystemOpView): T.ProposalItem => ({
+    id,
+    path,
+    kind: "dir",
+    alloc,
+    verdict: selected ? "safe" : "review",
+    cap: null,
+    reason,
+    block_reason: null,
+    selected,
+    status: "pending",
+    detail: null,
+    small: false,
+    memory_note: null,
+    op: o,
+  });
+  const items = [
+    mk(1, "C:\\Windows\\WinSxS", 0, true, "WinSxS holds 7.2 GB that is not hard-linked into Windows itself; Windows decides how much of it is superseded",
+      op("component_store", "Windows Update leftovers (component store)", "Windows removes superseded versions of its own components from WinSxS (DISM /StartComponentCleanup, the same as Disk Cleanup's Windows Update Cleanup). Updates installed so far can no longer be uninstalled. It can take ten minutes or more.", { size: 7.2 * GB })),
+    mk(2, "C:\\System Volume Information", 0, false, "18.3 GB on C: is used but outside what the index can see; restore points are the usual cause",
+      op("restore_points", "Older System Restore points on C:", "Windows deletes every restore point on this drive except the newest (vssadmin delete shadows /oldest, repeated). Deleted restore points cannot be brought back.", { volume: "C:", size: 18.3 * GB })),
+    mk(3, "C:\\hiberfil.sys", 12.6 * GB, true, "hiberfil.sys is 25.4 GB; the reduced size is about 12.8 GB (a fifth of the RAM)",
+      op("hibernation", "Hibernation file at the reduced size", "Windows shrinks hiberfil.sys to the reduced size (powercfg /h /type reduced). Fast Startup keeps working; the Hibernate option goes away, so a laptop on critical battery shuts down instead of hibernating. powercfg /h /type full undoes it.", { estimate_known: true, size: 25.4 * GB })),
+    mk(4, "C:\\Users\\josha\\AppData\\Local\\Packages\\Ubuntu\\LocalState\\ext4.vhdx", 0, true, "Ubuntu's virtual disk is 134.8 GB; compacting returns the space Linux has freed inside it",
+      op("compact_vhdx", "Compact ext4.vhdx", "Hoardini stops WSL first (wsl --shutdown ends every running Linux distro and Docker Desktop's engine; quit Docker Desktop before approving), then Windows compacts the virtual disk (diskpart compact vdisk) so the space Linux freed inside it goes back to the drive. Nothing inside the disk changes.", { path: "C:\\Users\\josha\\AppData\\Local\\Packages\\Ubuntu\\LocalState\\ext4.vhdx", size: 134.8 * GB })),
+    mk(5, "C:\\$Recycle.Bin", 3.1 * GB, false, "212 items (3.1 GB) in the Recycle Bin across every drive",
+      op("recycle_bin", "Empty the Recycle Bin", "Windows empties the Recycle Bin on every drive. The files in it are gone for good. This one needs no administrator prompt.", { estimate_known: true, size: 3.1 * GB })),
+  ];
+  const p: T.Proposal = {
+    id: uuid(),
+    kind: "system_cleanup",
+    status: "pending",
+    total_alloc: items.reduce((a, i) => a + i.alloc, 0),
+    created_ms: now(),
+    job_id: null,
+    destination: null,
+    format: null,
+    summary: "Cleanups only Windows can do",
+    items,
+    parent_id: null,
+    follow_up_id: null,
+  };
+  proposals.set(p.id, p);
+  return p;
+}
+
 // Set through POST /api/mock {"next_job": ...}; shapes the next approval for checking the mascot's moves.
 type NextJob = { kind?: T.ProposalKind; outcome?: "failed" | "cancelled"; ms?: number; cloud?: boolean };
 let nextJob: NextJob | null = null;
@@ -225,7 +282,7 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
       Object.assign(job, { status: plan.outcome, error: plan.outcome === "failed" ? "Access is denied" : null, finished_ms: now() });
       p.status = "failed";
       if (plan.outcome === "failed") for (const it of chosen) it.status = "failed";
-      if (p.kind !== "dedupe") followUp(p);
+      if (p.kind !== "dedupe" && p.kind !== "system_cleanup") followUp(p);
       emitJob(job);
       dirty = true;
       return;
@@ -234,7 +291,7 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
     job.freed_bytes = total;
     job.finished_ms = now();
     p.status = "done";
-    if (p.kind !== "dedupe") followUp(p);
+    if (p.kind !== "dedupe" && p.kind !== "system_cleanup") followUp(p);
     status.vanished_total_bytes += total;
     selectedDrive().free_bytes += total;
     emitJob(job);
@@ -296,6 +353,17 @@ async function agentRun(input: { runId: string; messages: { id?: string; role: s
         const toolCallId = await readTool(s, "remember", { scope: "global", kind: "preference", text }, JSON.stringify({ id: ++memSeq }), 300);
         memories.push({ id: memSeq, scope: "global", key: "", kind: "preference", text: text.replace(/^remember( that)?/i, "").trim() || text, source: "chat", confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null, pinned: false, last_used_ms: now(), forgotten_ms: null });
         s.send({ type: "CUSTOM", name: "memory_noted", value: { memory_id: memSeq, text: text.replace(/^remember( that)?/i, "").trim() || text, tool_call_id: toolCallId, pinned: false } });
+      } else if (/windows clean|system clean/i.test(text)) {
+        await say(s, "Some space only Windows itself can free. Here is what I found.\n\n");
+        const p = makeSystemProposal();
+        thread.proposals[p.id] = p;
+        const toolCallId = uuid();
+        const args = { proposal_id: p.id };
+        s.send({ type: "TOOL_CALL_START", toolCallId, toolCallName: "propose_system_cleanup", parentMessageId: uuid() });
+        s.send({ type: "TOOL_CALL_ARGS", toolCallId, delta: JSON.stringify(args) });
+        s.send({ type: "TOOL_CALL_END", toolCallId });
+        s.send({ type: "CUSTOM", name: "proposal", value: { proposal_id: p.id, tool_call_id: toolCallId } });
+        thread.messages.push({ id: uuid(), role: "assistant", content: "", toolCalls: [{ id: toolCallId, type: "function", function: { name: "propose_system_cleanup", arguments: JSON.stringify(args) } }] });
       } else {
         await say(s, "Let me look at what is in `~\\.lmstudio`.\n\n");
         await readTool(s, "top_dirs", { under: "~\\.lmstudio", depth: 2, limit: 10 }, "~\\.lmstudio 96.1 GB\n  models 95.4 GB (9 files)\n  cache 0.6 GB", 700);
