@@ -3,7 +3,6 @@ import { humanBytes } from "../../format";
 import { useStore } from "../../store";
 import { Mascot, type MascotState } from "../Mascot";
 import { systemVolume } from "../mascot/girth";
-import { TipLine } from "./TipLine";
 
 function useMascotState(): MascotState {
   const tadaUntil = useStore((s) => s.tadaUntil);
@@ -36,7 +35,6 @@ export function Brand() {
         <div className="text-[length:var(--fs-xs)] text-muted" title="Total space freed by approved jobs">
           made to vanish: <span className="font-bold text-brass">{humanBytes(vanished)}</span>
         </div>
-        <TipLine />
       </div>
     </div>
   );

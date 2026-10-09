@@ -155,12 +155,13 @@ export type Settings = {
   index_size_bytes: number;
 };
 
-export type ThreadSummary = { id: string; title: string; updated_ms: number };
 export type ThreadDetail = {
-  id: string;
-  title: string;
+  id: "main";
   messages: unknown[];
   proposals: Record<string, Proposal>;
+  window_start_id: string | null;
+  has_hidden: boolean;
+  fresh: boolean;
 };
 
 export type ApproveResponse = { approved: true; items: number[]; job_id: string };

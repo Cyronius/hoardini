@@ -73,9 +73,9 @@ export const routes = {
   summary: () => api<T.IndexSummary>("/api/index/summary"),
   cancelRun: (runId: string) => api<{ ok: true }>(`/api/agent/runs/${enc(runId)}/cancel`, { method: "POST", body: {} }),
 
-  threads: () => api<T.ThreadSummary[]>("/api/threads"),
-  thread: (id: string) => api<T.ThreadDetail>(`/api/threads/${enc(id)}`),
-  deleteThread: (id: string) => del(`/api/threads/${enc(id)}`),
+  thread: () => api<T.ThreadDetail>("/api/thread"),
+  startFresh: () => api<{ ok: true }>("/api/thread/fresh", { body: {} }),
+  clearHistory: () => del("/api/thread"),
 
   proposal: (id: string) => api<T.Proposal>(`/api/proposals/${enc(id)}`),
   approve: (id: string, item_ids: number[]) =>

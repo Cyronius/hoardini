@@ -8,6 +8,7 @@ pub struct PromptInput {
     pub index_summary: String,
     pub refresh: Option<String>,
     pub globals: Vec<String>,
+    pub open_proposals: Vec<String>,
 }
 
 const ROLE: &str = "You are Hoardini, a disk-space assistant on the user's Windows PC. You find what takes up space, explain what it is, and help free space safely. Local evidence first: the index, inspect and saved notes.";
@@ -75,6 +76,12 @@ pub fn system_prompt(p: &PromptInput) -> String {
     if let Some(r) = &p.refresh {
         let _ = writeln!(s, "{r}");
     }
+    if !p.open_proposals.is_empty() {
+        s.push_str("\nProposal cards still waiting for the user's decision (ID | kind | target | size); the user may approve or decline them at any time:\n");
+        for line in &p.open_proposals {
+            let _ = writeln!(s, "- {line}");
+        }
+    }
     s
 }
 
@@ -91,6 +98,7 @@ mod tests {
             index_summary: "idx".into(),
             refresh: None,
             globals: vec![evil.into()],
+            open_proposals: Vec::new(),
         });
         let begin = s.find("<<<BEGIN UNTRUSTED saved notes").unwrap();
         let end = s.rfind("<<<END UNTRUSTED saved notes>>>").unwrap();

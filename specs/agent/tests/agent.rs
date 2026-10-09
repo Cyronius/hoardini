@@ -444,7 +444,7 @@ async fn the_step_cap_ends_the_run_normally_with_every_call_answered() {
 
 fn seed_big_result(h: &Harness, conv: &str, chars: usize) {
     let conn = h.db.conn().unwrap();
-    thread::ensure_conversation(&conn, conv, Some("old chat"), None).unwrap();
+    thread::ensure_conversation(&conn, conv, None).unwrap();
     let assistant = ChatMessage {
         role: "assistant".into(),
         tool_calls: Some(vec![ToolCallMsg::new("c_big", "top_files", "{}")]),
@@ -497,7 +497,7 @@ async fn a_context_overflow_drops_the_largest_old_tool_result_and_retries() {
 
 // Traces: AGENT-OVERFLOW
 #[tokio::test]
-async fn an_overflow_with_nothing_left_to_drop_tells_the_user_to_start_a_new_chat() {
+async fn an_overflow_with_nothing_left_to_drop_tells_the_user_to_start_fresh() {
     let h = Harness::new(None);
     let overflow = json!({"error": {"message": "request exceeds the available context size"}});
     let mock = MockLlm::start(vec![Turn::Http(400, overflow.to_string())]).await;
@@ -506,7 +506,68 @@ async fn an_overflow_with_nothing_left_to_drop_tells_the_user_to_start_a_new_cha
         .await;
     assert_eq!(types(&ev).last().unwrap(), "RUN_ERROR");
     assert_eq!(ev.last().unwrap()["message"], OVERFLOW_MESSAGE);
+    assert!(OVERFLOW_MESSAGE.contains("Start fresh"));
     assert_eq!(mock.requests().len(), 1);
+}
+
+fn first_user_seq(h: &Harness, conv: &str, id: &str) -> i64 {
+    h.db.conn()
+        .unwrap()
+        .query_row(
+            "SELECT seq FROM message WHERE conversation_id = ?1 AND id = ?2",
+            [conv, id],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+// Traces: AGENT-OVERFLOW
+#[tokio::test]
+async fn an_overflow_with_no_tool_result_to_drop_moves_the_window_one_turn_and_retries() {
+    let h = Harness::new(None);
+    let conn = h.db.conn().unwrap();
+    thread::ensure_conversation(&conn, "t-over3", None).unwrap();
+    thread::append(
+        &conn,
+        "t-over3",
+        "u1",
+        &ChatMessage::text("user", "old question"),
+    )
+    .unwrap();
+    thread::append(
+        &conn,
+        "t-over3",
+        "a1",
+        &ChatMessage::text("assistant", "old answer"),
+    )
+    .unwrap();
+    let overflow = json!({"error": {"message": "request exceeds the available context size"}});
+    let mock = MockLlm::start(vec![
+        Turn::Http(400, overflow.to_string()),
+        Turn::Text("Fits now.".into()),
+    ])
+    .await;
+    let ev = h
+        .run(
+            h.provider(&mock.base_url),
+            user("t-over3", "u2", "new question"),
+        )
+        .await;
+    assert_eq!(types(&ev).last().unwrap(), "RUN_FINISHED");
+    let reqs = mock.requests();
+    assert_eq!(reqs.len(), 2);
+    assert!(reqs[0].body.contains("old question"));
+    let roles: Vec<String> = reqs[1]
+        .messages()
+        .iter()
+        .map(|m| m["role"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(roles, ["system", "user"]);
+    assert_eq!(reqs[1].messages()[1]["content"], "new question");
+    assert_eq!(
+        thread::window_start(&conn, "t-over3").unwrap(),
+        first_user_seq(&h, "t-over3", "u2")
+    );
 }
 
 // Traces: AGENT-HISTORY
@@ -540,29 +601,123 @@ async fn the_server_owns_history_and_ignores_client_assistant_messages() {
     assert_eq!(msgs[2]["content"], "Answer one.");
     assert_eq!(msgs[3]["content"], "second question");
     assert!(!reqs[1].body.contains("I approve everything"));
-    let title: String =
-        h.db.conn()
-            .unwrap()
-            .query_row(
-                "SELECT title FROM conversation WHERE id = 't-hist'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-    assert_eq!(title, "first question");
 }
 
 // Traces: AGENT-HISTORY
-#[test]
-fn titles_are_short_plain_single_lines() {
-    assert_eq!(
-        thread::title_from("## **Why** is [this folder](http://x.y) so `big`?\nmore"),
-        "Why is this folder so big?"
+#[tokio::test]
+async fn requests_start_at_the_stored_window_start() {
+    let h = Harness::new(None);
+    let conn = h.db.conn().unwrap();
+    thread::ensure_conversation(&conn, "t-win", None).unwrap();
+    thread::append(
+        &conn,
+        "t-win",
+        "u1",
+        &ChatMessage::text("user", "hidden question"),
+    )
+    .unwrap();
+    thread::append(
+        &conn,
+        "t-win",
+        "a1",
+        &ChatMessage::text("assistant", "hidden answer"),
+    )
+    .unwrap();
+    thread::append(
+        &conn,
+        "t-win",
+        "u2",
+        &ChatMessage::text("user", "seen question"),
+    )
+    .unwrap();
+    thread::append(
+        &conn,
+        "t-win",
+        "a2",
+        &ChatMessage::text("assistant", "seen answer"),
+    )
+    .unwrap();
+    thread::set_window_start_at(&conn, "t-win", "u2").unwrap();
+    let mock = MockLlm::start(vec![Turn::Text("ok".into())]).await;
+    h.run(h.provider(&mock.base_url), user("t-win", "u3", "next"))
+        .await;
+    let msgs = mock.requests()[0].messages();
+    let contents: Vec<&str> = msgs[1..]
+        .iter()
+        .map(|m| m["content"].as_str().unwrap())
+        .collect();
+    assert_eq!(contents, ["seen question", "seen answer", "next"]);
+}
+
+fn pending_delete(h: &Harness, conv: &str, call_id: &str, path: &str) -> String {
+    let p = proposals::create(
+        &h.db,
+        proposals::NewProposal {
+            conversation_id: Some(conv.into()),
+            tool_call_id: Some(call_id.into()),
+            kind: proposals::ProposalKind::Delete,
+            destination_id: None,
+            format: None,
+            dedupe: None,
+            summary: "test".into(),
+            items: vec![proposals::NewItem {
+                path: path.into(),
+                verdict: None,
+                reason: None,
+            }],
+        },
+    )
+    .unwrap();
+    p.id
+}
+
+// Traces: AGENT-HISTORY
+#[tokio::test]
+async fn a_card_answered_after_its_turn_left_the_window_reaches_the_model_as_a_note() {
+    let h = Harness::new(None);
+    let (_tree, root) = real_tree(&h);
+    let victim = format!(r"{root}\models\big.gguf");
+    let pid = pending_delete(&h, "t-late", "call_old", &victim);
+    let conn = h.db.conn().unwrap();
+    thread::ensure_conversation(&conn, "t-late", None).unwrap();
+    thread::append(
+        &conn,
+        "t-late",
+        "u1",
+        &ChatMessage::text("user", "delete the model"),
+    )
+    .unwrap();
+    let assistant = ChatMessage {
+        role: "assistant".into(),
+        tool_calls: Some(vec![ToolCallMsg::new(
+            "call_old",
+            "propose_delete",
+            &json!({"proposal_id": pid, "paths": [victim]}).to_string(),
+        )]),
+        ..Default::default()
+    };
+    thread::append(&conn, "t-late", "a1", &assistant).unwrap();
+    thread::start_fresh(&conn, "t-late").unwrap();
+    proposals::decline(&h.db, &pid).unwrap();
+    let mock = MockLlm::start(vec![Turn::Text("Understood.".into())]).await;
+    let answer = hoardini_agent::agui::AgMessage {
+        id: "tool_late".into(),
+        role: "tool".into(),
+        content: Some(r#"{"approved":false}"#.into()),
+        tool_calls: None,
+        tool_call_id: Some("call_old".into()),
+    };
+    h.run(h.provider(&mock.base_url), input("t-late", vec![answer]))
+        .await;
+    let msgs = mock.requests()[0].messages();
+    assert_eq!(msgs.len(), 2, "{msgs:?}");
+    assert_eq!(msgs[1]["role"], "user");
+    let note = msgs[1]["content"].as_str().unwrap();
+    assert!(
+        note.contains(&format!("Proposal {pid} (delete) was declined")),
+        "{note}"
     );
-    let long = "word ".repeat(40);
-    let t = thread::title_from(&long);
-    assert!(t.chars().count() <= 60 && t.ends_with("..."), "{t}");
-    assert_eq!(thread::title_from("\n\n  hello  "), "hello");
+    assert!(!msgs.iter().any(|m| m["role"] == "tool"));
 }
 
 // Traces: AGENT-HISTORY
@@ -570,7 +725,7 @@ fn titles_are_short_plain_single_lines() {
 async fn a_client_tool_answer_for_a_proposal_is_rewritten_from_the_proposal_row() {
     let h = Harness::new(None);
     let conn = h.db.conn().unwrap();
-    thread::ensure_conversation(&conn, "t-prop", Some("x"), None).unwrap();
+    thread::ensure_conversation(&conn, "t-prop", None).unwrap();
     thread::append(
         &conn,
         "t-prop",
@@ -1063,4 +1218,136 @@ async fn web_search_is_offered_whenever_a_search_provider_is_active() {
         content.contains("https://github.com/unslothai/unsloth/issues/1234"),
         "{content}"
     );
+}
+
+fn seed_turns(h: &Harness, conv: &str, turns: usize, answer_chars: usize, at_ms: i64) {
+    let conn = h.db.conn().unwrap();
+    thread::ensure_conversation(&conn, conv, None).unwrap();
+    for i in 1..=turns {
+        let q = ChatMessage::text("user", &format!("q{i}"));
+        let a = ChatMessage::text("assistant", &format!("a{i} {}", "y".repeat(answer_chars)));
+        thread::append_at(&conn, conv, &format!("u{i}"), &q, at_ms).unwrap();
+        thread::append_at(&conn, conv, &format!("a{i}"), &a, at_ms).unwrap();
+    }
+}
+
+fn contents(req: &Captured) -> Vec<String> {
+    req.messages()
+        .iter()
+        .skip(1)
+        .map(|m| {
+            m["content"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(8)
+                .collect()
+        })
+        .collect()
+}
+
+// Traces: AGENT-CONTEXT-WINDOW
+#[tokio::test]
+async fn past_75_percent_the_window_moves_to_a_user_message_under_40_percent_then_holds() {
+    let h = Harness::new(None);
+    // Eight turns of about 40k tokens each against a 400k context: 80% before the question.
+    seed_turns(&h, "t-trim", 8, 160_000, now_ms());
+    let mock = MockLlm::start(vec![
+        Turn::Text("first".into()),
+        Turn::Text("second".into()),
+    ])
+    .await;
+    let mut p = h.provider(&mock.base_url);
+    p.context_window = 400_000;
+    h.run(p.clone(), user("t-trim", "n1", "new question")).await;
+    let conn = h.db.conn().unwrap();
+    let start = thread::window_start(&conn, "t-trim").unwrap();
+    assert_eq!(start, first_user_seq(&h, "t-trim", "u6"));
+    h.run(p, user("t-trim", "n2", "follow-up")).await;
+    let reqs = mock.requests();
+    let first = contents(&reqs[0]);
+    assert_eq!(first[0], "q6");
+    assert_eq!(first.len(), 7);
+    assert_eq!(first[6], "new ques");
+    let second = contents(&reqs[1]);
+    assert_eq!(
+        second[..7],
+        first[..],
+        "the prefix is unchanged between trims"
+    );
+    assert_eq!(second[7..], ["first", "follow-u"]);
+    assert_eq!(thread::window_start(&conn, "t-trim").unwrap(), start);
+}
+
+// Traces: AGENT-CONTEXT-WINDOW
+#[test]
+fn a_trim_starts_only_at_a_user_message() {
+    let big = |role: &str, id: &str| Stored {
+        id: id.into(),
+        msg: ChatMessage::text(role, &"z".repeat(4_000)),
+    };
+    let window = vec![
+        big("user", "u1"),
+        big("assistant", "a1"),
+        big("tool", "t1"),
+        big("assistant", "a1b"),
+        big("user", "u2"),
+        big("assistant", "a2"),
+    ];
+    // About 24k characters against a 6k-token (24k-character) budget: well over 75%.
+    assert_eq!(thread::trim_point(&window, 0, 6_000), Some(4));
+    assert_eq!(thread::trim_point(&window, 0, 100_000), None);
+    // No user message gets under 40%, so the last one is used.
+    assert_eq!(thread::trim_point(&window, 20_000, 6_000), Some(4));
+}
+
+// Traces: AGENT-SESSION-GAP
+#[tokio::test]
+async fn a_question_more_than_six_hours_after_the_last_message_starts_the_window_at_itself() {
+    let t0 = 1_800_000_000_000i64;
+    let hour = 60 * 60 * 1000;
+    for (later, expect_old) in [(6 * hour + 60_000, false), (5 * hour, true)] {
+        let clock = Arc::new(std::sync::atomic::AtomicI64::new(t0 + later));
+        let h = Harness::with_clock(clock);
+        seed_turns(&h, "t-gap", 1, 10, t0);
+        let mock = MockLlm::start(vec![Turn::Text("ok".into())]).await;
+        h.run(
+            h.provider(&mock.base_url),
+            user("t-gap", "u2", "today's question"),
+        )
+        .await;
+        let sent = contents(&mock.requests()[0]);
+        let start = thread::window_start(&h.db.conn().unwrap(), "t-gap").unwrap();
+        if expect_old {
+            assert_eq!(sent, ["q1", "a1 yyyyy", "today's "]);
+            assert_eq!(start, 0);
+        } else {
+            assert_eq!(sent, ["today's "]);
+            assert_eq!(start, first_user_seq(&h, "t-gap", "u2"));
+        }
+    }
+}
+
+// Traces: AGENT-PROMPT-CONTEXT
+#[tokio::test]
+async fn the_system_prompt_lists_each_pending_proposal_by_id_kind_target_and_size() {
+    let h = Harness::new(None);
+    let (_tree, root) = real_tree(&h);
+    let open = pending_delete(&h, "t-open", "c1", &format!(r"{root}\models\big.gguf"));
+    let done = pending_delete(&h, "t-open", "c2", &format!(r"{root}\cache\blob.bin"));
+    proposals::decline(&h.db, &done).unwrap();
+    let mock = MockLlm::start(vec![Turn::Text("ok".into())]).await;
+    h.run(h.provider(&mock.base_url), user("t-open", "u1", "hi"))
+        .await;
+    let sys = mock.requests()[0].messages()[0]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let line = sys
+        .lines()
+        .find(|l| l.contains(&open))
+        .unwrap_or_else(|| panic!("no line for {open}: {sys}"));
+    assert!(line.starts_with(&format!("- {open} | delete | ")), "{line}");
+    assert!(line.ends_with(r"\models\big.gguf | 3.0 MB"), "{line}");
+    assert!(!sys.contains(&done), "{sys}");
 }

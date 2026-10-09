@@ -1,7 +1,7 @@
 export function TipLine() {
   return (
     <p
-      className="hidden items-center gap-1.5 text-[length:var(--fs-xs)] text-muted sm:flex"
+      className="hidden items-center gap-1.5 whitespace-nowrap pr-1 text-[length:var(--fs-xs)] text-muted sm:flex"
       title="KUAF, the maintainer's local NPR member station. Not affiliated with Hoardini."
     >
       <span className="text-brass" aria-hidden="true">
