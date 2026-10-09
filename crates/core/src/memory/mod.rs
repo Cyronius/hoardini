@@ -1,3 +1,6 @@
+pub mod knowledge;
+pub mod location;
+
 use globset::{GlobBuilder, GlobMatcher};
 pub use rusqlite::Connection;
 use rusqlite::{OptionalExtension, Row, params};
@@ -5,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::paths;
 use crate::store::{get_meta, now_ms, set_meta};
+
+pub use knowledge::{Detail, Knowledge};
 
 pub const USAGE_REVIEW_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 pub const FORGOTTEN_PURGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
@@ -84,6 +89,7 @@ pub struct Memory {
     pub pinned: bool,
     pub last_used_ms: Option<i64>,
     pub forgotten_ms: Option<i64>,
+    pub detail: Option<Detail>,
 }
 
 impl Memory {
@@ -131,8 +137,8 @@ pub struct MemoryPatch {
     pub pinned: Option<bool>,
 }
 
-const COLS: &str = "id, scope, key, kind, text, source, confidence, created_ms, updated_ms, review_after_ms, pinned, last_used_ms, forgotten_ms";
-const M_COLS: &str = "m.id, m.scope, m.key, m.kind, m.text, m.source, m.confidence, m.created_ms, m.updated_ms, m.review_after_ms, m.pinned, m.last_used_ms, m.forgotten_ms";
+const COLS: &str = "id, scope, key, kind, text, source, confidence, created_ms, updated_ms, review_after_ms, pinned, last_used_ms, forgotten_ms, detail_json";
+const M_COLS: &str = "m.id, m.scope, m.key, m.kind, m.text, m.source, m.confidence, m.created_ms, m.updated_ms, m.review_after_ms, m.pinned, m.last_used_ms, m.forgotten_ms, m.detail_json";
 
 fn from_row(r: &Row) -> rusqlite::Result<Memory> {
     let bad = |i: usize| {
@@ -154,6 +160,9 @@ fn from_row(r: &Row) -> rusqlite::Result<Memory> {
         pinned: r.get(10)?,
         last_used_ms: r.get(11)?,
         forgotten_ms: r.get(12)?,
+        detail: r
+            .get::<_, Option<String>>(13)?
+            .and_then(|j| serde_json::from_str(&j).ok()),
     })
 }
 
@@ -423,15 +432,26 @@ pub fn protect_covering_with(
     Ok(found)
 }
 
-// Unlike recall_path, only the note a card shows counts as used.
+// Not a use: unit resolution only asks whether to stop walking (REVIEW-UNITS).
+pub(crate) fn protect_covering_quiet(
+    conn: &Connection,
+    abs_path: &str,
+    profile: &str,
+) -> anyhow::Result<Option<Memory>> {
+    Ok(covering(conn, abs_path, profile)?
+        .into_iter()
+        .find(|m| m.kind == Kind::Protect))
+}
+
+// Unlike recall_path, only the note a card shows counts as used; classifier location rows only restate the catalog and index.
 pub fn note_covering_with(
     conn: &Connection,
     abs_path: &str,
     profile: &str,
 ) -> anyhow::Result<Option<Memory>> {
-    let found = covering(conn, abs_path, profile)?
-        .into_iter()
-        .find(|m| m.kind != Kind::Protect);
+    let found = covering(conn, abs_path, profile)?.into_iter().find(|m| {
+        m.kind != Kind::Protect && !(m.detail.is_some() && knowledge::is_classifier(&m.source))
+    });
     if let Some(m) = &found {
         touch(conn, [m.id], now_ms())?;
     }
@@ -538,13 +558,13 @@ pub fn purge_forgotten(conn: &Connection, now: i64) -> anyhow::Result<usize> {
     )?)
 }
 
-// Pinned and protect notes are exempt and not counted; the oldest-used of the rest are forgotten, never deleted.
+// Pinned, protect, location and file-type notes are exempt and not counted; the oldest-used of the rest are forgotten, never deleted.
 pub fn enforce_limit(conn: &Connection, now: i64) -> anyhow::Result<usize> {
     purge_forgotten(conn, now)?;
     let n = limit(conn) as i64;
     Ok(conn.execute(
         "UPDATE memory SET forgotten_ms = ?1 WHERE id IN (
-           SELECT id FROM memory WHERE forgotten_ms IS NULL AND pinned = 0 AND kind <> 'protect'
+           SELECT id FROM memory WHERE forgotten_ms IS NULL AND pinned = 0 AND kind <> 'protect' AND detail_json IS NULL
            ORDER BY last_used_ms DESC, id DESC LIMIT -1 OFFSET ?2)",
         params![now, n],
     )?)

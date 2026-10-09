@@ -3,8 +3,9 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use hoardini_core::memory::{self, Kind, NewMemory, Scope, remember_with};
-use hoardini_core::policy::{Verdict, cap_for_with, deny_reason};
+use hoardini_core::memory::knowledge::upsert_with;
+use hoardini_core::memory::{self, Detail, Kind, Knowledge, NewMemory, Scope, remember_with};
+use hoardini_core::policy::{Action, Verdict, cap_for_with, deny_reason, examine};
 use hoardini_core::proposals::{self, NewItem, ProposalKind, SMALL_BYTES, default_tick, is_small};
 use hoardini_win::set_file_times;
 use support::*;
@@ -698,5 +699,147 @@ fn each_item_carries_the_most_specific_non_protect_note_and_protect_still_refuse
         used(broad.id),
         Some(1),
         "a covering note that is not shown stays unused"
+    );
+}
+
+fn location(fx: &Fx, dir: &Path, source: &str, text: &str, verdict: Verdict, actions: Vec<Action>) {
+    upsert_with(
+        &fx.db.conn().unwrap(),
+        Knowledge {
+            scope: Scope::Path,
+            key: s(dir),
+            kind: Kind::Verdict,
+            text: text.into(),
+            source: source.into(),
+            detail: Detail {
+                category: "test".into(),
+                verdict: Some(verdict),
+                actions,
+                ..Detail::default()
+            },
+        },
+        1,
+        &s(&fx.profile),
+    )
+    .unwrap();
+}
+
+// Traces: POLICY-LOCATION-KEEP
+#[test]
+fn a_keep_location_blocks_delete_and_dedupe_but_allows_its_listed_actions() {
+    let fx = Fx::new();
+    let photo = fx.file(r"photos\2024\a.jpg", &data(4096, 1));
+    let os = fx.file(r"system\core.dll", &data(4096, 2));
+    let scratch = fx.file(r"scratch\x.bin", &data(4096, 3));
+    let late = fx.file(r"later\y.bin", &data(4096, 4));
+    location(
+        &fx,
+        &fx.work.join("photos"),
+        "mix",
+        "Your photos and videos: 92% of its bytes are images or video.",
+        Verdict::Keep,
+        vec![Action::Archive],
+    );
+    location(
+        &fx,
+        &fx.work.join("system"),
+        "deny",
+        "Windows: Hoardini never deletes anything here.",
+        Verdict::Keep,
+        vec![],
+    );
+    location(
+        &fx,
+        &fx.work.join("scratch"),
+        "catalog",
+        "Temp: scratch space.",
+        Verdict::Safe,
+        Action::ALL.to_vec(),
+    );
+
+    let p = fx
+        .propose(ProposalKind::Delete, &[&photo, &os, &scratch], None)
+        .unwrap();
+    for (f, words) in [(&photo, "Your photos and videos"), (&os, "never deletes")] {
+        let it = item(&p, f);
+        assert_eq!(it.status, "blocked", "{}", f.display());
+        let reason = it.block_reason.as_deref().unwrap();
+        assert!(
+            reason.contains("a kept location") && reason.contains(words),
+            "{reason}"
+        );
+    }
+    assert_eq!(item(&p, &scratch).status, "pending");
+
+    let at = fx
+        .propose(ProposalKind::Delete, &[&fx.work.join("photos")], None)
+        .unwrap();
+    assert_eq!(at.items[0].status, "blocked");
+    let holder = fx.propose(ProposalKind::Delete, &[&fx.work], None).unwrap();
+    let reason = holder.items[0].block_reason.as_deref().unwrap();
+    assert!(reason.contains("contains"), "{reason}");
+
+    let conn = fx.db.conn().unwrap();
+    let block = |f: &Path, a: Action| examine(&conn, &fx.env, &s(f), a).unwrap().block;
+    assert!(block(&photo, Action::Dedupe).is_some());
+    assert_eq!(block(&photo, Action::Archive), None);
+    assert!(block(&photo, Action::Compress).is_some());
+    assert!(block(&os, Action::Archive).is_some());
+    assert_eq!(block(&scratch, Action::Dedupe), None);
+
+    let before = fx.propose(ProposalKind::Delete, &[&late], None).unwrap();
+    assert_eq!(before.items[0].status, "pending");
+    location(
+        &fx,
+        &fx.work.join("later"),
+        "user",
+        "You keep this folder.",
+        Verdict::Keep,
+        vec![Action::Archive, Action::Compress],
+    );
+    let ex = fx.executor();
+    let r = ex.approve(&before.id, &ids(&before)).unwrap();
+    wait(&ex, &r.job_id);
+    let after = fx.get(&before.id);
+    assert_eq!(after.items[0].status, "skipped");
+    assert!(
+        after.items[0]
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("You keep this folder."),
+        "{:?}",
+        after.items[0].detail
+    );
+    assert!(late.exists());
+}
+
+// Traces: POLICY-ITEM-MEMORY
+#[test]
+fn location_rows_from_the_classifier_are_not_item_notes() {
+    let fx = Fx::new();
+    let f = fx.file(r"big\x.bin", &data(4096, 1));
+    location(
+        &fx,
+        &fx.work.join("big"),
+        "index",
+        "Not identified.",
+        Verdict::Review,
+        vec![],
+    );
+    let p = fx.propose(ProposalKind::Delete, &[&f], None).unwrap();
+    assert_eq!(p.items[0].memory_note, None);
+    location(
+        &fx,
+        &fx.work.join("big"),
+        "user",
+        "You said this folder can go.",
+        Verdict::Safe,
+        Action::ALL.to_vec(),
+    );
+    let q = fx.propose(ProposalKind::Delete, &[&f], None).unwrap();
+    assert_eq!(
+        q.items[0].memory_note.as_deref(),
+        Some("You said this folder can go.")
     );
 }

@@ -77,6 +77,26 @@ fn fixed_reason(env: &PolicyEnv, p: &str) -> Option<String> {
     {
         return Some(format!("{p} is a Windows paging or hibernation file"));
     }
+    for (label, loc) in &subtree_areas(env) {
+        if same_or_under(loc, p) {
+            return Some(format!("{p} is inside {label} ({loc})"));
+        }
+        if is_ancestor_path(p, loc) {
+            return Some(format!("{p} contains {label} ({loc})"));
+        }
+    }
+    for (label, loc) in &exact_areas(env) {
+        if loc.eq_ignore_ascii_case(p) {
+            return Some(format!("{p} is {label}"));
+        }
+        if is_ancestor_path(p, loc) {
+            return Some(format!("{p} contains {label} ({loc})"));
+        }
+    }
+    None
+}
+
+fn subtree_areas(env: &PolicyEnv) -> Vec<(&'static str, String)> {
     let mut subtree: Vec<(&str, String)> = vec![
         ("the Windows folder", env.system_root.clone()),
         (
@@ -88,28 +108,67 @@ fn fixed_reason(env: &PolicyEnv, p: &str) -> Option<String> {
     for pf in env.program_files() {
         subtree.push(("Program Files", pf));
     }
-    for (label, loc) in &subtree {
-        if same_or_under(loc, p) {
-            return Some(format!("{p} is inside {label} ({loc})"));
-        }
-        if is_ancestor_path(p, loc) {
-            return Some(format!("{p} contains {label} ({loc})"));
-        }
-    }
+    subtree
+}
+
+fn exact_areas(env: &PolicyEnv) -> [(&'static str, String); 5] {
     let profile = &env.profile;
-    let exact = [
+    [
         ("your profile folder", profile.clone()),
         ("the AppData folder", format!("{profile}\\AppData")),
         ("AppData\\Local", format!("{profile}\\AppData\\Local")),
         ("AppData\\Roaming", format!("{profile}\\AppData\\Roaming")),
         ("AppData\\LocalLow", format!("{profile}\\AppData\\LocalLow")),
-    ];
-    for (label, loc) in &exact {
-        if loc.eq_ignore_ascii_case(p) {
-            return Some(format!("{p} is {label}"));
+    ]
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Area {
+    System { label: String },
+    Container { label: String },
+}
+
+pub fn area_of(env: &PolicyEnv, path: &str) -> Option<Area> {
+    let p = normalize_path(path);
+    let (n, comps) = split_root(&p);
+    let system = |label: String| Some(Area::System { label });
+    let container = |label: String| Some(Area::Container { label });
+    if comps.len() <= n {
+        return container("the drive root".into());
+    }
+    let under = &comps[n..];
+    if let Some(c) = under
+        .iter()
+        .find(|c| SYSTEM_DIRS.iter().any(|s| c.eq_ignore_ascii_case(s)))
+    {
+        return system(format!("the Windows system area {c}"));
+    }
+    if under[0].to_ascii_lowercase().starts_with("program files") {
+        return system("installed programs".into());
+    }
+    if let Some(last) = under.last()
+        && SYSTEM_FILES.iter().any(|s| last.eq_ignore_ascii_case(s))
+    {
+        return system("a Windows paging or hibernation file".into());
+    }
+    for (label, loc) in &subtree_areas(env) {
+        if same_or_under(loc, &p) {
+            return system(if *label == "Program Files" {
+                "installed programs".into()
+            } else {
+                (*label).to_string()
+            });
         }
-        if is_ancestor_path(p, loc) {
-            return Some(format!("{p} contains {label} ({loc})"));
+        if is_ancestor_path(&p, loc) {
+            return container(format!("holds {label}"));
+        }
+    }
+    for (label, loc) in &exact_areas(env) {
+        if loc.eq_ignore_ascii_case(&p) {
+            return container((*label).to_string());
+        }
+        if is_ancestor_path(&p, loc) {
+            return container(format!("holds {label}"));
         }
     }
     None

@@ -59,7 +59,6 @@ pub enum Category {
     UserData,
 }
 
-// What one deletable item is when the review reaches a folder this entry matches (REVIEW-UNITS).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UnitKind {
@@ -360,7 +359,6 @@ impl Catalog {
         best.map(|(_, _, inv)| &self.entries[usize::MAX - inv])
     }
 
-    // Only entries whose pattern names the path itself; ties as in `lookup`.
     pub fn lookup_exact(&self, abs_path: &str) -> Option<&Entry> {
         let path = normalize_path(abs_path);
         self.compiled

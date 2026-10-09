@@ -7,7 +7,7 @@ use std::path::Path;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
-pub use deny::{deny_reason, is_volume_root};
+pub use deny::{Area, area_of, deny_reason, is_volume_root};
 pub use env::PolicyEnv;
 pub use gate::{
     Action, Examined, FsState, IN_USE_FILE_CAP, ItemKind, examine, fs_state, in_use_reason,

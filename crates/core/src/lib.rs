@@ -10,6 +10,7 @@ pub mod memory;
 pub mod paths;
 pub mod policy;
 pub mod proposals;
+pub mod review;
 pub mod runtime;
 pub mod store;
 pub mod vault;

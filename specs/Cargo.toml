@@ -60,6 +60,10 @@ path = "srch/tests/srch.rs"
 name = "agent_approval"
 path = "agent/tests/approval.rs"
 
+[[test]]
+name = "review"
+path = "review/tests/review.rs"
+
 [dev-dependencies]
 anyhow = "1.0.104"
 blake3 = "1.8.7"

@@ -49,7 +49,8 @@ impl ItemKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Action {
     Delete,
     Archive,
@@ -58,6 +59,22 @@ pub enum Action {
 }
 
 impl Action {
+    pub const ALL: [Action; 4] = [
+        Action::Delete,
+        Action::Dedupe,
+        Action::Archive,
+        Action::Compress,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Action::Delete => "delete",
+            Action::Archive => "archive",
+            Action::Compress => "compress",
+            Action::Dedupe => "dedupe",
+        }
+    }
+
     fn reads_data(self) -> bool {
         matches!(self, Action::Archive | Action::Compress)
     }
@@ -410,8 +427,11 @@ pub fn examine(
         ItemKind::Link => {}
     }
     ex.node_id = node.map(|n| n.id);
+    let kept = crate::memory::location::keep_block(conn, env, path, action)?;
     let in_use = in_use_reason_capped(conn, path, state.kind, PROPOSE_IN_USE_FILE_CAP);
-    ex.block = if let Some(r) = &in_use {
+    ex.block = if let Some(r) = kept {
+        Some(r)
+    } else if let Some(r) = &in_use {
         Some(r.clone())
     } else if action.reads_data() && placeholder {
         Some(PLACEHOLDER_REASON.into())
@@ -450,6 +470,9 @@ pub fn revalidate(
     });
     if let Some(r) = deny_reason(conn, env, path)? {
         return Ok(Some(format!("Denied: {r}")));
+    }
+    if let Some(r) = crate::memory::location::keep_block(conn, env, path, action)? {
+        return Ok(Some(r));
     }
     let now = match fs_state(Path::new(path)) {
         Ok(s) => s,

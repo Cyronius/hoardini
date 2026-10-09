@@ -326,7 +326,7 @@ work stack keep the pending tree small; the SQLite page cache is 16 MB.
 bytes and file count per lower-cased extension (the text after the last dot; none for a name without one or a leading-dot
 name), biggest first, skipping hard-link duplicates (INDEX-HARDLINK-ONCE). Files below the row threshold have no type
 (INDEX-SMALL-FOLD); their count and bytes are reported apart as `small_files` and `small_bytes`, and `total_bytes` is the
-sum of both parts. The location classifier, the model-store detector and compression candidates read it.
+sum of both parts. The location classifier (MEM-LOCATION) and compression candidates read it.
 
 **Acceptance criteria:**
 - On the sample tree, `C:\code` gives `bin` 44 MiB in 2 files then `rlib` 10 MiB in 5 files, 17 small files, and a total equal to the folder's allocated size.

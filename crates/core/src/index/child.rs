@@ -167,8 +167,25 @@ fn run(a: ChildArgs) -> Result<i32> {
             }),
         ),
     };
+    let locations = if out.completed {
+        match crate::memory::location::refresh_volume(
+            &conn,
+            &crate::policy::PolicyEnv::system(),
+            &out.root,
+            crate::store::now_ms(),
+        ) {
+            Ok(sum) => Some(sum),
+            Err(e) => {
+                tracing::warn!(error = %e, "location refresh failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let mut done = json!({
         "type": "done",
+        "locations": locations,
         "scan_id": out.scan_id,
         "duration_ms": out.duration_ms,
         "indexed_bytes": out.indexed_bytes,

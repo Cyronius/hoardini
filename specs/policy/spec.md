@@ -133,10 +133,32 @@ the item JSON is also checked in `specs/srv/tests/srv.rs`.
 
 When a proposal is created, each item shall store `memory_note`: the text of the first non-protect, non-forgotten
 memory covering its path in MEM-RECALL-ANCESTRY order (the path itself, then each ancestor, then globs), or null.
+Location rows written by the classifier (sources `deny`, `catalog`, `mix`, `index`; MEM-LOCATION) are skipped, since
+they only restate the catalog and the index; file-type rows and location rows from the user, a job or the web count.
 Attaching a note marks that note used (MEM-USAGE); other covering notes are not touched. A protect memory still refuses
 the path (POLICY-PROTECT). The server redacts the note like the other item text.
 
 **Acceptance criteria:**
 - With notes on `work` ("work folder"), `work\scratch` ("scratch is disposable"), and `work\scratch\old` ("old builds, fine to drop"): `work\scratch\old\a.bin` carries "old builds, fine to drop", `work\scratch\b.bin` carries "scratch is disposable", and a file outside `work` carries null.
+- A file under a folder whose only covering row is an `index` location row carries null; once the user's answer replaces that row, the file carries "You said this folder can go."
 - `work\keep\d.bin`, under both a fact and a protect ("family photos") on `work\keep`, is in `dropped` with the protect text.
 - The "scratch is disposable" note's `last_used_ms` moves to the proposal time; the "work folder" note's stays at its old value.
+
+### POLICY-LOCATION-KEEP: Kept locations block delete and dedupe
+**Applies to:** hoardini
+**Verification:** test
+
+A location row (MEM-LOCATION) whose verdict is `keep` shall block any action its `actions` do not list on a path at,
+under, or containing the location: delete and dedupe always (no keep row lists them), archive and compress unless listed
+(your photos allow `archive`, a Keep answer allows `archive` and `compress`, OS files allow none). The item is stored
+`blocked` with a reason naming the location and quoting the row's text, and the same check skips an approved item at
+execution when the row appeared after the proposal. A location whose verdict is not `keep` blocks nothing. The check is
+`memory::location::keep_block(conn, env, path, action)`, called from `policy::examine` and `policy::revalidate`.
+
+**Acceptance criteria:**
+- With `work\photos` kept with `[archive]` ("Your photos and videos: ...") and `work\system` kept with none: deleting a photo or a file under `system` is `blocked` with a reason containing "a kept location" and the row's text; a file under a `safe` location stays `pending`.
+- Deleting `work\photos` itself is blocked, and deleting `work`, which contains it, is blocked with "contains".
+- For the photo, `examine` blocks dedupe and compress and allows archive; for the `system` file it blocks archive; under the `safe` location dedupe is allowed.
+- A delete proposed before `work\later` became a kept location is `skipped` at approval with the row's text in its detail, and the file stays.
+
+Test: `specs/policy/tests/policy.rs`.

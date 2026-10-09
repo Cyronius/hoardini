@@ -5,6 +5,8 @@ use hoardini_core::memory::{
 };
 use hoardini_core::store::{Db, now_ms};
 
+mod knowledge;
+
 const P: &str = r"C:\Users\tester";
 
 fn conn() -> (tempfile::TempDir, Connection) {
