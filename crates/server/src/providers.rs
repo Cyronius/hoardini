@@ -27,6 +27,7 @@ fn decode(raw: (String, String, Option<String>, bool)) -> Option<Row> {
     let (id, cfg, caps, is_active) = raw;
     let mut config: ProviderConfig = serde_json::from_str(&cfg).ok()?;
     config.id = None;
+    config.fill_defaults();
     let caps = caps.and_then(|c| serde_json::from_str(&c).ok());
     Some(Row {
         id,
@@ -75,6 +76,7 @@ fn view(secrets: &dyn SecretStore, row: Row) -> ProviderView {
 
 fn validate(cfg: &mut ProviderConfig) -> Result<(), ApiError> {
     cfg.id = None;
+    cfg.fill_defaults();
     cfg.name = cfg.name.trim().to_string();
     cfg.base_url = cfg.base_url.trim().to_string();
     if cfg.name.is_empty() {

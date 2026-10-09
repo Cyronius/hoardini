@@ -69,6 +69,19 @@ impl ProviderConfig {
         }
     }
 
+    // Forms send 0 for a blank field; taken literally that is a 1 s timeout and one tool step.
+    pub fn fill_defaults(&mut self) {
+        if self.context_window == 0 {
+            self.context_window = d_ctx();
+        }
+        if self.timeout_s == 0 {
+            self.timeout_s = d_timeout();
+        }
+        if self.max_tool_steps == 0 {
+            self.max_tool_steps = d_steps();
+        }
+    }
+
     pub fn endpoint(&self, path: &str) -> String {
         format!(
             "{}/{}",
@@ -147,9 +160,9 @@ pub fn presets() -> Vec<Preset> {
         ),
         p("groq", "Groq", "https://api.groq.com/openai/v1", true),
         p("together", "Together", "https://api.together.xyz/v1", true),
-        p("ollama", "Ollama", "http://localhost:11434/v1", false),
-        p("lmstudio", "LM Studio", "http://localhost:1234/v1", false),
-        p("llamacpp", "llama.cpp", "http://localhost:8080/v1", false),
-        p("vllm", "vLLM", "http://localhost:8000/v1", false),
+        p("ollama", "Ollama", "http://127.0.0.1:11434/v1", false),
+        p("lmstudio", "LM Studio", "http://127.0.0.1:1234/v1", false),
+        p("llamacpp", "llama.cpp", "http://127.0.0.1:8080/v1", false),
+        p("vllm", "vLLM", "http://127.0.0.1:8000/v1", false),
     ]
 }

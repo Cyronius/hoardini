@@ -1485,3 +1485,30 @@ async fn a_finished_job_links_its_follow_up_before_the_stream_reports_it() {
     drop(stream);
     let _ = f.h.shutdown.send(());
 }
+
+// Traces: PROV-ZERO-DEFAULTS
+#[tokio::test]
+async fn blank_timeout_steps_and_context_mean_the_defaults() {
+    let f = Fixture::new().await;
+    let cfg = json!({"name": "LM Studio", "base_url": "http://127.0.0.1:1234/v1",
+                     "context_window": 0, "timeout_s": 0, "max_tool_steps": 0});
+    let (st, created) = f.call("POST", "/api/providers", Some(cfg)).await;
+    assert_eq!(st, 200, "{created}");
+    assert_eq!(created["timeout_s"], 120);
+    assert_eq!(created["max_tool_steps"], 20);
+    assert_eq!(created["context_window"], 32768);
+
+    let conn = rusqlite::Connection::open(f.dir.path().join("h.db")).unwrap();
+    conn.execute(
+        "UPDATE provider SET config_json = json_set(config_json, '$.timeout_s', 0, '$.max_tool_steps', 0, '$.context_window', 0)",
+        [],
+    )
+    .unwrap();
+    let (_, list) = f.call("GET", "/api/providers", None).await;
+    assert_eq!(
+        list[0]["timeout_s"], 120,
+        "a row saved with zeros loads with the defaults"
+    );
+    assert_eq!(list[0]["max_tool_steps"], 20);
+    assert_eq!(list[0]["context_window"], 32768);
+}

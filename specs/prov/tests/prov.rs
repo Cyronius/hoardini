@@ -278,7 +278,7 @@ fn presets_cover_required_providers() {
         .into_iter()
         .find(|p| p.id == "ollama")
         .expect("ollama");
-    assert_eq!(ollama.base_url, "http://localhost:11434/v1");
+    assert_eq!(ollama.base_url, "http://127.0.0.1:11434/v1");
     assert!(!ollama.needs_key);
 }
 

@@ -169,11 +169,23 @@ On HTTP 429 the client shall wait and retry the same request, at most 3 attempts
 - Three 429s without `Retry-After` give `RateLimited` after 3 requests with sleeps of 2 s and 4 s.
 - Bodies mentioning OpenRouter `free-models-per-day`, Gemini `RESOURCE_EXHAUSTED` with `...PerDay...`, and Cerebras "Tokens per day limit exceeded" each give `DailyQuota` after 1 request and no sleep.
 
+### PROV-ZERO-DEFAULTS: A blank timeout, step limit, or context means the default
+**Applies to:** hoardini-agent, hoardini-server
+**Verification:** test
+
+A provider saved with `timeout_s`, `max_tool_steps`, or `context_window` equal to 0 (what the setup pop-up and the AI tab's form send for a blank field) shall be stored and used with the defaults: 120 s, 20 steps, and 32,768 tokens. A row stored with zeros before this rule loads with the defaults too.
+
+**Acceptance criteria:**
+- `POST /api/providers` with all three at 0 answers with 120, 20, and 32768.
+- A stored row whose config is set to 0 for all three is listed by `GET /api/providers` with 120, 20, and 32768.
+
+Found 2026-10-09: a first-run "A model on this PC" provider had a 1 s timeout, so every chat ended with "provider timed out ... operation timed out".
+
 ### PROV-PRESETS: Free-tier presets, and no implicit provider
 **Applies to:** hoardini-agent, hoardini-server
 **Verification:** test
 
-`presets()` shall include Cerebras (`https://api.cerebras.ai/v1`, default model `gpt-oss-120b`), Google Gemini (`https://generativelanguage.googleapis.com/v1beta/openai/`, a Flash model) and OpenRouter (a `:free` model), each with its key-page URL, besides the existing entries. The server shall never create a provider by itself: a run with no provider ends with `RUN_ERROR` and leaves `GET /api/providers` empty and no active provider. `GET /api/providers/local` lists running local servers (LM Studio, Ollama, llama.cpp, vLLM) by probing each preset's `/models` with a 1 s timeout. `GET /api/setup` reports `meta.ai_setup_done` (an install that already has a provider counts as done); `POST /api/setup/done` sets it.
+`presets()` shall include Cerebras (`https://api.cerebras.ai/v1`, default model `gpt-oss-120b`), Google Gemini (`https://generativelanguage.googleapis.com/v1beta/openai/`, a Flash model) and OpenRouter (a `:free` model), each with its key-page URL, besides the existing entries. The server shall never create a provider by itself: a run with no provider ends with `RUN_ERROR` and leaves `GET /api/providers` empty and no active provider. `GET /api/providers/local` lists running local servers (LM Studio, Ollama, llama.cpp, vLLM) by probing each preset's `/models` with a 1 s timeout. Local presets use `127.0.0.1`, not `localhost`: on Windows `localhost` tries `::1` first, which these servers don't listen on, and that refusal alone takes about 2 s. `GET /api/setup` reports `meta.ai_setup_done` (an install that already has a provider counts as done); `POST /api/setup/done` sets it.
 
 **Acceptance criteria:**
 - The preset list contains `cerebras` and `gemini` with the base URLs above, a default model for each, and `needs_key`.
