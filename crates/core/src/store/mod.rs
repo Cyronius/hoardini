@@ -9,6 +9,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema_v2.sql"),
     include_str!("schema_v3.sql"),
     include_str!("schema_v4.sql"),
+    include_str!("schema_v5.sql"),
 ];
 
 #[derive(Clone, Debug)]
