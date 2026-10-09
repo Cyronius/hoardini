@@ -128,6 +128,15 @@ pub trait ChildProc: Send {
 pub struct Launched {
     pub child: Box<dyn ChildProc>,
     pub root_url: String,
+    pub api_key: String,
+}
+
+// llama-server allows any CORS origin, so a per-launch key keeps other local pages off the model.
+pub fn new_api_key() -> String {
+    rand::random::<[u8; 24]>()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 pub trait Launcher: Send + Sync {
@@ -201,8 +210,11 @@ fn spawn_llama(root: &Path, model_id: &str, ctx: u32) -> Result<Launched> {
         std::fs::create_dir_all(dir)?;
     }
     let out = std::fs::File::create(&log)?;
+    let api_key = new_api_key();
+    // Passed in the environment, not argv, so other processes can't read it from the command line.
     let child = std::process::Command::new(&spec.exe)
         .args(args(&spec))
+        .env("LLAMA_API_KEY", &api_key)
         .current_dir(spec.exe.parent().unwrap_or(root))
         .stdin(std::process::Stdio::null())
         .stdout(out.try_clone()?)
@@ -226,6 +238,7 @@ fn spawn_llama(root: &Path, model_id: &str, ctx: u32) -> Result<Launched> {
     Ok(Launched {
         child: Box::new(RealChild { child, _job: job }),
         root_url: format!("http://127.0.0.1:{}", spec.port),
+        api_key,
     })
 }
 
@@ -273,6 +286,7 @@ fn log_tail(root: Option<&Path>) -> String {
 struct Running {
     child: Box<dyn ChildProc>,
     base_url: String,
+    api_key: String,
     model_id: String,
 }
 
@@ -292,6 +306,13 @@ pub struct Builtin {
 pub struct Lease {
     sup: Arc<Builtin>,
     pub base_url: String,
+    pub api_key: String,
+}
+
+impl Lease {
+    pub fn auth_header(&self) -> (String, String) {
+        ("Authorization".into(), format!("Bearer {}", self.api_key))
+    }
 }
 
 impl Drop for Lease {
@@ -361,6 +382,7 @@ impl Builtin {
         let mut lease = Lease {
             sup: self.clone(),
             base_url: String::new(),
+            api_key: String::new(),
         };
         let mut g = self.state.lock().await;
         if let Some(r) = g.as_mut() {
@@ -372,6 +394,7 @@ impl Builtin {
                 *g = None;
             } else {
                 lease.base_url = r.base_url.clone();
+                lease.api_key = r.api_key.clone();
                 return Ok(lease);
             }
         }
@@ -403,9 +426,11 @@ impl Builtin {
         *g = Some(Running {
             child: launched.child,
             base_url: base.clone(),
+            api_key: launched.api_key.clone(),
             model_id: model_id.to_string(),
         });
         lease.base_url = base;
+        lease.api_key = launched.api_key;
         Ok(lease)
     }
 
@@ -783,6 +808,8 @@ pub async fn resolve(
     match s.builtin.acquire(&model).await {
         Ok(lease) => {
             cfg.base_url = lease.base_url.clone();
+            let (h, v) = lease.auth_header();
+            cfg.headers.insert(h, v);
             cfg.model = Some(model);
             Ok((cfg, Some(lease)))
         }
@@ -819,6 +846,10 @@ mod tests {
             r"-m C:\m\x.gguf --host 127.0.0.1 --port 4321 --jinja -t 10 -c 8192 --no-webui"
         ));
         assert!(s.contains("-ngl 0"));
+        assert!(
+            !s.contains("api-key"),
+            "the key goes in the environment, never argv"
+        );
         assert!(s.contains("--cache-type-k q8_0 --cache-type-v q8_0"));
         assert!(s.ends_with("-a x"));
     }
@@ -834,5 +865,13 @@ mod tests {
                 .iter()
                 .all(|m| model_info(m.id).name != "Unknown model")
         );
+    }
+
+    #[test]
+    fn api_keys_are_random_and_long() {
+        let (a, b) = (new_api_key(), new_api_key());
+        assert_eq!(a.len(), 48);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b);
     }
 }

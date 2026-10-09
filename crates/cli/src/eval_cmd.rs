@@ -267,6 +267,8 @@ fn child(db: Option<PathBuf>, a: EvalArgs, root: &str) -> Result<ExitCode> {
                 let lease = b.acquire(&model).await?;
                 let mut p = builtin::profile(&model);
                 p.base_url = lease.base_url.clone();
+                let (h, v) = lease.auth_header();
+                p.headers.insert(h, v);
                 if let Some(pid) = b.pid() {
                     ram = Some(Arc::new(move || {
                         hoardini_win::process_memory(pid)

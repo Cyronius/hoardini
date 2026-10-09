@@ -133,6 +133,7 @@ impl Launcher for FakeLauncher {
             Ok(Launched {
                 child,
                 root_url: format!("http://{addr}"),
+                api_key: "test-key".into(),
             })
         })
     }
