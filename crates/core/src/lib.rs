@@ -1,6 +1,8 @@
 pub mod actions;
 pub mod catalog;
+pub mod cloud;
 pub mod compress;
+pub mod copycheck;
 pub mod destinations;
 pub mod dupes;
 pub mod evidence;

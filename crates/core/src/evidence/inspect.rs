@@ -183,6 +183,20 @@ pub fn inspect(db: &Db, path: &Path) -> anyhow::Result<Evidence> {
     );
 
     ev.duplicates = duplicates_of(&conn, &path_s);
+    // Offline checks run now; online answers come from the background worker's stored rows.
+    if matches!(kind, PathKind::File | PathKind::Dir) {
+        let env = crate::copycheck::CheckEnv::offline(
+            &crate::paths::profile_dir().to_string_lossy(),
+            crate::cloud::system(),
+        );
+        let cx = crate::copycheck::Cx {
+            conn: &conn,
+            env: &env,
+        };
+        crate::copycheck::check_path(&cx, &crate::copycheck::Registry::standard(), &path_s);
+        ev.copies = crate::copycheck::results_for(&conn, &path_s);
+        ev.only_copy = crate::copycheck::only_copy(&conn, &path_s);
+    }
     ev.memories = crate::memory::recall_path(&conn, &path_s).unwrap_or_default();
     ev.policy_cap = crate::policy::cap_for(
         &conn,

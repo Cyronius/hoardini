@@ -251,5 +251,71 @@ fn gguf_reader_stays_within_the_header() {
     );
 }
 
+// Traces: EVID-GGUF-SOURCE
+#[test]
+fn gguf_header_names_its_hugging_face_sources() {
+    let mut g = Gguf::new(1, 8);
+    g.kv_str("general.architecture", "llama");
+    g.kv_str("general.basename", "SmolLM2");
+    g.kv_str(
+        "general.source.huggingface.repository",
+        "HuggingFaceTB/SmolLM2-135M-Instruct",
+    );
+    g.kv_str(
+        "general.source.url",
+        "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct",
+    );
+    g.kv_str(
+        "general.url",
+        "https://huggingface.co/lmstudio-community/SmolLM2-135M-Instruct-GGUF",
+    );
+    g.kv_str(
+        "general.base_model.0.repo_url",
+        "https://huggingface.co/datasets/org/corpus",
+    );
+    g.kv_str(
+        "general.base_model.1.repo_url",
+        "https://huggingface.co/HuggingFaceTB/SmolLM2-135M/tree/main",
+    );
+    g.kv_u32("general.file_type", 15);
+    g.tensor("w", &[8, 8], 12);
+    let len = g.bytes.len() as u64;
+    let info = identify(Cursor::new(g.bytes), len, "smol.gguf")
+        .gguf
+        .unwrap();
+    assert_eq!(info.basename.as_deref(), Some("SmolLM2"));
+    assert_eq!(
+        info.source_repo.as_deref(),
+        Some("HuggingFaceTB/SmolLM2-135M-Instruct")
+    );
+    assert_eq!(info.base_model_urls.len(), 2);
+    assert_eq!(
+        info.hf_repos(),
+        [
+            "HuggingFaceTB/SmolLM2-135M-Instruct",
+            "lmstudio-community/SmolLM2-135M-Instruct-GGUF",
+            "HuggingFaceTB/SmolLM2-135M"
+        ]
+    );
+    assert_eq!(info.quant.as_deref(), Some("Q4_K_M"));
+
+    let mut plain = Gguf::new(1, 1);
+    plain.kv_str("general.architecture", "llama");
+    plain.tensor("w", &[8, 8], 0);
+    let len = plain.bytes.len() as u64;
+    let info = identify(Cursor::new(plain.bytes), len, "p.gguf")
+        .gguf
+        .unwrap();
+    assert!(info.hf_repos().is_empty());
+    assert_eq!(
+        (info.basename, info.source_repo, info.source_url, info.url),
+        (None, None, None, None)
+    );
+    assert_eq!(info.parameters, Some(64));
+}
+
 #[path = "inspect_mod.rs"]
 mod inspect_tests;
+
+#[path = "copy.rs"]
+mod copy_tests;

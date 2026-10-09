@@ -231,6 +231,50 @@ pub fn user_assist() -> io::Result<Vec<UserAssistEntry>> {
     Ok(out)
 }
 
+const SYNC_ROOTS: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncRootRegistration {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub paths: Vec<String>,
+}
+
+// Cloud Files providers (OneDrive, Dropbox, iCloud, ...) register each sync root here, one path per user SID.
+pub fn sync_root_registrations() -> io::Result<Vec<SyncRootRegistration>> {
+    let root = match Key::open(HKEY_LOCAL_MACHINE, SYNC_ROOTS, KEY_READ | KEY_WOW64_64KEY) {
+        Ok(k) => k,
+        Err(e) if e.raw_os_error() == Some(ERROR_FILE_NOT_FOUND.0 as i32) => {
+            return Ok(Vec::new());
+        }
+        Err(e) => return Err(e),
+    };
+    let mut out = Vec::new();
+    for id in root.subkeys()? {
+        let paths = match Key::open(root.0, &format!(r"{id}\UserSyncRoots"), KEY_READ) {
+            Ok(k) => k
+                .values()?
+                .into_iter()
+                .map(|(_, data)| {
+                    let units: Vec<u16> = data
+                        .chunks_exact(2)
+                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                        .collect();
+                    from_wide(&units).trim().to_string()
+                })
+                .filter(|p| !p.is_empty())
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        out.push(SyncRootRegistration {
+            display_name: root.string(Some(&id), "DisplayNameResource"),
+            id,
+            paths,
+        });
+    }
+    Ok(out)
+}
+
 pub(crate) fn rot13(s: &str) -> String {
     s.chars()
         .map(|c| match c {

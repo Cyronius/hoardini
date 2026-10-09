@@ -175,6 +175,10 @@ pub struct Evidence {
     pub in_use: Vec<ProcessRef>,
     pub last_used: Vec<LastUsedSignal>,
     pub duplicates: Vec<DuplicateRef>,
+    #[serde(default)]
+    pub copies: Vec<crate::copycheck::CopyResult>,
+    #[serde(default)]
+    pub only_copy: bool,
     pub memories: Vec<Memory>,
     pub policy_cap: Option<Verdict>,
     pub summary: String,
@@ -194,6 +198,8 @@ impl Evidence {
             in_use: Vec::new(),
             last_used: Vec::new(),
             duplicates: Vec::new(),
+            copies: Vec::new(),
+            only_copy: false,
             memories: Vec::new(),
             policy_cap: None,
             summary: String::new(),
@@ -237,6 +243,9 @@ impl Evidence {
         if !self.duplicates.is_empty() {
             parts.push(format!("{} duplicate(s)", self.duplicates.len()));
         }
+        if let Some(c) = self.copy_phrase() {
+            parts.push(c);
+        }
         if let Some(m) = self
             .memories
             .iter()
@@ -250,6 +259,15 @@ impl Evidence {
             parts.push(format!("verdict capped at {}", cap.as_str()));
         }
         parts.join("; ")
+    }
+
+    // The strongest copy-check answer, or "only copy we know of" when every check came up empty.
+    pub fn copy_phrase(&self) -> Option<String> {
+        let best = crate::copycheck::best(&self.copies)?;
+        if best.confidence == crate::copycheck::Confidence::None {
+            return self.only_copy.then(|| "only copy we know of".to_string());
+        }
+        Some(best.note())
     }
 
     pub fn with_summary(mut self) -> Evidence {
