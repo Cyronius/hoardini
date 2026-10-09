@@ -92,7 +92,10 @@ fn entries() -> Vec<Entry> {
         post_("/api/jobs/{id}/cancel", job_cancel),
         get_("/api/memory", memory_list),
         post_("/api/memory", memory_create),
+        get_("/api/memory/limit", memory_limit_get),
+        put_("/api/memory/limit", memory_limit_put),
         put_("/api/memory/{id}", memory_update),
+        post_("/api/memory/{id}/restore", memory_restore),
         delete_("/api/memory/{id}", memory_delete),
         get_("/api/providers", providers::list),
         post_("/api/providers", providers::create),
@@ -376,7 +379,7 @@ async fn memory_list(State(s): State<AppState>, Query(q): Query<QueryQ>) -> ApiR
     blocking(move || {
         let conn = s.db.conn()?;
         let rows = match q.q.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-            Some(t) => memory::recall_text(&conn, t)?,
+            Some(t) => memory::search(&conn, t)?,
             None => memory::list(&conn)?,
         };
         Ok(Json(json!(rows)))
@@ -412,6 +415,7 @@ struct MemoryEdit {
     kind: Option<Kind>,
     key: Option<String>,
     scope: Option<Scope>,
+    pinned: Option<bool>,
 }
 
 async fn memory_update(State(s): State<AppState>, Path(id): Path<i64>, body: Bytes) -> ApiResult {
@@ -423,12 +427,39 @@ async fn memory_update(State(s): State<AppState>, Path(id): Path<i64>, body: Byt
             kind: b.kind,
             key: b.key,
             scope: b.scope,
+            pinned: b.pinned,
             ..MemoryPatch::default()
         };
         let m = memory::update(&conn, id, patch)
             .map_err(|e| ApiError::bad(format!("{e:#}")))?
             .ok_or_else(|| ApiError::not_found("memory"))?;
         Ok(Json(json!(m)))
+    })
+    .await
+}
+
+async fn memory_restore(State(s): State<AppState>, Path(id): Path<i64>) -> ApiResult {
+    blocking(move || {
+        let m = memory::restore(&s.db.conn()?, id)?.ok_or_else(|| ApiError::not_found("memory"))?;
+        Ok(Json(json!(m)))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct MemoryLimit {
+    limit: usize,
+}
+
+async fn memory_limit_get(State(s): State<AppState>) -> ApiResult {
+    blocking(move || Ok(Json(json!({"limit": memory::limit(&s.db.conn()?)})))).await
+}
+
+async fn memory_limit_put(State(s): State<AppState>, body: Bytes) -> ApiResult {
+    let b: MemoryLimit = parse(&body)?;
+    blocking(move || {
+        let limit = memory::set_limit(&s.db.conn()?, b.limit)?;
+        Ok(Json(json!({"limit": limit})))
     })
     .await
 }
@@ -506,14 +537,19 @@ async fn destination_test(State(s): State<AppState>, Path(id): Path<String>) -> 
     .await
 }
 
-async fn history_points(State(s): State<AppState>) -> ApiResult {
+#[derive(Deserialize)]
+struct HistoryQuery {
+    since_ms: Option<i64>,
+    until_ms: Option<i64>,
+}
+
+async fn history_points(State(s): State<AppState>, Query(q): Query<HistoryQuery>) -> ApiResult {
     blocking(move || {
         let conn = s.db.conn()?;
         let Some(st) = index::index_status(&conn, None)? else {
             return Ok(Json(json!([])));
         };
-        let mut scans = history::scans(&conn, st.volume_id)?;
-        scans.reverse();
+        let scans = history::scans_between(&conn, st.volume_id, q.since_ms, q.until_ms)?;
         let pts: Vec<Value> = scans
             .iter()
             .map(|c| {

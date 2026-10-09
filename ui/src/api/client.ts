@@ -84,9 +84,12 @@ export const routes = {
   cancelJob: (id: string) => api<{ ok: true }>(`/api/jobs/${enc(id)}/cancel`, { body: {} }),
 
   memories: (q?: string) => api<T.Memory[]>(`/api/memory${q ? `?q=${enc(q)}` : ""}`),
-  addMemory: (m: Required<T.MemoryInput>) => api<T.Memory>("/api/memory", { body: m }),
+  addMemory: (m: Required<Omit<T.MemoryInput, "pinned">>) => api<T.Memory>("/api/memory", { body: m }),
   updateMemory: (id: number, m: T.MemoryInput) => put<T.Memory>(`/api/memory/${id}`, m),
   deleteMemory: (id: number) => del(`/api/memory/${id}`),
+  restoreMemory: (id: number) => api<T.Memory>(`/api/memory/${id}/restore`, { body: {} }),
+  memoryLimit: () => api<{ limit: number }>("/api/memory/limit"),
+  setMemoryLimit: (limit: number) => put<{ limit: number }>("/api/memory/limit", { limit }),
 
   providers: () => api<T.ProviderView[]>("/api/providers"),
   presets: () => api<T.Preset[]>("/api/providers/presets"),
@@ -121,7 +124,12 @@ export const routes = {
   installBuiltin: (model_id: string) => api<T.Job>("/api/builtin/install", { body: { model_id } }),
   removeBuiltin: () => del<{ ok: true; freed_bytes: number }>("/api/builtin"),
 
-  history: () => api<T.HistoryPoint[]>("/api/history"),
+  history: (since_ms?: number, until_ms?: number) => {
+    const q = new URLSearchParams();
+    if (since_ms != null) q.set("since_ms", String(since_ms));
+    if (until_ms != null) q.set("until_ms", String(until_ms));
+    return api<T.HistoryPoint[]>(`/api/history${q.size ? `?${q}` : ""}`);
+  },
   settings: () => api<T.Settings>("/api/settings"),
   putSettings: (s: Partial<T.Settings>) => put<T.Settings>("/api/settings", s),
 };

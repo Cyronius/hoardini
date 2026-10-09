@@ -1,6 +1,8 @@
 use std::fmt::Write;
 
-use hoardini_core::history::{Change, Since, changes, fmt_date};
+use hoardini_core::history::{
+    Change, Since, changes, fmt_date, free_summary, scans_between,
+};
 use hoardini_core::paths::humanize_bytes;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -93,6 +95,17 @@ impl Tool for Changes {
         if ch.grew.is_empty() && ch.new.is_empty() && ch.shrank.is_empty() && ch.removed.is_empty() {
             out.push_str("No big changes.\n");
         }
+        let range = scans_between(
+            &conn,
+            ch.from.volume_id,
+            Some(ch.from.finished_ms),
+            Some(ch.to.finished_ms),
+        )
+        .map_err(failed)?;
+        if let Some(line) = free_summary(&range).map(|f| f.line()) {
+            let _ = writeln!(out, "{line}");
+        }
+        let _ = writeln!(out, "range_ms: {}..{}", ch.from.finished_ms, ch.to.finished_ms);
         Ok(Outcome::text(out))
     }
 }

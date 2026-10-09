@@ -4,7 +4,7 @@ use std::time::Instant;
 use futures::StreamExt;
 use hoardini_core::history::fmt_date;
 use hoardini_core::index::summary_for_prompt;
-use hoardini_core::memory::globals;
+use hoardini_core::memory::globals_for;
 use hoardini_core::paths::profile_dir;
 use hoardini_core::store::{Db, now_ms};
 use hoardini_core::vault::{SecretStore, is_ref};
@@ -399,19 +399,25 @@ impl Run {
             } else {
                 GLOBAL_MEMORIES
             };
-            let notes = globals(&conn, cap)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| {
-                    let kind = serde_json::to_value(m.kind).unwrap_or_default();
-                    format!(
-                        "[{}, {}] {}",
-                        kind.as_str().unwrap_or("note"),
-                        m.source,
-                        m.text
-                    )
-                })
-                .collect();
+            let stored = thread::load(&conn, &conv)?;
+            let said = stored.iter().rev().find(|s| s.msg.role == "user");
+            let notes = globals_for(
+                &conn,
+                cap,
+                said.and_then(|s| s.msg.content.as_deref()).unwrap_or(""),
+            )
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| {
+                let kind = serde_json::to_value(m.kind).unwrap_or_default();
+                format!(
+                    "[{}, {}] {}",
+                    kind.as_str().unwrap_or("note"),
+                    m.source,
+                    m.text
+                )
+            })
+            .collect();
             let system = system_prompt(&PromptInput {
                 small,
                 today: fmt_date(now_ms()),
@@ -419,7 +425,7 @@ impl Run {
                 refresh,
                 globals: notes,
             });
-            Ok((system, thread::load(&conn, &conv)?))
+            Ok((system, stored))
         })
         .await
     }

@@ -1,8 +1,38 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { routes } from "../api/client";
 import { friendlyToolName, humanElapsed } from "../format";
 import { useStore } from "../store";
+import type { HistoryPoint } from "../api/types";
+import { FreeSpaceChart } from "./FreeSpaceChart";
 import { SpinnerIcon, ToolIcon } from "./icons";
+
+const MIN_CHART_POINTS = 3;
+const RANGE_RE = /^range_ms: (\d+)\.\.(\d+)\s*$/m;
+
+function ChangesChart({ result }: { result: string }) {
+  const m = RANGE_RE.exec(result);
+  const [points, setPoints] = useState<HistoryPoint[]>([]);
+  const since = m ? Number(m[1]) : null;
+  const until = m ? Number(m[2]) : null;
+  useEffect(() => {
+    if (since == null || until == null) return;
+    let live = true;
+    routes
+      .history(since, until)
+      .then((p) => live && setPoints(p))
+      .catch(() => live && setPoints([]));
+    return () => {
+      live = false;
+    };
+  }, [since, until]);
+  if (points.length < MIN_CHART_POINTS) return null;
+  return (
+    <div className="mt-1 rounded-xl border border-line-soft bg-ink-850/70 px-2.5 pb-1 pt-2">
+      <div className="mb-1 text-[length:var(--fs-xs)] font-bold text-faint">Free space over time</div>
+      <FreeSpaceChart points={points} />
+    </div>
+  );
+}
 
 function argSummary(args: Record<string, unknown>): string {
   const first = Object.values(args).find((v) => typeof v === "string" && v.trim());
@@ -15,6 +45,7 @@ export function ToolChip({ id, name, args, result }: { id: string; name: string;
   const times = useStore((s) => s.toolTimes[id]);
   const noted = useStore((s) => s.noted[id]);
   const [undone, setUndone] = useState(false);
+  const [pinned, setPinned] = useState<boolean | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const done = result !== "";
   const elapsed = times?.end ? humanElapsed(times.end - times.start) : null;
@@ -29,13 +60,35 @@ export function ToolChip({ id, name, args, result }: { id: string; name: string;
     }
   };
 
+  const isPinned = pinned ?? noted?.pinned ?? false;
+  const togglePin = async () => {
+    if (!noted) return;
+    try {
+      await routes.updateMemory(noted.memoryId, { pinned: !isPinned });
+      setPinned(!isPinned);
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   if (name === "remember" && noted) {
     return (
       <div className="my-1 flex items-center gap-2 rounded-full border border-line-soft bg-ink-850 py-0.5 pl-2.5 pr-1 text-[length:var(--fs-sm)]">
-        <span className="font-bold text-brass">{undone ? "forgotten" : "noted"}</span>
+        <span className="font-bold text-brass">{undone ? "forgotten" : isPinned ? "noted · pinned" : "noted"}</span>
         <span className={`min-w-0 flex-1 truncate ${undone ? "text-faint line-through" : "text-muted"}`} title={noted.text}>
           {noted.text}
         </span>
+        {!undone && (
+          <button
+            className="rounded-full px-2 py-0.5 font-bold text-brass hover:bg-ink-800"
+            onClick={() => void togglePin()}
+            aria-pressed={isPinned}
+            title={isPinned ? "Unpin: let this note fall off when memory is full" : "Pin: keep this note even when memory is full"}
+          >
+            {isPinned ? "Unpin" : "Pin"}
+          </button>
+        )}
         {!undone && (
           <button className="rounded-full px-2 py-0.5 font-bold text-brass hover:bg-ink-800" onClick={() => void undo()} title="Undo: forget this note" aria-label="Undo remember">
             Undo
@@ -47,7 +100,10 @@ export function ToolChip({ id, name, args, result }: { id: string; name: string;
   }
 
   const summary = argSummary(args);
+  const shown = name === "changes" ? result.replace(RANGE_RE, "").trimEnd() : result;
   return (
+    <>
+    {name === "changes" && done && <ChangesChart result={result} />}
     <details className="group my-1 rounded-xl border border-line-soft bg-ink-850/70">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1 text-[length:var(--fs-sm)] text-muted hover:text-paper">
         {done ? <ToolIcon /> : <SpinnerIcon />}
@@ -58,10 +114,11 @@ export function ToolChip({ id, name, args, result }: { id: string; name: string;
       </summary>
       <div className="space-y-1.5 border-t border-line-soft px-2.5 py-1.5">
         <pre className="overflow-x-auto rounded-lg bg-ink-900 p-2 font-mono text-[length:var(--fs-xs)] text-paper-dim">{JSON.stringify(args, null, 2)}</pre>
-        {result && (
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-ink-900 p-2 font-mono text-[length:var(--fs-xs)] text-paper-dim">{result}</pre>
+        {shown && (
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-ink-900 p-2 font-mono text-[length:var(--fs-xs)] text-paper-dim">{shown}</pre>
         )}
       </div>
     </details>
+    </>
   );
 }

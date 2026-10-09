@@ -41,7 +41,7 @@ function handle(data: string): void {
       if (ev.name === "proposal" && typeof v.proposal_id === "string") void s.loadProposal(v.proposal_id);
       else if (ev.name === "rate_limit_wait") useAiSetup.getState().setWait(Date.now() + Number(v.seconds) * 1000);
       else if (ev.name === "memory_noted" && typeof v.tool_call_id === "string") {
-        s.noteMemory(v.tool_call_id, { memoryId: Number(v.memory_id), text: String(v.text ?? "") });
+        s.noteMemory(v.tool_call_id, { memoryId: Number(v.memory_id), text: String(v.text ?? ""), pinned: v.pinned === true });
       } else if (ev.name === "run_stats" && runId) {
         useStore.setState((st) => ({
           runStats: { ...st.runStats, [runId!]: { elapsed_ms: Number(v.elapsed_ms), steps: Number(v.steps) } },

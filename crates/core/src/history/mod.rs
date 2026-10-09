@@ -6,6 +6,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
 
 use crate::index::{PathCache, is_ancestor_path, split_parent, to_i64, to_u64};
+use crate::paths::humanize_bytes;
 use crate::store::now_ms;
 
 pub const DIR_MIN_BYTES: u64 = 256 << 20;
@@ -109,6 +110,63 @@ pub fn scans(conn: &Connection, volume_id: i64) -> Result<Vec<ScanInfo>> {
     Ok(st
         .query_map([volume_id], scan_from_row)?
         .collect::<rusqlite::Result<_>>()?)
+}
+
+/// Scans finished within the inclusive range, oldest first.
+pub fn scans_between(
+    conn: &Connection,
+    volume_id: i64,
+    since_ms: Option<i64>,
+    until_ms: Option<i64>,
+) -> Result<Vec<ScanInfo>> {
+    let mut all = scans(conn, volume_id)?;
+    all.retain(|s| {
+        since_ms.is_none_or(|a| s.finished_ms >= a) && until_ms.is_none_or(|b| s.finished_ms <= b)
+    });
+    all.reverse();
+    Ok(all)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FreeSummary {
+    pub refreshes: usize,
+    pub start: (i64, u64),
+    pub end: (i64, u64),
+    pub low: (i64, u64),
+}
+
+impl FreeSummary {
+    pub fn line(&self) -> String {
+        let at = |p: (i64, u64)| format!("{} ({})", humanize_bytes(p.1), fmt_date(p.0));
+        let net = self.end.1 as i64 - self.start.1 as i64;
+        let sign = if net < 0 { "-" } else { "+" };
+        format!(
+            "Free space over {} refreshes: start {}, end {}, low {}, net {sign}{}.",
+            self.refreshes,
+            at(self.start),
+            at(self.end),
+            at(self.low),
+            humanize_bytes(net.unsigned_abs()),
+        )
+    }
+}
+
+/// Start, end and lowest free space over scans (oldest first); None with fewer than two readings.
+pub fn free_summary(scans: &[ScanInfo]) -> Option<FreeSummary> {
+    let pts: Vec<(i64, u64)> = scans
+        .iter()
+        .filter_map(|s| s.free_bytes.map(|f| (s.finished_ms, f)))
+        .collect();
+    if pts.len() < 2 {
+        return None;
+    }
+    let low = *pts.iter().min_by_key(|p| p.1)?;
+    Some(FreeSummary {
+        refreshes: pts.len(),
+        start: pts[0],
+        end: *pts.last()?,
+        low,
+    })
 }
 
 pub fn summary_dirs(conn: &Connection, scan_id: i64) -> Result<Vec<SummaryDir>> {

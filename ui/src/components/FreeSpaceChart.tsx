@@ -1,8 +1,8 @@
 import type { HistoryPoint } from "../api/types";
 import { humanBytes } from "../format";
 
-const W = 520;
-const H = 200;
+const W = 640;
+const H = 150;
 const PAD = { l: 52, r: 12, t: 12, b: 26 };
 
 export function FreeSpaceChart({ points }: { points: HistoryPoint[] }) {
@@ -18,11 +18,11 @@ export function FreeSpaceChart({ points }: { points: HistoryPoint[] }) {
   const ticks = [0, 0.5, 1].map((t) => t * yMax);
   const fmt = (ms: number) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Free space over time">
+    <svg viewBox={`0 0 ${W} ${H}`} className="block h-auto w-full" role="img" aria-label="Free space over time">
       {ticks.map((t) => (
         <g key={t}>
           <line x1={PAD.l} x2={W - PAD.r} y1={sy(t)} y2={sy(t)} stroke="var(--color-line-soft)" />
-          <text x={PAD.l - 6} y={sy(t) + 4} textAnchor="end" fontSize="10" fill="var(--color-faint)">
+          <text x={PAD.l - 6} y={sy(t) + 4} textAnchor="end" fontSize="11" fill="var(--color-faint)">
             {humanBytes(t, 0)}
           </text>
         </g>
@@ -34,10 +34,10 @@ export function FreeSpaceChart({ points }: { points: HistoryPoint[] }) {
           <title>{`${new Date(p.finished_ms).toLocaleString()}: ${humanBytes(p.free_bytes)} free`}</title>
         </circle>
       ))}
-      <text x={PAD.l} y={H - 8} fontSize="10" fill="var(--color-faint)">
+      <text x={PAD.l} y={H - 8} fontSize="11" fill="var(--color-faint)">
         {fmt(x0)}
       </text>
-      <text x={W - PAD.r} y={H - 8} fontSize="10" textAnchor="end" fill="var(--color-faint)">
+      <text x={W - PAD.r} y={H - 8} fontSize="11" textAnchor="end" fill="var(--color-faint)">
         {fmt(x1)}
       </text>
     </svg>

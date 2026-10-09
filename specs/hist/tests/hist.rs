@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use hoardini_core::history::{
-    self, ScanRecord, Since, SummaryDir, changes, hotspots, record_scan_rows, scans, summary_dirs,
-    summary_files,
+    self, ScanRecord, Since, SummaryDir, changes, free_summary, hotspots, record_scan_rows, scans,
+    scans_between, summary_dirs, summary_files,
 };
 use hoardini_core::index::{FakeFs, RefreshOptions, RefreshOutcome, node_by_path, refresh};
 use hoardini_core::store::{Db, now_ms};
@@ -430,4 +430,53 @@ fn retention_keeps_last_20_and_one_per_month() {
         1
     );
     assert!(node_by_path(&conn, r"C:\seed.bin").unwrap().is_some());
+}
+
+fn add_free_scan(e: &Env, volume_id: i64, finished_ms: i64, free: u64) {
+    record_scan_rows(
+        &e.db.conn().unwrap(),
+        &ScanRecord {
+            volume_id,
+            kind: "full".into(),
+            mode: "background".into(),
+            started_ms: finished_ms - 1000,
+            finished_ms,
+            total_bytes: Some(1024 * GIB),
+            free_bytes: Some(free),
+            ..ScanRecord::default()
+        },
+        &[],
+        &[],
+    )
+    .unwrap();
+}
+
+// Traces: HIST-CHANGES
+#[test]
+fn free_space_summary_reports_start_end_low_and_net() {
+    let e = env();
+    let vol = synthetic_volume(&e);
+    for (day, free) in [(10, 100), (20, 80), (30, 60), (40, 90)] {
+        add_free_scan(&e, vol, day * DAY_MS, free * GIB);
+    }
+    let conn = e.db.conn().unwrap();
+
+    let all = scans_between(&conn, vol, Some(10 * DAY_MS), Some(40 * DAY_MS)).unwrap();
+    let f = free_summary(&all).unwrap();
+    assert_eq!(f.refreshes, 4);
+    assert_eq!(
+        f.line(),
+        "Free space over 4 refreshes: start 100 GB (1970-01-11), end 90.0 GB (1970-02-10), low 60.0 GB (1970-01-31), net -10.0 GB."
+    );
+
+    let part = scans_between(&conn, vol, Some(20 * DAY_MS), Some(30 * DAY_MS)).unwrap();
+    let f = free_summary(&part).unwrap();
+    assert_eq!(
+        (f.start.1, f.end.1, f.low.1),
+        (80 * GIB, 60 * GIB, 60 * GIB)
+    );
+    assert!(f.line().ends_with("net -20.0 GB."));
+
+    let one = scans_between(&conn, vol, Some(40 * DAY_MS), Some(40 * DAY_MS)).unwrap();
+    assert!(free_summary(&one).is_none());
 }

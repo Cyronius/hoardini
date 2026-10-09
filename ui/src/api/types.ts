@@ -74,8 +74,11 @@ export type Memory = {
   created_ms: number;
   updated_ms: number;
   review_after_ms: number | null;
+  pinned: boolean;
+  last_used_ms: number | null;
+  forgotten_ms: number | null;
 };
-export type MemoryInput = Partial<Pick<Memory, "scope" | "key" | "kind" | "text">>;
+export type MemoryInput = Partial<Pick<Memory, "scope" | "key" | "kind" | "text" | "pinned">>;
 
 export type Caps = { tools: boolean; streaming: boolean; streamed_tool_calls: boolean; tool_choice: boolean };
 export type ProviderConfig = {

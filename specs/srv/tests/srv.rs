@@ -686,3 +686,63 @@ async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
     );
     let _ = h.shutdown.send(());
 }
+
+// Traces: SRV-HISTORY-RANGE
+#[tokio::test(flavor = "multi_thread")]
+async fn history_filters_by_range() {
+    use hoardini_core::history::{ScanRecord, record_scan_rows};
+    use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
+    use hoardini_core::store::Db;
+
+    let f = Fixture::new().await;
+    let (_, none) = f.call("GET", "/api/history", None).await;
+    assert_eq!(none, json!([]));
+
+    let db = Db::open(f.dir.path().join("h.db")).unwrap();
+    let conn = db.conn().unwrap();
+    let fs = FakeFs::new(r"C:\");
+    fs.file(r"C:\seed.bin", 1 << 20);
+    let vol = refresh(&conn, &fs, fs.root(), &RefreshOptions::default())
+        .unwrap()
+        .volume_id;
+    for (ms, free) in [(1_000, 50u64), (2_000, 40), (3_000, 30), (4_000, 20)] {
+        let rec = ScanRecord {
+            volume_id: vol,
+            kind: "full".into(),
+            mode: "background".into(),
+            started_ms: ms - 1,
+            finished_ms: ms,
+            total_bytes: Some(100),
+            free_bytes: Some(free),
+            ..ScanRecord::default()
+        };
+        record_scan_rows(&conn, &rec, &[], &[]).unwrap();
+    }
+    let finished = |v: &Value| -> Vec<i64> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["finished_ms"].as_i64().unwrap())
+            .collect()
+    };
+    let (_, all) = f.call("GET", "/api/history", None).await;
+    let all = finished(&all);
+    assert_eq!(all.len(), 5);
+    assert!(all.windows(2).all(|w| w[0] <= w[1]));
+    assert_eq!(&all[..4], &[1_000, 2_000, 3_000, 4_000]);
+
+    let (_, mid) = f
+        .call("GET", "/api/history?since_ms=2000&until_ms=3000", None)
+        .await;
+    assert_eq!(finished(&mid), vec![2_000, 3_000]);
+    let (_, since) = f.call("GET", "/api/history?since_ms=3000", None).await;
+    assert_eq!(&finished(&since)[..2], &[3_000, 4_000]);
+    assert_eq!(finished(&since).len(), 3);
+    let (_, until) = f.call("GET", "/api/history?until_ms=1000", None).await;
+    assert_eq!(finished(&until).last(), Some(&1_000));
+    let (_, mid) = f
+        .call("GET", "/api/history?since_ms=2000&until_ms=3000", None)
+        .await;
+    assert_eq!(mid[0]["free_bytes"], 40);
+    let _ = f.h.shutdown.send(());
+}
