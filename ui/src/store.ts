@@ -4,7 +4,7 @@ import { routes } from "./api/client";
 import type { IndexSummary, Job, Proposal, Status, StatusEvent } from "./api/types";
 import { saveThemePref, themePref } from "./theme";
 
-export type DrawerTab = "memory" | "destinations" | "providers" | "search" | "history" | "settings";
+export type DrawerTab = "memory" | "destinations" | "providers" | "search" | "theme" | "settings";
 
 export const TADA_MS = 5000;
 

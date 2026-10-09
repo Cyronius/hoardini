@@ -89,6 +89,7 @@ export function themeVars(t: ThemeDef): Record<string, string> {
     "--color-muted": k.muted,
     "--color-faint": k.faint,
     "--color-brass": k.accent,
+    "--color-on-accent": k.bg0,
     "--color-ok": k.ok,
     "--color-err": k.err,
     "--color-info": k.info,

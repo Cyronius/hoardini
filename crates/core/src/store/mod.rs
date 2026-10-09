@@ -4,7 +4,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 // Append-only: never edit a shipped migration, add a new one.
-const MIGRATIONS: &[&str] = &[include_str!("schema_v1.sql"), include_str!("schema_v2.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("schema_v1.sql"),
+    include_str!("schema_v2.sql"),
+    include_str!("schema_v3.sql"),
+];
 
 #[derive(Clone, Debug)]
 pub struct Db {

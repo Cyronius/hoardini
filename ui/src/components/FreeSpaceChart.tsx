@@ -1,8 +1,5 @@
-import { useEffect, useState } from "react";
-import { routes } from "../api/client";
 import type { HistoryPoint } from "../api/types";
 import { humanBytes } from "../format";
-import { ErrorLine, errMsg } from "./ui";
 
 const W = 520;
 const H = 200;
@@ -44,39 +41,5 @@ export function FreeSpaceChart({ points }: { points: HistoryPoint[] }) {
         {fmt(x1)}
       </text>
     </svg>
-  );
-}
-
-export function HistoryTab() {
-  const [points, setPoints] = useState<HistoryPoint[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    routes.history().then((p) => setPoints([...p].sort((a, b) => a.finished_ms - b.finished_ms))).catch((e) => setError(errMsg(e)));
-  }, []);
-  const first = points?.[0];
-  const last = points?.[points.length - 1];
-  return (
-    <div className="space-y-3">
-      <p className="text-muted">Free space after each index refresh.</p>
-      <ErrorLine error={error} />
-      {points == null && !error && <div className="text-muted pulse-soft">Loading...</div>}
-      {points?.length === 0 && <div className="text-muted">No history yet. It builds up as the index refreshes.</div>}
-      {points && points.length > 0 && first && last && (
-        <>
-          <div className="rounded-xl border border-line-soft bg-ink-850 p-2">
-            <FreeSpaceChart points={points} />
-          </div>
-          <div className="text-[length:var(--fs-sm)] text-muted">
-            Now {humanBytes(last.free_bytes)} free of {humanBytes(last.total_bytes)}
-            {points.length > 1 && (
-              <>
-                {" "}
-                · {last.free_bytes >= first.free_bytes ? "up" : "down"} {humanBytes(Math.abs(last.free_bytes - first.free_bytes))} since {new Date(first.finished_ms).toLocaleDateString()}
-              </>
-            )}
-          </div>
-        </>
-      )}
-    </div>
   );
 }

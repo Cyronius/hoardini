@@ -7,7 +7,8 @@ export default defineConfig({
   server: {
     port: 5193,
     watch: { ignored: ["**/mock/**"] },
-    proxy: { "/api": { target: "http://127.0.0.1:7043", changeOrigin: false } },
+    // The real server rejects foreign Host headers (DNS-rebinding guard), so present its own.
+    proxy: { "/api": { target: "http://127.0.0.1:7043", changeOrigin: true } },
   },
   build: { chunkSizeWarningLimit: 5000 },
 });

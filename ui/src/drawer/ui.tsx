@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 export const field =
   "w-full rounded-lg border border-line bg-ink-900 px-2.5 py-1.5 text-[length:var(--fs-base)] text-paper placeholder:text-faint focus:border-brass focus:outline-none";
 export const btnPrimary =
-  "rounded-lg bg-brass px-3 py-1.5 text-[length:var(--fs-base)] font-bold text-ink-950 hover:opacity-90 disabled:opacity-40";
+  "rounded-lg bg-brass px-3 py-1.5 text-[length:var(--fs-base)] font-bold text-on-accent hover:opacity-90 disabled:opacity-40";
 export const btnSecondary =
   "rounded-lg border border-line px-3 py-1.5 text-[length:var(--fs-base)] font-semibold text-muted hover:text-paper disabled:opacity-40";
 export const btnDanger =

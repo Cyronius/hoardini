@@ -293,7 +293,7 @@ export function ProposalCard({ proposalId }: { proposalId: string }) {
             ) : (
               <button
                 type="button"
-                className="rounded-lg bg-brass px-3 py-1.5 text-[length:var(--fs-base)] font-bold text-ink-950 hover:opacity-90 disabled:opacity-40"
+                className="rounded-lg bg-brass px-3 py-1.5 text-[length:var(--fs-base)] font-bold text-on-accent hover:opacity-90 disabled:opacity-40"
                 disabled={busy || selected.size === 0}
                 onClick={() => void approve()}
               >

@@ -342,7 +342,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
             <IconButton
               title="Send"
               aria-label="Send message"
-              className="!h-11 !w-11 !rounded-full bg-brass text-ink-950 hover:!bg-brass hover:opacity-90"
+              className="!h-11 !w-11 !rounded-full bg-brass text-on-accent hover:!bg-brass hover:opacity-90"
               onClick={() => void send()}
               disabled={!input.trim()}
             >

@@ -3,18 +3,18 @@ import { CloseIcon } from "../components/icons";
 import { IconButton } from "../components/IconButton";
 import { useStore, type DrawerTab } from "../store";
 import { DestinationsTab } from "./DestinationsTab";
-import { HistoryTab } from "./HistoryTab";
 import { MemoryTab } from "./MemoryTab";
 import { ProvidersTab } from "./ProvidersTab";
 import { SearchTab } from "./SearchTab";
 import { SettingsTab } from "./SettingsTab";
+import { ThemeTab } from "./ThemeTab";
 
 const TABS: { id: DrawerTab; label: string }[] = [
   { id: "memory", label: "Memory" },
-  { id: "destinations", label: "Destinations" },
-  { id: "providers", label: "Providers" },
+  { id: "destinations", label: "Archive" },
+  { id: "providers", label: "AI" },
   { id: "search", label: "Search" },
-  { id: "history", label: "History" },
+  { id: "theme", label: "Theme" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -46,7 +46,7 @@ export function Drawer() {
               key={t.id}
               role="tab"
               aria-selected={tab === t.id}
-              className={`shrink-0 rounded-full px-3 py-1 text-[length:var(--fs-sm)] font-bold ${tab === t.id ? "bg-brass text-ink-950" : "text-muted hover:bg-ink-800 hover:text-paper"}`}
+              className={`shrink-0 rounded-full px-3 py-1 text-[length:var(--fs-sm)] font-bold ${tab === t.id ? "bg-brass text-on-accent" : "text-muted hover:bg-ink-800 hover:text-paper"}`}
               onClick={() => open(t.id)}
             >
               {t.label}
@@ -58,7 +58,7 @@ export function Drawer() {
           {tab === "destinations" && <DestinationsTab />}
           {tab === "providers" && <ProvidersTab />}
           {tab === "search" && <SearchTab />}
-          {tab === "history" && <HistoryTab />}
+          {tab === "theme" && <ThemeTab />}
           {tab === "settings" && <SettingsTab />}
         </div>
       </aside>
