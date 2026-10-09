@@ -55,6 +55,7 @@ pub enum Action {
     Archive,
     Compress,
     Dedupe,
+    OnlineOnly,
 }
 
 impl Action {
@@ -345,6 +346,18 @@ fn dir_has_placeholder(conn: &Connection, node_id: i64) -> anyhow::Result<bool> 
     )?)
 }
 
+const NOT_SYNCED_REASON: &str = "Not in a cloud-synced folder (OneDrive, Dropbox, iCloud, ...); there is no cloud copy to fall back on";
+const ALREADY_ONLINE_REASON: &str = "Already online-only; nothing is stored on this PC";
+
+fn online_only_block(state: &FsState, alloc: i64) -> Option<String> {
+    if alloc == 0
+        || (state.kind == ItemKind::File && hoardini_win::is_cloud_placeholder(state.attrs))
+    {
+        return Some(ALREADY_ONLINE_REASON.into());
+    }
+    None
+}
+
 const PLACEHOLDER_REASON: &str =
     "Cloud-only (online-only) file; archiving or compressing would download it first";
 
@@ -411,8 +424,14 @@ pub fn examine(
     }
     ex.node_id = node.map(|n| n.id);
     let in_use = in_use_reason_capped(conn, path, state.kind, PROPOSE_IN_USE_FILE_CAP);
+    let not_synced = action == Action::OnlineOnly
+        && crate::cloud::root_for(&env.cloud().roots(), path).is_none();
     ex.block = if let Some(r) = &in_use {
         Some(r.clone())
+    } else if not_synced {
+        Some(NOT_SYNCED_REASON.into())
+    } else if action == Action::OnlineOnly {
+        online_only_block(&state, ex.alloc)
     } else if action.reads_data() && placeholder {
         Some(PLACEHOLDER_REASON.into())
     } else if action.reads_data() && state.kind == ItemKind::Link {
@@ -420,7 +439,14 @@ pub fn examine(
     } else {
         None
     };
-    ex.cap = cap_for_with(conn, env, Path::new(path), catalog_cap, in_use.is_some())?;
+    ex.cap = super::cap_for_action(
+        conn,
+        env,
+        Path::new(path),
+        catalog_cap,
+        in_use.is_some(),
+        action == Action::OnlineOnly,
+    )?;
     ex.state = Some(state);
     Ok(ex)
 }

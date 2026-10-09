@@ -98,8 +98,9 @@ that waits on the background hash (`hash`), the sync engine (`sync`), or a folde
 stored in `copy_check`, keyed by volume, path, and check, with the file id, size (a folder's indexed logical total), and
 mtime they were made for. `results_for(path)` returns only rows that still match the path's current id, size, and mtime.
 `check_subject` reuses a matching row instead of running the check again, unless the row is pending and what it waits on
-has arrived (a row waiting on the sync engine is always re-run). A check that finds the path is not its business
-(`Find::Skip`) drops its old row. The confidence decides the effect (`copycheck::effect`, `copycheck::verdict_for`):
+has arrived (a row waiting on the sync engine is always re-run), or the check says it went stale through something other
+than the path (`CopyCheck::still_valid`: a duplicate's twin changed, git state, a sync folder's files, a moved archive
+copy). A check that finds the path is not its business (`Find::Skip`) drops its old row. The confidence decides the effect (`copycheck::effect`, `copycheck::verdict_for`):
 
 | Confidence | Effect | Verdict it allows |
 |---|---|---|
@@ -159,7 +160,8 @@ fetched and compared on this machine.
 `dup` applies to files of at least 100 MiB that are not placeholders. It looks for other indexed files of the same
 logical size and a different file id (hard links are one file). A persisted duplicate group (`dupes::find`, full BLAKE3)
 counts while both members still have the mtime and file id they were hashed with; otherwise two current SHA-256 rows in
-`file_hash` that are equal count. Either gives `identical`, with the other path as the locator. With no same-size file
+`file_hash` that are equal count. Either gives `identical`, with the other path as the locator, and goes stale when that
+twin's mtime, size, or file id changes. With no same-size file
 the answer is `none`; with same-size files not all hashed yet, `none` pending `hash`; when all are hashed and differ,
 `none`.
 
@@ -174,7 +176,7 @@ the answer is `none`; with same-size files not all hashed yet, `none` pending `h
 
 `archive` applies to a path that has an `archive_entry` (its own, or a folder's above it; the newest wins). When the entry
 was restored and the archived copy is still reachable (a local or SMB path that exists; an rclone copy is taken as
-recorded), the copy was verified when it was archived, so the path is `identical` while its size matches the copy and
+recorded; the answer goes stale when a local copy disappears), the copy was verified when it was archived, so the path is `identical` while its size matches the copy and
 nothing in it was modified after `archived_ms` (2 s slack), and `same-name-and-size` when something was modified since. A
 different size is `none`. When the entry was never restored, the archive removed the original, so a file at that path
 now is a newer one: `same-name-and-size` when its size equals the recorded size, otherwise `none`.
@@ -193,7 +195,8 @@ now is a newer one: `same-name-and-size` when its size equals the recorded size,
 one, and other providers), read from `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager\<id>\UserSyncRoots`
 with the provider named from the registration id. A file is `identical` when the sync engine marks its placeholder in
 sync (`CfGetPlaceholderInfo`, opened for attributes with no recall), with the provider as the locator and the note
-"synced to <provider>". A folder is `identical` when every file in it (up to 20,000) is in sync. Anything else is `none`
+"synced to <provider>". A folder is `identical` when every file in it (up to 20,000) is in sync, and is walked again on every pass, since
+a file inside can fall out of sync without the folder changing. Anything else is `none`
 pending `sync`, so the next pass looks again. The Win32 calls sit behind the `Cloud` trait, and the decisions are tested
 against a fake one.
 
@@ -213,7 +216,8 @@ and the branch is not ahead of its upstream as of the last fetch, or is ahead on
 upstream has it; the locator is the upstream (`origin/main`) and the note names the remote URL with any credentials
 removed. A folder is `identical` when nothing under it is untracked, ignored, or changed and the same push rule holds; its
 note reads "everything tracked is pushed to ...". Untracked: `none` ("not tracked by git"); changed: `none`; no upstream:
-`none`. Ignored files are not this check's business (no answer).
+`none`. Ignored files are not this check's business (no answer). A push, commit, or fetch changes the answer without
+touching the file, so git answers are asked again on every pass.
 
 **Acceptance criteria (against real temporary repositories; the test fails if `git` is not on PATH):**
 - After a commit pushed to a bare remote, a tracked file is `identical` with the clone's upstream as the locator, and the work tree folder is `identical`.
@@ -291,7 +295,8 @@ before.
 
 The server's copy worker (`crates/server/src/copywork.rs`) runs `run_volume` over every watched volume on one thread in
 thread background mode (low CPU and very low I/O priority, EcoQoS), one pass at a time. A pass starts when an index
-refresh pass ends, when `online_checks` is saved, and when someone starts looking (SRV-PRESENCE) while a pass is owed (at
+refresh pass ends (unless the last full pass finished less than 15 minutes ago, since journal refreshes come every few
+minutes), when `online_checks` is saved, and when someone starts looking (SRV-PRESENCE) while a pass is owed (at
 launch, or after one stopped early). It runs only while someone is looking and stops between files and between hash
 chunks when nobody is, so a minimized app does no copy-check work (SRV-IDLE-ZERO). Each volume's pass logs `copy checks
 done` with its candidate, checked, and hashed counts and how many wait on consent.

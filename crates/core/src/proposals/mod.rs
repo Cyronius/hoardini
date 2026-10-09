@@ -1,6 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+use crate::copycheck;
 use crate::destinations;
 use crate::index::is_ancestor_path;
 use crate::memory;
@@ -18,6 +19,19 @@ pub fn default_tick(blocked: bool, verdict: Option<Verdict>, small: bool) -> boo
     !blocked && matches!(verdict, Some(Verdict::Safe | Verdict::Redownload)) && !small
 }
 
+// `synced` ticks only on an online-only card; anywhere else it would delete the cloud copy too.
+pub fn default_tick_for(
+    kind: ProposalKind,
+    blocked: bool,
+    verdict: Option<Verdict>,
+    small: bool,
+) -> bool {
+    match kind {
+        ProposalKind::OnlineOnly => !blocked && verdict == Some(Verdict::Synced) && !small,
+        _ => default_tick(blocked, verdict, small),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProposalKind {
@@ -25,6 +39,8 @@ pub enum ProposalKind {
     Archive,
     Compress,
     Dedupe,
+    #[serde(rename = "online_only")]
+    OnlineOnly,
 }
 
 impl ProposalKind {
@@ -34,6 +50,7 @@ impl ProposalKind {
             ProposalKind::Archive => "archive",
             ProposalKind::Compress => "compress",
             ProposalKind::Dedupe => "dedupe",
+            ProposalKind::OnlineOnly => "online_only",
         }
     }
 
@@ -43,6 +60,7 @@ impl ProposalKind {
             "archive" => Some(ProposalKind::Archive),
             "compress" => Some(ProposalKind::Compress),
             "dedupe" => Some(ProposalKind::Dedupe),
+            "online_only" => Some(ProposalKind::OnlineOnly),
             _ => None,
         }
     }
@@ -53,6 +71,7 @@ impl ProposalKind {
             ProposalKind::Archive => Action::Archive,
             ProposalKind::Compress => Action::Compress,
             ProposalKind::Dedupe => Action::Dedupe,
+            ProposalKind::OnlineOnly => Action::OnlineOnly,
         }
     }
 }
@@ -104,6 +123,8 @@ pub struct ProposalItem {
     pub detail: Option<String>,
     pub small: bool,
     pub memory_note: Option<String>,
+    #[serde(default)]
+    pub copy_note: Option<String>,
 }
 
 // A requested path the gate refused outright (deny list, protect memory, not absolute, nested).
@@ -333,10 +354,22 @@ fn build(
     let mut rows = Vec::new();
     for (path, i) in accepted {
         let item = &req.items[i];
+        // Online-only verdicts come from the sync engine's own state, never from the model.
+        let verdict = if req.kind == ProposalKind::OnlineOnly {
+            let synced = copycheck::sync_result(&conn, env.cloud().clone(), &env.profile, &path)
+                .is_some_and(|r| r.confidence == copycheck::Confidence::Identical);
+            Some(if synced {
+                Verdict::Synced
+            } else {
+                Verdict::Review
+            })
+        } else {
+            item.verdict
+        };
         let ex = policy::examine(&conn, env, &path, req.kind.action())?;
         let note = memory::note_covering_with(&conn, &path, &env.profile)?.map(|m| m.text);
         rows.push(Row {
-            verdict: item.verdict.map(|v| v.capped(ex.cap)),
+            verdict: verdict.map(|v| v.capped(ex.cap)),
             reason: item.reason.clone(),
             tick: carry.as_ref().and_then(|c| c.ticks.get(i).copied()),
             path,
@@ -382,7 +415,7 @@ fn build(
         let blocked = r.ex.block.is_some();
         let selected = match r.tick {
             Some(tick) => tick && !blocked,
-            None => default_tick(blocked, r.verdict, is_small(r.ex.alloc, total)),
+            None => default_tick_for(req.kind, blocked, r.verdict, is_small(r.ex.alloc, total)),
         };
         tx.execute(
             "INSERT INTO proposal_item(proposal_id, seq, path, node_id, kind, alloc, logical, mtime, file_id,
@@ -534,9 +567,17 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
                 detail: r.get(10)?,
                 small: is_small(alloc, total_alloc),
                 memory_note: r.get(11)?,
+                copy_note: None,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut items = items;
+    // Only live cards show it, and a finished card's paths may be gone.
+    if matches!(status.as_str(), "pending" | "approved" | "running") {
+        for it in &mut items {
+            it.copy_note = copycheck::note_for(conn, &it.path);
+        }
+    }
     Ok(Some(Proposal {
         id: id.to_string(),
         kind,

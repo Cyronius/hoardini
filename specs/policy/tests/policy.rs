@@ -3,6 +3,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
+use hoardini_core::copycheck::{self, Confidence, CopyResult, Subject};
 use hoardini_core::memory::{self, Kind, NewMemory, Scope, remember_with};
 use hoardini_core::policy::{Verdict, cap_for_with, deny_reason};
 use hoardini_core::proposals::{self, NewItem, ProposalKind, SMALL_BYTES, default_tick, is_small};
@@ -540,6 +541,75 @@ fn shown_verdict_never_exceeds_the_policy_cap() {
     assert_eq!(
         cap_for_with(&conn, &fx.env, &fx.profile, None, false).unwrap(),
         Some(Verdict::Keep)
+    );
+}
+
+fn copy_answer(fx: &Fx, p: &Path, check: &str, confidence: Confidence) {
+    let conn = fx.db.conn().unwrap();
+    let sub = Subject::load(&conn, &s(p)).unwrap();
+    let r = CopyResult::new(check, Some("o/m".into()), confidence, serde_json::json!({}));
+    copycheck::store(&conn, &sub, &r).unwrap();
+}
+
+// Traces: POLICY-VERDICT-CAP, POLICY-DEFAULT-TICK, EVID-COPY-CHECK
+#[test]
+fn an_identical_copy_lifts_the_unknown_location_cap_to_redownload() {
+    let fx = Fx::new();
+    let verified = fx.file("models\\mine.gguf", &data(64 * 1024, 1));
+    let likely = fx.file("models\\likely.gguf", &data(64 * 1024, 2));
+    let synced = fx.file("cloud\\photo.jpg", &data(64 * 1024, 3));
+    let blob = fx.pfile(
+        r".cache\huggingface\hub\models--org--m\blobs\0123abcd",
+        &data(64 * 1024, 4),
+    );
+    copy_answer(&fx, &verified, "huggingface", Confidence::Identical);
+    copy_answer(&fx, &likely, "huggingface", Confidence::SameNameAndSize);
+    copy_answer(&fx, &synced, "sync", Confidence::Identical);
+    copy_answer(&fx, &blob, "huggingface", Confidence::Identical);
+
+    let p = fx
+        .propose(
+            ProposalKind::Delete,
+            &[&verified, &likely, &synced, &blob],
+            None,
+        )
+        .unwrap();
+    let got = |path: &Path| {
+        let it = item(&p, path);
+        (it.verdict, it.cap, it.selected)
+    };
+    assert_eq!(
+        got(&verified),
+        (Some(Verdict::Redownload), Some(Verdict::Redownload), true),
+        "the model's safe becomes redownload and starts ticked"
+    );
+    assert_eq!(
+        got(&likely),
+        (Some(Verdict::Review), Some(Verdict::Review), false)
+    );
+    assert_eq!(
+        got(&synced),
+        (Some(Verdict::Review), Some(Verdict::Review), false),
+        "a cloud copy never relaxes a delete"
+    );
+    assert_eq!(
+        got(&blob),
+        (Some(Verdict::Review), Some(Verdict::Review), false),
+        "a single shared blob stays review whatever its copy"
+    );
+    assert_eq!(
+        item(&p, &verified).copy_note.as_deref(),
+        Some("identical copy at o/m")
+    );
+    let conn = fx.db.conn().unwrap();
+    assert_eq!(
+        cap_for_with(&conn, &fx.env, &verified, None, false).unwrap(),
+        Some(Verdict::Redownload)
+    );
+    assert_eq!(
+        cap_for_with(&conn, &fx.env, &verified, None, true).unwrap(),
+        Some(Verdict::Keep),
+        "in use still wins"
     );
 }
 

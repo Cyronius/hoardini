@@ -10,7 +10,7 @@ proposal and a subset of its selectable item ids, revalidates them (POLICY-REVAL
 starts a job on its own thread, and returns `{approved, items, job_id}`. Jobs run one at a time (`queued` → `running` →
 `done` | `failed` | `cancelled`); progress (bytes, items, current path) goes to `Executor::subscribe()` and the `job`
 table; cancel takes effect between files and between 1 MiB copy chunks. Kinds: delete, archive (local folder,
-SMB UNC path), compress, dedupe.
+SMB UNC path), compress, dedupe, online-only.
 
 - **Delete**: `remove_file` (read-only cleared); a folder is first renamed to a temporary sibling name (Windows refuses
   while anything inside is open, so nothing is deleted then), then `remove_dir_all` (never follows links inside); a link
@@ -36,6 +36,10 @@ SMB UNC path), compress, dedupe.
   the extra, then renames it over the extra; `delete` removes the extra. Candidates come from `core::dupes`: same
   logical size, distinct `file_id` (hard links are one file), equal head+tail sample, then equal full BLAKE3, files of
   at least 100 MB by default, never cloud placeholders. Full hashes are reused while size, mtime, and `file_id` hold.
+- **Online-only**: for files in a cloud-synced folder (`cloud::Cloud`, EVID-COPY-SYNC). Each file whose placeholder the
+  sync engine marks in sync is unpinned and dehydrated (`CfSetPinState` unpinned, then `CfDehydratePlaceholder`, the
+  same as Explorer's "Free up space"); it stays in its folder and downloads again when opened. Files not in sync are left
+  as they are. Nothing is deleted, moved, or read. Undo is "Always keep on this device".
 - **Journal**: one `action` row per item, written `running` before work starts and `done`/`failed`/`cancelled` with
   `freed_bytes`, `undo_json`, and `error` after; archive also writes an `archive_entry` (size, BLAKE3 of the file or of
   the folder manifest, stub path) and the action's `undo_json` before it deletes the source. The index is patched after
@@ -94,7 +98,7 @@ a restart.
 **Applies to:** hoardini
 **Verification:** test
 
-When a delete, archive, or compress job ends (done, partial, failed, or cancelled), the executor shall create a pending
+When a delete, archive, compress, or online-only job ends (done, partial, failed, or cancelled), the executor shall create a pending
 follow-up proposal whose `parent_id` is the job's proposal, in the same conversation, holding every item whose status is
 not `done`. Each item starts with the tick it was approved with: an approved item that failed or was skipped comes back
 ticked; an item left unticked comes back unticked. The items go through proposal creation again, so path resolution,
@@ -277,3 +281,32 @@ restored byte-identical, no `rclone.exe` left running.
 6. Restore each entry from the archive list: the originals come back byte-identical (`Get-FileHash`), the remote copies stay.
 7. While rclone runs, `tasklist | findstr rclone` shows one process; ten idle minutes after the last job, or after quitting the app, none. `D:\scratch\hoardini-data\rclone.conf` starts with `# Encrypted rclone configuration File`.
 8. Cloud accounts (Google Drive, Dropbox, OneDrive, S3, B2, R2, SFTP) are not covered by this procedure; for each, Authorize (OAuth types) or enter keys, Test, archive a small file, restore it.
+
+### ACT-ONLINE-ONLY: Online-only frees the local copy of synced files and never deletes
+**Applies to:** hoardini
+**Verification:** test
+
+An `online_only` proposal (from `propose_online_only` or the review) shall block an item that is not under a registered
+sync root ("Not in a cloud-synced folder ...") or that has nothing stored on this PC ("Already online-only"), plus the
+usual in-use block. An item's verdict comes from the sync check run when the card is made (EVID-COPY-SYNC): `synced`
+when it, or every file in the folder, is in sync, else `review`; the model's verdict is ignored, and only unblocked,
+not-small `synced` items start ticked (POLICY-DEFAULT-TICK). At execution each file under an approved item is asked
+again: a file the sync engine marks in sync and that still has local data is freed; one that is not in sync, or is no
+placeholder, is skipped and counted; one already online-only is left alone. Nothing is ever deleted, moved, or read. A
+file item that frees nothing fails ("nothing here is in sync with <provider> yet; nothing was changed"); a folder item
+is done when it freed or found at least one in-sync file, its detail saying how many were freed and how many were left on
+this PC. Each item is journaled per ACT-JOURNAL with undo `{"kind": "pin", "provider", "how"}`, `freed_bytes` is what
+the dehydration released, and the index row is rescanned, not removed (INDEX-ACTION-PATCH). The Win32 calls
+(`hoardini_win::free_up_space`, `placeholder_info`) sit behind the `Cloud` trait, so the selection and skip logic is
+tested against a fake sync root.
+
+**Acceptance criteria (fake sync root `<work>\OneDrive`, `specs/act/tests/online.rs`):**
+- Proposed together: a file outside the root is `blocked` "Not in a cloud-synced folder"; an in-sync file is `synced`, ticked, with copy note "synced to OneDrive"; a file not in sync and a folder holding one in-sync and one not-in-sync file are `review` and unticked.
+- Approving the in-sync file, the not-in-sync file, and the folder: the fake is asked to free exactly the two in-sync files; the in-sync file is `done` "1 file(s) now online-only in OneDrive"; the not-in-sync file is `failed` and untouched; the folder is `done` "1 file(s) now online-only in OneDrive; 1 not in sync were left on this PC"; the proposal is `partial`.
+- Every file, including the freed ones, still exists with its bytes; the job's freed bytes equal the two freed files' sizes; the two done items have `done` action rows with undo kind `pin` and provider OneDrive, the failed one a `failed` row; the freed files' index rows are still there.
+
+**Verification (manual, live sync engine):**
+1. With a scratch sync provider or a scratch folder inside OneDrive that holds only files you created for the test, wait until Explorer shows them as synced (green check).
+2. Ask for the scratch folder to be made online-only (`propose_online_only`), approve the card, and wait for the job.
+3. Explorer shows the files as online-only (cloud icon); `Get-Item` reports the same lengths, `fsutil file layout` or Properties shows "Size on disk" near 0, and opening one downloads it again with identical bytes (`Get-FileHash` before and after).
+4. A file modified just before approving (not yet synced) is reported as left on this PC.

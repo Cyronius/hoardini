@@ -199,7 +199,7 @@ re-lists that directory. If the read skips such records, the gap shall be record
 **Verification:** test
 
 The executor shall update the index right after an action, without a refresh: `index::patch_removed(conn, path)` for a
-deleted or archived path that had a row, and `index::patch_rescan(conn, lister, path)` for anything else (a removed
+deleted or archived path that had a row, and `index::patch_rescan(conn, lister, path)` for anything else (a file made online-only, a removed
 small file, a compressed file, a replaced or hard-linked file, a new path). Both update the row(s) and every ancestor's
 subtree totals in one transaction, and re-resolve hard-link ownership.
 
