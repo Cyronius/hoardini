@@ -1,6 +1,6 @@
 import type { StandardTool } from "@itkennel/lm-ag-ui";
 
-export const PROPOSE_TOOLS = ["propose_delete", "propose_archive", "propose_compress", "propose_dedupe"] as const;
+export const PROPOSE_TOOLS = ["propose_delete", "propose_archive", "propose_compress", "propose_dedupe", "propose_online_only"] as const;
 export const isProposeTool = (name: string | undefined): boolean => !!name && (PROPOSE_TOOLS as readonly string[]).includes(name);
 
 const strArray = { type: "array", items: { type: "string" } };
@@ -37,5 +37,10 @@ export const proposeToolDefs: Record<(typeof PROPOSE_TOOLS)[number], StandardToo
       properties: { group: { type: "string" }, keep: { type: "string" }, mode: { type: "string" } },
       required: ["group", "keep", "mode"],
     },
+  },
+  propose_online_only: {
+    name: "propose_online_only",
+    description: "Propose making synced files online-only: the local copy is freed, the file stays in the cloud.",
+    parameters: { type: "object", properties: { paths: strArray }, required: ["paths"] },
   },
 };

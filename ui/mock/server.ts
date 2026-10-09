@@ -127,7 +127,13 @@ const history: T.HistoryPoint[] = Array.from({ length: 14 }, (_, i) => {
   return { finished_ms: now() - (14 - i) * 2 * 86_400_000, total_bytes: 1906 * GB, free_bytes: free, used_bytes: 1906 * GB - free, indexed_bytes: 1906 * GB - free - 20 * GB };
 });
 
-const settings: T.Settings = { index_speed: "lean", builtin_idle_minutes: 10, index_size_bytes: 184 * MB };
+const settings: T.Settings = {
+  index_speed: "lean",
+  builtin_idle_minutes: 10,
+  index_size_bytes: 184 * MB,
+  online_checks: { asked: false, services: { huggingface: false, winget: false } },
+};
+let onlineWaiting = 4;
 
 type Thread = { updated_ms: number; messages: ({ id: string } & Record<string, unknown>)[]; proposals: Record<string, T.Proposal>; windowStart: number };
 const thread: Thread = { updated_ms: 0, messages: [], proposals: {}, windowStart: 0 };
@@ -149,9 +155,39 @@ function threadDetail() {
 }
 
 function makeProposal(kind: T.ProposalKind): T.Proposal {
-  const mk = (id: number, path: string, alloc: number, p: Partial<T.ProposalItem>): T.ProposalItem => ({ id, path, kind: "file", alloc, verdict: "redownload", cap: null, reason: null, block_reason: null, selected: true, status: "pending", detail: null, small: false, memory_note: null, ...p });
+  const mk = (id: number, path: string, alloc: number, p: Partial<T.ProposalItem>): T.ProposalItem => ({ id, path, kind: "file", alloc, verdict: "redownload", cap: null, reason: null, block_reason: null, selected: true, status: "pending", detail: null, small: false, memory_note: null, copy_note: null, ...p });
+  if (kind === "online_only") {
+    const od = "C:\\Users\\josha\\OneDrive";
+    const cloudItems: T.ProposalItem[] = [
+      mk(1, `${od}\\Pictures\\2019`, 38.2 * GB, { kind: "dir", verdict: "synced", cap: "synced", copy_note: "synced to OneDrive", reason: "Photos not opened in 3 years." }),
+      mk(2, `${od}\\Videos\\Wedding.mp4`, 6.1 * GB, { verdict: "synced", cap: "synced", copy_note: "synced to OneDrive" }),
+      mk(3, `${od}\\Pictures\\2026`, 4.4 * GB, { kind: "dir", verdict: "review", selected: false, copy_note: "3 of 120 files not in sync with OneDrive yet" }),
+      mk(4, "C:\\Users\\josha\\Videos\\local.mp4", 2.2 * GB, {
+        verdict: "review",
+        selected: false,
+        status: "blocked",
+        block_reason: "Not in a cloud-synced folder (OneDrive, Dropbox, iCloud, ...); there is no cloud copy to fall back on",
+      }),
+    ];
+    const op: T.Proposal = {
+      id: uuid(),
+      kind,
+      status: "pending",
+      total_alloc: cloudItems.filter((i) => !i.block_reason).reduce((a, i) => a + i.alloc, 0),
+      created_ms: now(),
+      job_id: null,
+      destination: null,
+      format: null,
+      summary: "Old photos and video already in OneDrive.",
+      items: cloudItems,
+      parent_id: null,
+      follow_up_id: null,
+    };
+    proposals.set(op.id, op);
+    return op;
+  }
   const items: T.ProposalItem[] = [
-    mk(1, "C:\\Users\\josha\\.lmstudio\\models\\llama-3.3-70b-Q4_K_M.gguf", 42.5 * GB, { reason: "Public model on Hugging Face; last opened 74 days ago." }),
+    mk(1, "C:\\Users\\josha\\.lmstudio\\models\\llama-3.3-70b-Q4_K_M.gguf", 42.5 * GB, { reason: "Public model on Hugging Face; last opened 74 days ago.", copy_note: "identical to lmstudio-community/Llama-3.3-70B-Instruct-GGUF on Hugging Face" }),
     mk(2, "C:\\Users\\josha\\.lmstudio\\models\\mistral-small-24b-Q6_K.gguf", 9.9 * GB, { verdict: "review", cap: "review", reason: "Model said safe, but it was opened 12 days ago." }),
     mk(3, "C:\\Users\\josha\\.lmstudio\\models\\qwen3.8-27b-Q8_0.gguf", 27.1 * GB, { verdict: "keep", selected: false, reason: "You said to keep this one (Sep 12)." }),
     mk(4, "C:\\Users\\josha\\.lmstudio\\models\\gemma-4-12b-Q8_0.gguf", 12.4 * GB, { verdict: "redownload", selected: false, block_reason: "Open in LM Studio.exe (pid 8124)", status: "blocked" }),
@@ -301,7 +337,7 @@ async function agentRun(input: { runId: string; messages: { id?: string; role: s
         await readTool(s, "top_dirs", { under: "~\\.lmstudio", depth: 2, limit: 10 }, "~\\.lmstudio 96.1 GB\n  models 95.4 GB (9 files)\n  cache 0.6 GB", 700);
         await readTool(s, "inspect", { path: "~\\.lmstudio\\models\\llama-3.3-70b-Q4_K_M.gguf" }, "GGUF llama 70B Q4_K_M, 42.5 GB, last access 74 days ago (medium confidence), public on Hugging Face.", 900);
         await say(s, "**9 models, 96 GB.** On Sep 12 you said to keep Qwen3.8 27B, so I left it out. Two others have not been opened in a while:\n\n- `llama-3.3-70b` (42.5 GB), 74 days since last access\n- `mistral-small-24b` (9.9 GB), 12 days\n\nHere is a plan. Nothing happens until you approve it.\n\n");
-        const kind: T.ProposalKind = /archive|nas/i.test(text) ? "archive" : "delete";
+        const kind: T.ProposalKind = /archive|nas/i.test(text) ? "archive" : /onedrive|online/i.test(text) ? "online_only" : "delete";
         const p = makeProposal(kind);
         thread.proposals[p.id] = p;
         const toolCallId = uuid();
@@ -367,8 +403,9 @@ async function route(req: Request): Promise<Response> {
 
   switch (seg[0]) {
     case "mock": {
-      const b = await body<{ fill?: number; running_runs?: number; idle?: boolean; next_job?: NextJob }>();
+      const b = await body<{ fill?: number; running_runs?: number; idle?: boolean; next_job?: NextJob; online_waiting?: number }>();
       if (b.next_job) nextJob = b.next_job;
+      if (b.online_waiting != null) onlineWaiting = b.online_waiting;
       if (b.fill != null) setFill(b.fill);
       if (b.running_runs != null) status.running_runs = b.running_runs;
       if (b.idle) Object.assign(status.index, { state: "idle", mode: null, progress: null });
@@ -570,13 +607,20 @@ async function route(req: Request): Promise<Response> {
       return json(history);
     case "settings":
       if (method === "PUT") {
-        Object.assign(settings, await body<Partial<T.Settings>>(), { index_size_bytes: settings.index_size_bytes });
+        const patch = await body<T.SettingsPatch>();
+        const oc = patch.online_checks;
+        delete patch.online_checks;
+        Object.assign(settings, patch, { index_size_bytes: settings.index_size_bytes });
+        if (oc) settings.online_checks = { asked: oc.asked ?? settings.online_checks.asked, services: { ...settings.online_checks.services, ...oc.services } };
         if (settings.index_speed === "fast" && status.index.state === "refreshing" && status.index.mode === "background")
           startRefresh("fast", status.index.progress?.fraction ?? 0);
       }
       return json(settings);
     case "presence":
       return json({ ok: true });
+    case "copy-checks":
+      if (seg[1] === "waiting") return json({ online_waiting: onlineWaiting });
+      return json({ path: url.searchParams.get("path") ?? "", results: [], only_copy: false, note: null });
     case "archive":
       return json([]);
     case "builtin":

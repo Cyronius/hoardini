@@ -151,6 +151,7 @@ When an approved job from a proposal card starts running and the card's action f
 | Archive to a local or SMB destination | overarm throw | lands in a cardboard box whose lid shuts |
 | Archive to an rclone destination | the throw aimed up | sails into a cloud, which puffs |
 | Dedupe | kashiwade clap | the twin parcels are clapped into one |
+| Online-only | the throw aimed up | sails into a cloud, which puffs |
 | Failed | slips, lands on his bottom, rubs his head | stays put, then goes back into the card |
 | Cancelled | stops and shrugs | hops back into the card |
 
@@ -182,7 +183,7 @@ He then climbs back up, deflating on the way if space was freed, and in the head
 **Verification:** manual
 **Depends on:** ACT-FOLLOW-UP (server side; the follow-up proposal and `parent_id` / `follow_up_id`)
 
-A proposal card whose proposal was declined, or whose job ended (done, partial, failed, or cancelled), collapses to one line: the kind's verb (Deleted, Archived, Compressed, Deduplicated), the item count, and the bytes freed, e.g. "Deleted 12 items · freed 3.4 GB · details ▸"; a decline reads "Declined · N items". Clicking it expands the read-only item list with each item's outcome, and "hide ▴" collapses it again. Pending and running cards stay full size. When the proposal has a `follow_up_id`, the follow-up's full card renders directly under the collapsed card in the same chat slot; chains repeat. The UI refetches the proposal when its job reaches a terminal state, and a reloaded thread renders the same chain. Item rows show a muted "small" tag when `small` is true and a muted "Noted: ..." line from `memory_note`; the initial ticks are the server's `selected` values. Approving or declining a follow-up card does not report back to the model; the model sees it through the open-proposals line.
+A proposal card whose proposal was declined, or whose job ended (done, partial, failed, or cancelled), collapses to one line: the kind's verb (Deleted, Archived, Compressed, Deduplicated, Made online-only), the item count, and the bytes freed, e.g. "Deleted 12 items · freed 3.4 GB · details ▸"; a decline reads "Declined · N items". Clicking it expands the read-only item list with each item's outcome, and "hide ▴" collapses it again. Pending and running cards stay full size. When the proposal has a `follow_up_id`, the follow-up's full card renders directly under the collapsed card in the same chat slot; chains repeat. The UI refetches the proposal when its job reaches a terminal state, and a reloaded thread renders the same chain. Item rows show a muted "small" tag when `small` is true, a muted "Noted: ..." line from `memory_note`, and a muted "Copy: ..." line from `copy_note` (EVID-COPY-CHECK); the "Capped to ... by a safety rule" line appears only for a `review` or `keep` cap, since a `redownload` or `synced` cap comes from a copy check the Copy line already names; the initial ticks are the server's `selected` values. Approving or declining a follow-up card does not report back to the model; the model sees it through the open-proposals line.
 
 **Verification (manual):**
 1. In `ui/`, run `MOCK_PORT=7261 MOCK_IDLE=1 bun run mock` and Vite with its `/api` proxy pointed at it; ask "what is in lmstudio".
@@ -197,7 +198,7 @@ A proposal card whose proposal was declined, or whose job ended (done, partial, 
 **Applies to:** hoardini
 **Verification:** manual
 
-The Settings tab shall have no Save button. A toggle or switch saves when it changes; a text field saves when it loses focus or 500 ms after the last keystroke (`drawer/autosave.tsx`). A "Saved" tick appears beside the control that saved, or the server's error appears inline under it and the control shows the stored value again. The tab holds the Fast / Lean switch ("Slower, stays out of your way" / "Finishes sooner, uses more CPU"; SRV-SETTINGS `index_speed`), the read-only index size, and Clear chat history; the threshold, worker, memory-cap, redaction, and web-search settings are gone. The AI tab's provider form has no "Redact paths" toggle (AGENT-REDACT). The header shows one small "Rescan now" button while the index is idle, which runs a refresh at the switch's speed (SRV-ONE-REFRESH); while a refresh runs, its progress bar takes the button's place, with the leaf icon marking Lean, and there is no Scan fast button.
+The Settings tab shall have no Save button. A toggle or switch saves when it changes; a text field saves when it loses focus or 500 ms after the last keystroke (`drawer/autosave.tsx`). A "Saved" tick appears beside the control that saved, or the server's error appears inline under it and the control shows the stored value again. The tab holds the Fast / Lean switch ("Slower, stays out of your way" / "Finishes sooner, uses more CPU"; SRV-SETTINGS `index_speed`), the read-only index size, the Online checks switches (Hugging Face, winget; turning one on or off also records that the user answered, SRV-SETTINGS `online_checks`), and Clear chat history; the threshold, worker, memory-cap, redaction, and web-search settings are gone. The AI tab's provider form has no "Redact paths" toggle (AGENT-REDACT). The header shows one small "Rescan now" button while the index is idle, which runs a refresh at the switch's speed (SRV-ONE-REFRESH); while a refresh runs, its progress bar takes the button's place, with the leaf icon marking Lean, and there is no Scan fast button.
 
 **Verification (manual):**
 1. Start `hoardini serve --port 72xx --ui-dir ui/dist` against a scratch `HOARDINI_DATA_DIR` whose meta `indexed_volumes` points at a small folder, and open the printed URL.
@@ -209,6 +210,43 @@ The Settings tab shall have no Save button. A toggle or switch saves when it cha
 7. AI tab → add or edit a provider: no "Redact paths" toggle.
 8. In DevTools → Network, switch to another window and back, then minimize the browser and restore it: `/api/presence` is posted with `looking: false` on blur and `true` on focus, and the `/api/status/stream` request ends while the page is hidden and a new one starts when it is shown, without the header's "offline" badge.
 (2026-10-09, partial: headless Chromium against `hoardini serve --port 7231 --ui-dir ui/dist` with scratch data. Steps 2 and 3 pass; Rescan now in Lean started a `background` refresh. Step 7 was checked in code only, since no provider form was opened. Step 8 passed with a simulated `visibilitychange`: the stream ended and reopened with no badge, and presence posted `false` then `true`. Steps 5 and 6 were not run; SRV-ONE-REFRESH covers the takeover server-side.)
+
+### UI-ONLINE-CONSENT: Online copy checks are asked about once
+**Applies to:** hoardini
+**Verification:** manual
+
+While `online_checks.asked` is false and the last copy-check pass found candidates waiting on an online check
+(`GET /api/copy-checks/waiting` above 0), a notice above the chat (`components/OnlineChecksConsent.tsx`, placed like the
+AI notices) asks: "Check big files against Hugging Face and winget?", says how many big files wait, that Hoardini sends
+file names and package or repo names and never file contents or hashes (the published hash is fetched and compared on
+this PC), and that checks against the user's own copies, git, and cloud sync always run. Allow turns both services on,
+Not now turns both off, and either records the answer (`asked` true) so the notice never returns; Choose in Settings opens
+the Settings tab, whose switches also count as an answer. The component takes an optional `waiting` count, so the review
+can host it later. The notice polls the waiting count every 30 s while unanswered.
+
+**Verification (manual):**
+1. In `ui/`, run the mock on a free port (`MOCK_PORT=7343 MOCK_IDLE=1 bun run mock`) and Vite with its `/api` proxy pointed at it; open the page.
+2. The notice shows "Check big files against Hugging Face and winget?" and "4 big files".
+3. Choose in Settings: the Settings tab shows Online checks with Hugging Face and winget off. Turn Hugging Face on: "Saved" appears, `GET /api/settings` shows `asked` true and only `huggingface` on, and after a reload the notice is gone.
+4. Reset the mock (`PUT /api/settings {"online_checks": {"asked": false, ...}}`), reload, press Not now: the notice goes and both services are off with `asked` true. Reset again and press Allow: both are on.
+(2026-10-09: steps 1-4 pass, headless Chromium (Playwright) against the mock on port 7343 and Vite on 5293.)
+
+### UI-ONLINE-ONLY-CARD: The online-only card
+**Applies to:** hoardini
+**Verification:** manual
+
+An `online_only` proposal card (ACT-ONLINE-ONLY) is headed "Make online-only · free <size>", explains that it "Frees the
+copy on this PC. Each file stays in its cloud folder and downloads again when you open it. Files not in sync yet are left
+as they are.", shows each item's `synced` or `review` badge and its Copy line, and approves with one click on "Make
+online-only" (it deletes nothing, so there is no hold). Finished, it collapses to "Made online-only N items · freed X"
+(UI-PROPOSAL-COLLAPSE), and the mascot throws the parcel up into a cloud (UI-MASCOT-JOBS).
+
+**Verification (manual):**
+1. With the mock and Vite as in UI-ONLINE-CONSENT, ask "make my old onedrive photos online-only".
+2. The card reads "Make online-only · free 44.3 GB" with the explanation, two `synced` items ticked with "Copy: synced to OneDrive", a `review` folder unticked with "Copy: 3 of 120 files not in sync with OneDrive yet", and a blocked `local.mp4` "Not in a cloud-synced folder"; there is no permanent-delete warning and no "Capped to" line.
+3. One click on Make online-only approves; when the job ends the card reads "Made online-only 2 items · freed 44.3 GB · details ▸".
+4. Ask "what is in lmstudio": the delete card's first item shows "Copy: identical to lmstudio-community/Llama-3.3-70B-Instruct-GGUF on Hugging Face".
+(2026-10-09: steps 1-4 pass, headless Chromium against the mock; the mascot's move was not watched.)
 
 ### UI-FIRST-RUN: First-run AI setup
 **Applies to:** hoardini-ui, hoardini-server
