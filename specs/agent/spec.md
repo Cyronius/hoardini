@@ -8,7 +8,7 @@ Requirement tests: `specs/agent/tests/agent.rs` (`cargo test -p hoardini-specs -
 **Applies to:** hoardini
 **Verification:** test
 
-No tool the agent can call shall create, change or delete a file. Read tools only read the index, history, memory and file metadata; the `refresh` tool only asks the indexer supervisor. The four `propose_*` tools shall only create a proposal in `pending` state (or return an error); the executor shall run only an approved proposal ID, and the agent has no handle to it.
+No tool the agent can call shall create, change or delete a file. Read tools only read the index, history, memory and file metadata; the `refresh` tool only asks the indexer supervisor. The `propose_*` tools (delete, archive, compress, dedupe, online-only) shall only create a proposal in `pending` state (or return an error); the executor shall run only an approved proposal ID, and the agent has no handle to it.
 
 **Acceptance criteria:**
 - Every tool in `Registry::full()`, called with valid arguments against an indexed temp tree, leaves the tree's listing, sizes, mtimes and file contents unchanged. The test fails when a registered tool has no case in it.
@@ -40,6 +40,19 @@ Every request, for every provider, shall send each occurrence of the user's prof
 - The `top_files` result sent back lists `~\.lmstudio\models\big.gguf`, and the system prompt's index summary uses `~\...`.
 - No AG-UI event of that run contains `zq_owner`.
 - A profile deserialized from stored JSON with `redact_paths: false` runs the same script and still sends `~\.lmstudio\models\big.gguf`, with no `zq_owner` in any request.
+
+### AGENT-PROPOSE-ONLINE-ONLY: A tool for making synced files online-only
+**Applies to:** hoardini
+**Verification:** test
+
+`propose_online_only(paths, reason?)` shall create a pending `online_only` proposal (ACT-ONLINE-ONLY) and pause the run
+like the other `propose_*` tools. Each item's verdict comes from the sync check, never from the model: a `verdict` the
+model passes is dropped. The `reason` becomes the card's summary. The system prompt tells the model to use it, not
+`propose_delete`, for files in a cloud-synced folder. It is not part of the small toolset.
+
+**Acceptance criteria:**
+- Called on an indexed temp file with `verdict: "safe"` and `reason: "cold photos"`: the stored proposal is `online_only`, `pending`, summary "cold photos"; its item is `blocked` "Not in a cloud-synced folder ...", verdict `review`, unticked.
+- `Registry::small()` does not offer it; AGENT-NO-DIRECT covers it (the file stays unchanged).
 
 ### AGENT-APPROVAL-KEYED: Approvals keyed by proposal
 **Applies to:** hoardini
