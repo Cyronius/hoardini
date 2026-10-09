@@ -122,7 +122,10 @@ fn every_tool_leaves_the_filesystem_unchanged_and_propose_tools_only_create_pend
             "propose_archive",
             json!({"paths": [file], "destination": "nas"}),
         ),
-        ("propose_compress", json!({"path": blob, "format": "zip"})),
+        (
+            "propose_compress",
+            json!({"paths": [blob], "format": "zip"}),
+        ),
         (
             "propose_dedupe",
             json!({"group": 1, "keep": blob, "mode": "hardlink"}),

@@ -61,6 +61,39 @@ fn in_place_compression_of_a_folder_reports_the_allocation_it_saved() {
     assert_eq!(job.freed_bytes as u64, before - after);
 }
 
+// Traces: ACT-COMPRESS-VERIFY
+#[test]
+fn one_lzx_card_compresses_several_folders_each_on_its_own() {
+    let fx = Fx::new();
+    let a = fx.file(r"games\one\data.txt", &text_blob(3 << 20));
+    let b = fx.file(r"games\two\sub\data.txt", &text_blob(2 << 20));
+    let (one, two) = (fx.work.join(r"games\one"), fx.work.join(r"games\two"));
+    let (a0, b0) = (alloc(&a), alloc(&b));
+    let ex = fx.executor();
+    let p = compress_proposal(&fx, &[&one, &two], "lzx");
+    assert_eq!(p.items.len(), 2);
+    let job = wait(&ex, &ex.approve(&p.id, &ids(&p)).unwrap().job_id);
+    assert_eq!(job.status, "done", "{:?}", job.error);
+    assert!(fx.get(&p.id).items.iter().all(|i| i.status == "done"));
+    let (a1, b1) = (alloc(&a), alloc(&b));
+    assert!(a1 < a0 / 2 && b1 < b0 / 2, "{a0}->{a1}, {b0}->{b1}");
+    assert_eq!(std::fs::read(&a).unwrap(), text_blob(3 << 20));
+    let freed: Vec<(String, i64)> = fx
+        .db
+        .conn()
+        .unwrap()
+        .prepare("SELECT path, freed_bytes FROM action WHERE kind = 'compress' ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        freed,
+        vec![(s(&one), (a0 - a1) as i64), (s(&two), (b0 - b1) as i64)]
+    );
+}
+
 // Traces: ACT-ARCHIVE-VERIFY
 #[test]
 fn a_folder_that_gains_a_file_during_the_copy_is_kept_whole() {

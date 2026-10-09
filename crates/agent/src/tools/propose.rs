@@ -53,7 +53,16 @@ fn one_line(s: Option<&str>) -> Option<String> {
 }
 
 fn items(ctx: &ToolCtx, a: &PathsArgs) -> Result<Vec<NewItem>, ToolError> {
-    let entries: Vec<&Entry> = match &a.paths {
+    entry_items(ctx, &a.paths, a.verdict.as_deref(), a.reason.as_deref())
+}
+
+fn entry_items(
+    ctx: &ToolCtx,
+    paths: &Entries,
+    verdict_all: Option<&str>,
+    reason_all: Option<&str>,
+) -> Result<Vec<NewItem>, ToolError> {
+    let entries: Vec<&Entry> = match paths {
         Entries::Many(v) => v.iter().collect(),
         Entries::One(e) => vec![e],
     };
@@ -73,8 +82,8 @@ fn items(ctx: &ToolCtx, a: &PathsArgs) -> Result<Vec<NewItem>, ToolError> {
             };
             Ok(NewItem {
                 path: abs_path(ctx, path)?,
-                verdict: verdict(v.or(a.verdict.as_deref())),
-                reason: one_line(r.or(a.reason.as_deref())),
+                verdict: verdict(v.or(verdict_all)),
+                reason: one_line(r.or(reason_all)),
             })
         })
         .collect()
@@ -221,7 +230,8 @@ const FORMATS: [&str; 5] = ["zip", "7z", "tar.zst", "lzx", "lznt1"];
 
 #[derive(Deserialize)]
 struct CompressArgs {
-    path: String,
+    #[serde(alias = "path")]
+    paths: Entries,
     format: String,
     #[serde(default, deserialize_with = "opt_string")]
     verdict: Option<String>,
@@ -235,14 +245,14 @@ impl Tool for ProposeCompress {
     }
 
     fn description(&self) -> &'static str {
-        "Propose compressing a file or folder: into an archive (zip, 7z, tar.zst; originals deleted after a test) or in place (lzx for read-only data, lznt1 for data that changes). Shows the user a card; stop after calling it."
+        "Propose compressing files or folders: into archives (zip, 7z, tar.zst; originals deleted after a test) or in place (lzx for read-only data, lznt1 for data that changes). Several folders can share one card. Shows the user a card; stop after calling it."
     }
 
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": with(json!({
-            "path": {"type": "string"},
+            "paths": path_schema(),
             "format": {"type": "string", "enum": FORMATS}
-        }), common_props()), "required": ["path", "format"]})
+        }), common_props()), "required": ["paths", "format"]})
     }
 
     fn kind(&self) -> Kind {
@@ -263,13 +273,9 @@ impl Tool for ProposeCompress {
                 a.format
             )));
         }
-        let item = NewItem {
-            path: abs_path(ctx, &a.path)?,
-            verdict: verdict(a.verdict.as_deref()),
-            reason: one_line(a.reason.as_deref()),
-        };
+        let items = entry_items(ctx, &a.paths, a.verdict.as_deref(), a.reason.as_deref())?;
         let s = one_line(a.reason.as_deref()).unwrap_or_else(|| format!("Compress with {format}"));
-        let mut req = new_proposal(ctx, ProposalKind::Compress, s, vec![item]);
+        let mut req = new_proposal(ctx, ProposalKind::Compress, s, items);
         req.format = Some(format);
         submit(ctx, req)
     }

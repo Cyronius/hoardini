@@ -1,7 +1,7 @@
 # Actions, destinations, journal (prefix ACT)
 
 The executor runs approved proposals as background jobs. Canonical design: `.claude/plans/hoardini-design.md` §5.6.
-Code: `crates/core/src/{actions,destinations}`. Tests: `specs/act/tests/act.rs`.
+Code: `crates/core/src/{actions,destinations,compress}`. Tests: `specs/act/tests/act.rs` and its modules.
 
 ## Model
 
@@ -31,6 +31,7 @@ SMB UNC path), compress, dedupe.
   (`compact /c /exe:lzx`, for data that is not written to again) and `lznt1` (`compact /c`) run `compact.exe` in place with
   no console window (undo = `compact /u`); a folder holding a link, reparse point, or cloud-only file fails up front too,
   because `compact /s` would follow the link. Freed bytes = allocation before minus after (WOF files measured by handle).
+  One card may hold several files or folders (`propose_compress` takes `paths`); each item runs and is journaled on its own.
 - **Dedupe**: items are the extra copies; `keep` (from the proposal) is never listed, opened for write, or changed.
   `hardlink` (same volume only) hashes keep and extra in full at execution, creates the link under a temp name beside
   the extra, then renames it over the extra; `delete` removes the extra. Candidates come from `core::dupes`: same
@@ -163,6 +164,36 @@ weights) shall report ratio 1.0 without being compressed.
 - A 4 MiB file of zeros: every format's ratio is below 0.1 and savings exceed 3 MiB.
 - A `.mp4`-named random file is flagged `already_compressed`, samples 0 bytes, and every format reports ratio 1.0 and 0 saved.
 
+### ACT-COMPRESS-CANDIDATES: Folders worth compressing in place are found from the index
+**Applies to:** hoardini
+**Verification:** test
+
+`compress::candidates(conn, env, root, now)` shall list folders under `root` of at least 2 GiB allocated (`MIN_FOLDER`),
+biggest first, that compressing in place can help, using only the index: walking down from `root` through folders of
+at least 2 GiB, a folder with two or more such children, or one child holding at least 90% of it, is opened instead of
+listed; a deny-listed folder (POLICY-DENY) is opened too; a folder whose catalog category gets a delete card instead
+(cache, browser, package or installer cache, build output, temp, crash dumps, Windows leftovers, system, VM disk,
+downloads) is skipped with everything under it. Any other folder is listed unless one of these holds, in which case its
+children are tried instead: something in it (a folder or a file row) was modified in the last 30 days (`QUIET_DAYS`;
+writes undo WOF compression); it holds a link or a cloud-only file; the folder has the NTFS compressed attribute; half or
+more of its file-row bytes are already NTFS-compressed or allocated under 90% of their size (WOF hides its tag from
+listings); half or more of its bytes (INDEX-EXT-MIX) are media, archive, package or quantized-weight types; or it holds a
+virtual disk (`vhdx`, `vhd`, `avhdx`, `vmdk`, `vdi`, `qcow2`), which WSL and Hyper-V refuse to run compressed. At most
+400 folders are examined per call.
+
+Each candidate carries the cached `lzx` estimate (`compress_estimate` table, schema v6) while its size and newest
+modification time are unchanged. `compress::estimate_top(db, candidates, limit)` runs `compress::estimate`
+(ACT-COMPRESS-ESTIMATE) for the first `limit` candidates without a current estimate and stores each; the review runs it
+for the top 10 (`ESTIMATE_TOP`) on a background thread (`compress::spawn_estimates`). A candidate is proposable when
+the estimate saves at least 1 GiB and at least 20% of its size (`compress::proposable(saved, logical)`); the card is an
+in-place `lzx` compress of those folders. Tests: `specs/act/tests/candidates.rs`.
+
+**Acceptance criteria:**
+- On a fake `C:\` (now = a year after the files were written): `steamapps\common\GameB` (4.1 GiB), `C:\data\corpus` (3.5 GiB), `C:\Users\me\Datasets\set`, `steamapps\common\GameA` (3 GiB each), and `C:\proj\old` (2.5 GiB) are listed in that order, and nothing else: not a folder with a file touched 5 days ago, not one allocated at 5 of 8 GiB, not one with the NTFS compressed attribute, not one holding a junction, not one of `.mp4` files, not a 1 GiB folder, not the folder holding `disk.vhdx`, not `C:\Windows\big`, not a folder under `%TEMP%`, and not `C:\games`, `steamapps`, `common`, `C:\data`, or `C:\proj` (whose newest file is a day old) themselves.
+- A stored estimate for `C:\data\corpus` at its size and newest time rides along (2 GiB saved: proposable); one stored at a different size does not.
+- `proposable`: 1 GiB of 5 GiB, and 2 GiB of 10 GiB, are; 1 GiB − 1 byte of 4 GiB, 1.5 GiB of 8 GiB, and 2 GiB − 1 byte of 10 GiB are not.
+- `estimate_top` with limit 1 over two 4 MiB text folders estimates only the first (saved over 2 MiB, ratio under 0.5); a second call estimates nothing; limit 2 estimates the second; a changed newest time estimates the first again.
+
 ### ACT-COMPRESS-VERIFY: Originals go only after the archive tests clean
 **Applies to:** hoardini
 **Verification:** test
@@ -176,6 +207,7 @@ partial file. An in-place compress shall leave content identical and reduce allo
 - When each finished archive is damaged before its test, the job fails, the file and folder are byte-identical to before, no archive or `.hoardini-partial` exists, and 0 bytes are freed.
 - `lzx` and `lznt1` on a 4 MiB text file: content is identical, allocation after is under half of before, `freed_bytes` equals the difference, and the journaled undo is a `compact /u` command.
 - `lzx` on a folder of text files: `freed_bytes` equals the files' allocation before minus after.
+- One `lzx` card holding two folders: both items end `done`, each folder's files shrink below half their allocation with content unchanged, and each item's action row carries its own folder's saving.
 - `lzx` and `lznt1` on a folder holding a junction to another folder: the item fails naming the link, and neither the junction's target nor the folder's own files change allocation.
 
 ### ACT-DEDUPE-VERIFY: Duplicates are removed only after a fresh full-hash match
