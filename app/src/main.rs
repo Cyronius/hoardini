@@ -30,6 +30,52 @@ impl DialogProvider for TauriDialogs {
 
 struct Shutdown(Mutex<Option<tokio::sync::oneshot::Sender<()>>>);
 
+// The host must tell WebView2 it is hidden: that makes the page hidden (the UI closes its stream) and lets it trim memory.
+#[cfg(windows)]
+fn set_webview_hidden(w: &tauri::WebviewWindow, hidden: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+        ICoreWebView2_19,
+    };
+    use windows_core::Interface;
+    let _ = w.with_webview(move |wv| {
+        let controller = wv.controller();
+        let level = if hidden {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+        } else {
+            COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+        };
+        unsafe {
+            if hidden {
+                let _ = controller.SetIsVisible(false);
+            }
+            if let Ok(core) = controller.CoreWebView2()
+                && let Ok(core) = core.cast::<ICoreWebView2_19>()
+            {
+                let _ = core.SetMemoryUsageTargetLevel(level);
+            }
+            if !hidden {
+                let _ = controller.SetIsVisible(true);
+            }
+        }
+    });
+}
+
+#[cfg(windows)]
+fn track_minimize(w: &tauri::WebviewWindow) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let hidden = AtomicBool::new(false);
+    let win = w.clone();
+    w.on_window_event(move |e| {
+        if let tauri::WindowEvent::Resized(_) = e {
+            let now = win.is_minimized().unwrap_or(false) || !win.is_visible().unwrap_or(true);
+            if hidden.swap(now, Ordering::SeqCst) != now {
+                set_webview_hidden(&win, now);
+            }
+        }
+    });
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     // Must precede any Tauri/webview init: the server spawns this exe as the indexer child.
@@ -72,12 +118,14 @@ fn main() {
             };
             let url = server.url().parse()?;
             app.manage(Shutdown(Mutex::new(Some(server.shutdown))));
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                 .title("Hoardini")
                 .inner_size(1000.0, 820.0)
                 .min_inner_size(720.0, 560.0)
                 .center()
                 .build()?;
+            #[cfg(windows)]
+            track_minimize(&window);
             Ok(())
         })
         .build(tauri::generate_context!())

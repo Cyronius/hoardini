@@ -4,8 +4,8 @@ use rusqlite::{Connection, OptionalExtension};
 use super::lister::{DirLister, list_fixed};
 use super::writer::{Dedupe, Delta, Work, Writer, contrib, load_chain};
 use super::{
-    KIND_DIR, NodeInfo, node_by_path, node_id_by_path, normalize_path, split_parent,
-    threshold_setting, to_u64,
+    DEFAULT_THRESHOLD, KIND_DIR, NodeInfo, node_by_path, node_id_by_path, normalize_path,
+    split_parent, to_u64,
 };
 
 struct Target {
@@ -20,10 +20,7 @@ fn target_of(conn: &Connection, node_id: i64) -> Result<Target> {
         [node_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
-    let threshold = match threshold {
-        Some(t) => to_u64(t),
-        None => threshold_setting(conn)?,
-    };
+    let threshold = threshold.map_or(DEFAULT_THRESHOLD, to_u64);
     Ok(Target {
         volume_id,
         generation,

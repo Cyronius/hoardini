@@ -35,7 +35,22 @@ fn opts(workers: usize) -> RefreshOptions<'static> {
 }
 
 fn run(e: &Env, lister: &dyn DirLister, root: &str, workers: usize) -> RefreshOutcome {
-    let out = refresh(&e.db.conn().unwrap(), lister, root, &opts(workers)).unwrap();
+    run_at(e, lister, root, workers, None)
+}
+
+// `threshold` stands in for `hoardini index --threshold`, the only override of the fixed 1 MiB.
+fn run_at(
+    e: &Env,
+    lister: &dyn DirLister,
+    root: &str,
+    workers: usize,
+    threshold: Option<u64>,
+) -> RefreshOutcome {
+    let o = RefreshOptions {
+        threshold,
+        ..opts(workers)
+    };
+    let out = refresh(&e.db.conn().unwrap(), lister, root, &o).unwrap();
     assert!(out.completed);
     out
 }
@@ -43,10 +58,7 @@ fn run(e: &Env, lister: &dyn DirLister, root: &str, workers: usize) -> RefreshOu
 fn fresh(fs: &FakeFs, threshold: Option<u64>) -> Vec<SnapRow> {
     let e = env();
     let conn = e.db.conn().unwrap();
-    if let Some(t) = threshold {
-        index::set_threshold_setting(&conn, t).unwrap();
-    }
-    run(&e, fs, fs.root(), 3);
+    run_at(&e, fs, fs.root(), 3, threshold);
     snapshot(&conn, fs.root()).unwrap()
 }
 
@@ -382,24 +394,26 @@ fn small_files_fold_into_parents_and_totals_add_up() {
 
 // Traces: INDEX-THRESHOLD
 #[test]
-fn threshold_defaults_to_1_mib_and_changes_apply_at_next_refresh() {
+fn threshold_is_a_fixed_1_mib_and_an_override_applies_to_one_refresh() {
     let fs = sample_tree();
     fs.file(r"C:\edge\exact.bin", MIB);
     fs.file_alloc(r"C:\edge\below.bin", MIB - 4096, MIB - 1);
     let e = env();
     let conn = e.db.conn().unwrap();
+    hoardini_core::store::set_meta(&conn, "threshold_bytes", &(64 * KIB).to_string()).unwrap();
     run(&e, &fs, r"C:\", 2);
     let st = index::index_status(&conn, Some(r"C:\")).unwrap().unwrap();
-    assert_eq!(st.threshold_bytes, Some(MIB));
+    assert_eq!(st.threshold_bytes, Some(MIB), "a leftover setting is ignored");
     assert!(node_by_path(&conn, r"C:\edge\exact.bin").unwrap().is_some());
     assert!(node_by_path(&conn, r"C:\edge\below.bin").unwrap().is_none());
 
-    for t in [64 * KIB, 4 * MIB, MIB] {
-        index::set_threshold_setting(&conn, t).unwrap();
-        run(&e, &fs, r"C:\", 2);
-        assert_same(&snapshot(&conn, r"C:\").unwrap(), &fresh(&fs, Some(t)));
+    for t in [Some(64 * KIB), Some(4 * MIB), None] {
+        run_at(&e, &fs, r"C:\", 2, t);
+        assert_same(&snapshot(&conn, r"C:\").unwrap(), &fresh(&fs, t));
         assert_consistent(&e);
     }
+    let st = index::index_status(&conn, Some(r"C:\")).unwrap().unwrap();
+    assert_eq!(st.threshold_bytes, Some(MIB));
 }
 
 fn mutate_round_one(fs: &FakeFs) {

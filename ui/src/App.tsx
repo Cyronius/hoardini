@@ -25,12 +25,47 @@ function useLiveStatus() {
   const generation = useStore((s) => s.status?.index.generation);
   const lastRefresh = useStore((s) => s.status?.index.last_refresh_ms);
 
+  // The server runs timed work only while someone looks; a hidden page also drops its stream (SRV-PRESENCE).
   useEffect(() => {
+    let sent: boolean | null = null;
+    const post = (force = false) => {
+      const looking = !document.hidden && document.hasFocus();
+      if (!force && looking === sent) return;
+      sent = looking;
+      routes.presence(looking).catch(() => {
+        sent = null;
+      });
+    };
+    let stop: (() => void) | null = null;
+    // A reconnected stream starts the server at "not looking", so say it again.
+    const onState = (connected: boolean) => {
+      setConnected(connected);
+      if (connected) post(true);
+    };
+    const sync = () => {
+      if (document.hidden) {
+        stop?.();
+        stop = null;
+      } else if (!stop) {
+        stop = streamStatus(apply, onState);
+      }
+      post();
+    };
+    const onFocus = () => post();
     routes
       .status()
       .then((st) => apply({ type: "status", ...st }))
       .catch(() => {});
-    return streamStatus(apply, setConnected);
+    sync();
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onFocus);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onFocus);
+      document.removeEventListener("visibilitychange", sync);
+      stop?.();
+    };
   }, [apply, setConnected]);
 
   useEffect(() => {

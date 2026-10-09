@@ -15,8 +15,8 @@ use super::lister::{DirLister, list_fixed};
 use super::walk::root_alloc;
 use super::writer::{Chain, Dedupe, Delta, Work, Writer, classify, load_chain};
 use super::{
-    Event, FLAG_DENIED, FileId, KIND_DIR, KIND_FILE, Progress, RefreshOptions, RefreshOutcome,
-    is_ancestor_path, join_path, normalize_path, path_of, refresh, split_parent, threshold_setting,
+    DEFAULT_THRESHOLD, Event, FLAG_DENIED, FileId, KIND_DIR, KIND_FILE, Progress, RefreshOptions,
+    RefreshOutcome, is_ancestor_path, join_path, normalize_path, path_of, refresh, split_parent,
     to_i64, to_u64,
 };
 use crate::history::{self, ScanRecord};
@@ -218,10 +218,7 @@ fn threshold_changed(conn: &Connection, root: &str, over: Option<u64>) -> Result
         )
         .optional()?
         .flatten();
-    let want = match over {
-        Some(t) => t,
-        None => threshold_setting(conn)?,
-    };
+    let want = over.unwrap_or(DEFAULT_THRESHOLD);
     Ok(stored.is_some_and(|s| to_u64(s) != want))
 }
 

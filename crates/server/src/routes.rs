@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::state::{ApiError, ApiResult, AppState, blocking, parse};
+use crate::supervisor::index_speed;
 use crate::{builtin, providers, rclone, status, stream};
 
 pub struct Entry {
@@ -79,6 +80,7 @@ fn entries() -> Vec<Entry> {
         get_("/api/status", status::get_status),
         get_("/api/status/stream", stream::status_stream),
         post_("/api/index/refresh", index_refresh),
+        post_("/api/presence", presence),
         get_("/api/index/summary", index_summary),
         post_("/api/agent/run", stream::agent_run),
         post_("/api/agent/runs/{run_id}/cancel", stream::cancel_run),
@@ -150,18 +152,25 @@ pub fn api_router() -> Router<AppState> {
         .fold(Router::new(), |r, (p, mr)| r.route(p, mr))
 }
 
-#[derive(Deserialize)]
-struct RefreshBody {
-    mode: String,
-}
-
-async fn index_refresh(State(s): State<AppState>, body: Bytes) -> ApiResult {
-    let b: RefreshBody = parse(&body)?;
+async fn index_refresh(State(s): State<AppState>) -> ApiResult {
+    let st = s.clone();
+    let mode = blocking(move || Ok(st.supervisor.auto_mode())).await?;
     let started = s
         .supervisor
-        .start_refresh(&b.mode)
+        .start_refresh(mode)
         .map_err(|e| ApiError::bad(e.to_string()))?;
     Ok(Json(json!({"started": started})))
+}
+
+#[derive(Deserialize)]
+struct PresenceBody {
+    looking: bool,
+}
+
+async fn presence(State(s): State<AppState>, body: Bytes) -> ApiResult {
+    let b: PresenceBody = parse(&body)?;
+    s.supervisor.set_looking(b.looking);
+    Ok(Json(json!({"ok": true})))
 }
 
 async fn index_summary(State(s): State<AppState>) -> ApiResult {
@@ -536,14 +545,6 @@ fn meta_u64(conn: &rusqlite::Connection, key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-fn meta_bool(conn: &rusqlite::Connection, key: &str, default: bool) -> bool {
-    match get_meta(conn, key).ok().flatten().as_deref().map(str::trim) {
-        Some("true" | "1") => true,
-        Some("false" | "0") => false,
-        _ => default,
-    }
-}
-
 fn settings_value(s: &AppState) -> anyhow::Result<Value> {
     let conn = s.db.conn()?;
     let size = |p: std::path::PathBuf| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
@@ -551,11 +552,7 @@ fn settings_value(s: &AppState) -> anyhow::Result<Value> {
     let mut wal = db.clone().into_os_string();
     wal.push("-wal");
     Ok(json!({
-        "threshold_bytes": meta_u64(&conn, "threshold_bytes", index::DEFAULT_THRESHOLD),
-        "redact_paths": meta_bool(&conn, "redact_paths", true),
-        "web_search_enabled": meta_bool(&conn, "web_search_enabled", false),
-        "indexer_workers": meta_u64(&conn, "indexer_workers", 2),
-        "indexer_memory_cap_mb": meta_u64(&conn, "indexer_memory_cap_mb", 256),
+        "index_speed": index_speed(&conn),
         "builtin_idle_minutes": meta_u64(&conn, "builtin_idle_minutes", 10),
         "index_size_bytes": size(db) + size(wal.into()),
     }))
@@ -567,37 +564,43 @@ async fn settings_get(State(s): State<AppState>) -> ApiResult {
 
 async fn settings_put(State(s): State<AppState>, body: Bytes) -> ApiResult {
     let patch: Map<String, Value> = parse(&body)?;
+    let mut writes: Vec<(&'static str, String)> = Vec::new();
+    for (k, v) in &patch {
+        match k.as_str() {
+            "index_speed" => {
+                let sp = v
+                    .as_str()
+                    .filter(|x| matches!(*x, "lean" | "fast"))
+                    .ok_or_else(|| ApiError::bad("index_speed must be \"lean\" or \"fast\""))?;
+                writes.push(("index_speed", sp.to_string()));
+            }
+            "builtin_idle_minutes" => {
+                let n = v.as_u64().ok_or_else(|| {
+                    ApiError::bad("builtin_idle_minutes must be a non-negative integer")
+                })?;
+                writes.push(("builtin_idle_minutes", n.to_string()));
+            }
+            _ => {}
+        }
+    }
+    let speed = writes
+        .iter()
+        .find(|(k, _)| *k == "index_speed")
+        .map(|(_, v)| v.clone());
     let res = blocking({
         let s = s.clone();
         move || {
             let conn = s.db.conn()?;
-            for (k, v) in &patch {
-                match k.as_str() {
-                    "redact_paths" | "web_search_enabled" => {
-                        let b = v
-                            .as_bool()
-                            .ok_or_else(|| ApiError::bad(format!("{k} must be a boolean")))?;
-                        set_meta(&conn, k, &b.to_string())?;
-                    }
-                    "threshold_bytes"
-                    | "indexer_workers"
-                    | "indexer_memory_cap_mb"
-                    | "builtin_idle_minutes" => {
-                        let n = v.as_u64().ok_or_else(|| {
-                            ApiError::bad(format!("{k} must be a non-negative integer"))
-                        })?;
-                        if n == 0 && k != "builtin_idle_minutes" {
-                            return Err(ApiError::bad(format!("{k} must be at least 1")));
-                        }
-                        set_meta(&conn, k, &n.to_string())?;
-                    }
-                    _ => {}
-                }
+            for (k, v) in &writes {
+                set_meta(&conn, k, v)?;
             }
             Ok(Json(settings_value(&s)?))
         }
     })
     .await?;
+    if let Some(sp) = speed {
+        s.supervisor.speed_changed(&sp);
+    }
     s.bump();
     Ok(res)
 }

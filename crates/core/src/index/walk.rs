@@ -16,7 +16,7 @@ use super::dedupe::SeenSet;
 use super::journal::JournalSource;
 use super::lister::{DirLister, list_fixed};
 use super::writer::{Chain, Dedupe, Work, Writer, load_chain};
-use super::{KIND_DIR, bulk_indexes, normalize_path, threshold_setting, to_i64, to_u64};
+use super::{DEFAULT_THRESHOLD, KIND_DIR, bulk_indexes, normalize_path, to_i64, to_u64};
 use crate::history::{self, ScanRecord};
 use crate::store::now_ms;
 
@@ -439,10 +439,7 @@ fn walk_volume(
     let t0 = Instant::now();
     let root = normalize_path(root);
     let vinfo = lister.volume_info(Path::new(&root)).ok();
-    let threshold = match opts.threshold {
-        Some(t) => t,
-        None => threshold_setting(conn)?,
-    };
+    let threshold = opts.threshold.unwrap_or(DEFAULT_THRESHOLD);
     // Queried before the walk so changes made while it runs are replayed by the next journal refresh.
     let position = opts.journal.and_then(|j| j.query().ok());
     let begin = begin_generation(conn, &root, vinfo.as_ref())?;

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use hoardini_agent::run::IndexControl;
 use hoardini_core::index;
 use hoardini_core::store::{Db, get_meta};
+use rusqlite::Connection;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -33,6 +34,12 @@ impl State {
     }
 }
 
+#[derive(Default)]
+struct Presence {
+    posted: bool,
+    streams: usize,
+}
+
 pub struct Supervisor {
     db: Db,
     exe: PathBuf,
@@ -42,7 +49,10 @@ pub struct Supervisor {
     change: Arc<watch::Sender<u64>>,
     rt: tokio::runtime::Handle,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    // Exists only while someone is looking, so an unwatched app has no timer at all.
     timer: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    journal_on: AtomicBool,
+    presence: Mutex<Presence>,
     // Children join this job so a hard-killed server cannot orphan an indexer.
     job: Option<hoardini_win::KillOnCloseJob>,
     me: Weak<Supervisor>,
@@ -59,6 +69,37 @@ fn norm_mode(mode: &str) -> Option<&'static str> {
         "background" => Some("background"),
         "fast" => Some("fast"),
         _ => None,
+    }
+}
+
+// The Fast / Lean switch; Lean runs the indexer in background mode.
+pub fn index_speed(conn: &Connection) -> &'static str {
+    match get_meta(conn, "index_speed").ok().flatten().as_deref().map(str::trim) {
+        Some("fast") => "fast",
+        _ => "lean",
+    }
+}
+
+// Time until the next journal refresh is due; an index that never completed is due now.
+pub fn journal_wait(age: Option<Duration>, every: Duration) -> Duration {
+    age.map_or(Duration::ZERO, |a| every.saturating_sub(a))
+}
+
+// Held by each open status stream; the last one closing counts as nobody looking.
+pub struct Watcher(Weak<Supervisor>);
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        let Some(sup) = self.0.upgrade() else {
+            return;
+        };
+        if let Ok(mut p) = sup.presence.lock() {
+            p.streams = p.streams.saturating_sub(1);
+            if p.streams == 0 {
+                p.posted = false;
+            }
+        }
+        sup.reschedule();
     }
 }
 
@@ -99,6 +140,8 @@ impl Supervisor {
             rt,
             task: Mutex::new(None),
             timer: Mutex::new(None),
+            journal_on: AtomicBool::new(false),
+            presence: Mutex::new(Presence::default()),
             job,
             me: me.clone(),
         })
@@ -139,6 +182,52 @@ impl Supervisor {
             *t = Some(handle);
         }
         Ok(())
+    }
+
+    // The very first full scan always runs fast; after that the Fast / Lean switch decides.
+    pub fn auto_mode(&self) -> &'static str {
+        let Ok(conn) = self.db.conn() else {
+            return "background";
+        };
+        let never = index::index_status(&conn, None)
+            .ok()
+            .flatten()
+            .is_none_or(|s| s.last_refresh_ms.is_none());
+        if never || index_speed(&conn) == "fast" {
+            "fast"
+        } else {
+            "background"
+        }
+    }
+
+    // Fast takes over a Lean refresh; Lean during a Fast one lets it finish.
+    pub fn speed_changed(&self, speed: &str) -> bool {
+        if speed != "fast" {
+            return false;
+        }
+        let Ok(mut st) = self.state.lock() else {
+            return false;
+        };
+        if !st.refreshing {
+            return false;
+        }
+        if st.queued.is_some() {
+            st.queued = Some("fast");
+            st.mode = Some("fast");
+            drop(st);
+            self.bump();
+            return true;
+        }
+        // Killing a journal refresh would force the next one to be full; it is short, so it finishes.
+        if st.quiet_since.is_some() || st.mode != Some("background") {
+            return false;
+        }
+        st.mode = Some("fast");
+        drop(st);
+        self.want_fast.store(true, Ordering::SeqCst);
+        self.switch.notify_one();
+        self.bump();
+        true
     }
 
     pub fn start_refresh(&self, mode: &str) -> anyhow::Result<bool> {
@@ -183,6 +272,7 @@ impl Supervisor {
     }
 
     fn start_quiet_journal(&self) {
+        let mode = self.auto_mode();
         let Ok(mut st) = self.state.lock() else {
             return;
         };
@@ -191,43 +281,96 @@ impl Supervisor {
         }
         *st = State {
             refreshing: true,
-            mode: Some("background"),
+            mode: Some(mode),
             quiet_since: Some(Instant::now()),
             ..State::default()
         };
         drop(st);
-        if let Err(e) = self.spawn_run("background", "journal") {
+        if let Err(e) = self.spawn_run(mode, "journal") {
             tracing::warn!(error = %e, "journal refresh did not start");
         }
     }
 
-    // While the app is open the change journal keeps the index current between full refreshes.
-    pub fn start_journal_timer(&self) {
+    fn journal_every(&self) -> Duration {
+        let s = self
+            .db
+            .conn()
+            .ok()
+            .and_then(|c| get_meta(&c, "journal_every_s").ok().flatten())
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|s| *s > 0)
+            .unwrap_or(JOURNAL_EVERY_S);
+        Duration::from_secs(s)
+    }
+
+    fn index_age(&self) -> Option<Duration> {
+        let conn = self.db.conn().ok()?;
+        let age = index::index_status(&conn, None).ok()??.age_ms?;
+        Some(Duration::from_millis(u64::try_from(age).unwrap_or(0)))
+    }
+
+    // The change journal keeps the index current between full refreshes, but only while someone looks.
+    pub fn enable_journal(&self) {
+        self.journal_on.store(true, Ordering::SeqCst);
+        self.reschedule();
+    }
+
+    pub fn set_looking(&self, looking: bool) {
+        if let Ok(mut p) = self.presence.lock() {
+            p.posted = looking;
+        }
+        self.reschedule();
+    }
+
+    pub fn watch(&self) -> Watcher {
+        if let Ok(mut p) = self.presence.lock() {
+            p.streams += 1;
+        }
+        self.reschedule();
+        Watcher(self.me.clone())
+    }
+
+    fn looking(&self) -> bool {
+        self.presence
+            .lock()
+            .is_ok_and(|p| p.posted && p.streams > 0)
+    }
+
+    // Only the timer stops when nobody looks; a refresh it already started runs to the end.
+    fn reschedule(&self) {
+        let Ok(mut t) = self.timer.lock() else {
+            return;
+        };
+        let want = self.journal_on.load(Ordering::SeqCst) && self.looking();
+        let running = t.as_ref().is_some_and(|h| !h.is_finished());
+        if want && !running {
+            *t = Some(self.spawn_journal_timer());
+        } else if !want && let Some(h) = t.take() {
+            h.abort();
+        }
+    }
+
+    fn spawn_journal_timer(&self) -> tokio::task::JoinHandle<()> {
         let me = self.me.clone();
-        let db = self.db.clone();
-        let handle = self.rt.spawn(async move {
+        self.rt.spawn(async move {
             loop {
-                let every = db
-                    .conn()
-                    .ok()
-                    .and_then(|c| get_meta(&c, "journal_every_s").ok().flatten())
-                    .and_then(|v| v.trim().parse::<u64>().ok())
-                    .filter(|s| *s > 0)
-                    .unwrap_or(JOURNAL_EVERY_S);
-                tokio::time::sleep(Duration::from_secs(every)).await;
                 let Some(sup) = me.upgrade() else {
                     break;
                 };
-                sup.start_quiet_journal();
+                let every = sup.journal_every();
+                let wait = journal_wait(sup.index_age(), every);
+                if wait.is_zero() {
+                    sup.start_quiet_journal();
+                }
+                drop(sup);
+                tokio::time::sleep(if wait.is_zero() { every } else { wait }).await;
             }
-        });
-        if let Ok(mut t) = self.timer.lock() {
-            *t = Some(handle);
-        }
+        })
     }
 
     // Aborting the task drops the child handle, and kill_on_drop ends the process.
     pub fn shutdown(&self) {
+        self.journal_on.store(false, Ordering::SeqCst);
         for slot in [&self.timer, &self.task] {
             if let Ok(mut t) = slot.lock()
                 && let Some(h) = t.take()

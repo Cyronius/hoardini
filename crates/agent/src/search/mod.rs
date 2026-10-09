@@ -4,7 +4,7 @@ mod sanitize;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use hoardini_core::store::{Db, get_meta, now_ms};
+use hoardini_core::store::{Db, now_ms};
 use hoardini_core::vault::SecretStore;
 use rusqlite::{Connection, OptionalExtension, params};
 use secrecy::ExposeSecret;
@@ -265,13 +265,9 @@ pub fn configured(
     )))
 }
 
+// Setting up a provider is the opt-in; deactivating or removing it is the off switch.
 pub fn enabled(conn: &Connection) -> bool {
-    let on = get_meta(conn, "web_search_enabled")
-        .ok()
-        .flatten()
-        .is_some_and(|v| matches!(v.trim(), "true" | "1"));
-    on && conn
-        .query_row(
+    conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM search_provider WHERE is_active = 1)",
             [],
             |r| r.get::<_, bool>(0),

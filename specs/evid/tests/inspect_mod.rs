@@ -29,13 +29,13 @@ impl Fx {
     }
 
     fn index(&self, root: &Path) {
-        index::set_threshold_setting(&self.db.conn().unwrap(), 1).unwrap();
         let out = index::refresh(
             &self.db.conn().unwrap(),
             &WinLister,
             &root.to_string_lossy(),
             &RefreshOptions {
                 workers: 2,
+                threshold: Some(1),
                 ..RefreshOptions::default()
             },
         )

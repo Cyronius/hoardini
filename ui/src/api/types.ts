@@ -88,7 +88,6 @@ export type ProviderConfig = {
   timeout_s: number;
   max_tool_steps: number;
   small: boolean;
-  redact_paths: boolean;
   params: { temperature?: number; max_tokens?: number; top_p?: number };
   headers: Record<string, string>;
   extra_body: Record<string, unknown>;
@@ -145,12 +144,9 @@ export type HistoryPoint = {
   indexed_bytes: number;
 };
 
+export type IndexSpeed = "lean" | "fast";
 export type Settings = {
-  threshold_bytes: number;
-  redact_paths: boolean;
-  web_search_enabled: boolean;
-  indexer_workers: number;
-  indexer_memory_cap_mb: number;
+  index_speed: IndexSpeed;
   builtin_idle_minutes: number;
   index_size_bytes: number;
 };

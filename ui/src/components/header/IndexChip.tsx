@@ -2,8 +2,7 @@ import { useState } from "react";
 import { routes } from "../../api/client";
 import { humanAge } from "../../format";
 import { useStore } from "../../store";
-import { IconButton } from "../IconButton";
-import { LeafIcon, RefreshIcon } from "../icons";
+import { LeafIcon } from "../icons";
 
 export function IndexChip() {
   const idx = useStore((s) => s.status?.index);
@@ -11,9 +10,12 @@ export function IndexChip() {
   if (!idx) return null;
   const refreshing = idx.state === "refreshing";
   const pct = idx.progress?.fraction;
-  const start = (mode: "background" | "fast") => {
+  const rescan = () => {
     setBusy(true);
-    void routes.refresh(mode).finally(() => setBusy(false));
+    routes
+      .refresh()
+      .catch(() => {})
+      .finally(() => setBusy(false));
   };
   const age = idx.last_refresh_ms ? humanAge(Date.now() - idx.last_refresh_ms) : "never";
   return (
@@ -21,7 +23,7 @@ export function IndexChip() {
       {refreshing ? (
         <>
           {idx.mode === "background" && (
-            <span className="text-ok" title="Background mode: low priority, efficiency cores">
+            <span className="text-ok" title="Lean: low priority, efficiency cores">
               <LeafIcon />
             </span>
           )}
@@ -33,24 +35,18 @@ export function IndexChip() {
             />
           </div>
           <span className="tabular-nums">{pct != null ? `${Math.round(pct * 100)}%` : (idx.progress?.phase ?? "")}</span>
-          {idx.mode === "background" && (
-            <button
-              className="rounded-full border border-brass/40 px-2.5 py-0.5 font-bold text-brass hover:bg-brass/10 disabled:opacity-40"
-              disabled={busy}
-              onClick={() => start("fast")}
-            >
-              Scan fast
-            </button>
-          )}
         </>
       ) : (
         <>
           <span>Index {age}</span>
-          <IconButton size="sm" title="Refresh in the background" aria-label="Refresh the index in the background" className="text-muted hover:text-paper" disabled={busy} onClick={() => start("background")}>
-            <RefreshIcon />
-          </IconButton>
-          <button className="rounded-full border border-line px-2.5 py-0.5 font-semibold hover:text-paper disabled:opacity-40" disabled={busy} onClick={() => start("fast")}>
-            Scan fast
+          <button
+            type="button"
+            className="rounded-full border border-line px-2.5 py-0.5 font-semibold hover:text-paper disabled:opacity-40"
+            title="Update the index now, at the Fast / Lean speed set in Settings"
+            disabled={busy}
+            onClick={rescan}
+          >
+            Rescan now
           </button>
         </>
       )}

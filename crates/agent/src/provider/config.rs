@@ -23,9 +23,6 @@ fn d_timeout() -> u64 {
 fn d_steps() -> u32 {
     20
 }
-fn d_true() -> bool {
-    true
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -46,8 +43,6 @@ pub struct ProviderConfig {
     pub max_tool_steps: u32,
     #[serde(default)]
     pub small: bool,
-    #[serde(default = "d_true")]
-    pub redact_paths: bool,
     #[serde(default)]
     pub params: Params,
     #[serde(default)]
@@ -68,7 +63,6 @@ impl ProviderConfig {
             timeout_s: d_timeout(),
             max_tool_steps: d_steps(),
             small: false,
-            redact_paths: true,
             params: Params::default(),
             headers: BTreeMap::new(),
             extra_body: Map::new(),

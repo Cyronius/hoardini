@@ -32,6 +32,7 @@ mod ui;
 pub use providers::config_by_id;
 pub use routes::route_list;
 pub use state::AppState;
+pub use supervisor::journal_wait;
 
 const CSP: &str = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'";
 const BODY_LIMIT: usize = 2 * 1024 * 1024;
@@ -279,7 +280,6 @@ pub async fn start_with_launcher(
         builtin::idle_minutes_from(db.clone()),
         Some(data_root),
     );
-    built_in.start_watchdog();
     let (shutdown_tx, _) = watch::channel(false);
     let state: AppState = Arc::new(state::Inner {
         db: db.clone(),
@@ -305,10 +305,10 @@ pub async fn start_with_launcher(
 
     // --no-refresh also keeps the periodic journal refresh off: the index is left alone.
     if opts.refresh_on_start {
-        if let Err(e) = supervisor.start_refresh("background") {
+        if let Err(e) = supervisor.start_refresh(supervisor.auto_mode()) {
             tracing::warn!(error = %e, "refresh on start failed");
         }
-        supervisor.start_journal_timer();
+        supervisor.enable_journal();
     }
 
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();

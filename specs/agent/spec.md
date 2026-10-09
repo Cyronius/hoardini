@@ -32,14 +32,14 @@ The provider's `api_key` and any `secret://` header value shall be resolved thro
 **Applies to:** hoardini
 **Verification:** test
 
-When the provider profile has `redact_paths` on, every occurrence of the user's profile path in a request (system prompt, index summary, user text, tool results, tool-call arguments, in plain, JSON-escaped or forward-slash spelling) shall be sent as `~`. Tool arguments that use `~` shall expand back to the profile path before a tool runs. Tool results shown in the UI always use `~`.
+Every request, for every provider, shall send each occurrence of the user's profile path (system prompt, index summary, user text, tool results, tool-call arguments, in plain, JSON-escaped or forward-slash spelling) as `~`. There is no setting: the provider profile has no `redact_paths` flag, and a stored profile that still carries one (either value) loads and is redacted anyway. Tool arguments that use `~` shall expand back to the profile path before a tool runs. Tool results shown in the UI always use `~`.
 
 **Acceptance criteria:**
 - With the profile injected as `C:\Users\zq_owner` and an index rooted there, no request body of a run that calls `top_files(under = "~\.lmstudio")` contains `zq_owner` in any case.
 - The user message `What is in C:\Users\zq_owner\.lmstudio?` is sent as `What is in ~\.lmstudio?`.
 - The `top_files` result sent back lists `~\.lmstudio\models\big.gguf`, and the system prompt's index summary uses `~\...`.
 - No AG-UI event of that run contains `zq_owner`.
-- With `redact_paths` off, the same result is sent with `C:\Users\zq_owner\.lmstudio\models\big.gguf`.
+- A profile deserialized from stored JSON with `redact_paths: false` runs the same script and still sends `~\.lmstudio\models\big.gguf`, with no `zq_owner` in any request.
 
 ### AGENT-APPROVAL-KEYED: Approvals keyed by proposal
 **Applies to:** hoardini
@@ -141,17 +141,18 @@ Provider failures shall end the run with `RUN_ERROR` carrying a readable message
 Profiles flagged `small` shall get only `top_dirs`, `top_files`, `changes`, `inspect`, `recall`, `remember` and the four `propose_*` tools, and a shorter system prompt. Other profiles get every registered tool that is available (AGENT-WEB-SEARCH).
 
 **Acceptance criteria:**
-- The small request's `tools` are exactly those ten names; the full request's are `Registry::full().names()` in order, without `web_search` (off by default).
+- The small request's `tools` are exactly those ten names; the full request's are `Registry::full().names()` in order, without `web_search` (no search provider is set up).
 - The small system prompt is less than half the length of the full one.
 
-### AGENT-WEB-SEARCH: Web search is a tool only when the user turned it on
+### AGENT-WEB-SEARCH: Web search is a tool whenever a search provider is active
 **Applies to:** hoardini
 **Verification:** test
 
-`web_search(query)` shall be offered to the model only while `meta.web_search_enabled` is true and a `search_provider` row is active. It searches with that provider (its key read from the vault, the query sanitized and cached per SRCH-QUERY-HYGIENE and SRCH-CACHE) and returns `search::format_for_llm` output, so results reach the model only inside the `<<<UNTRUSTED_WEB_CONTENT` delimiters. Called while search is off, it answers with an `Error:` that points at Settings. It is not part of the small toolset.
+`web_search(query)` shall be offered to the model whenever a `search_provider` row is active: setting up a provider in the Search tab is the opt-in, and deactivating or removing it is the off switch. There is no other setting. It searches with that provider (its key read from the vault, the query sanitized and cached per SRCH-QUERY-HYGIENE and SRCH-CACHE) and returns `search::format_for_llm` output, so results reach the model only inside the `<<<UNTRUSTED_WEB_CONTENT` delimiters. Called while no provider is active, it answers with an `Error:` that points at the Search tab. It is not part of the small toolset.
 
 **Acceptance criteria:**
-- With an active SearXNG stand-in provider and the setting off, the request's tools lack `web_search`; with the setting on they include it; with the setting on and no active provider they lack it again.
+- Called directly with no active provider, `web_search` fails with a message naming the Search tab.
+- With no provider the request's tools lack `web_search`; after an active SearXNG stand-in provider is added they include it; after it is deactivated they lack it again.
 - A `web_search` call is answered with text that starts with `<<<UNTRUSTED_WEB_CONTENT`, ends with `UNTRUSTED_WEB_CONTENT>>>`, and contains the stand-in's first result URL.
 
 ### AGENT-PROMPT-CONTEXT: What the system prompt carries

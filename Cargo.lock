@@ -1599,6 +1599,8 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tokio",
+ "webview2-com",
+ "windows-core",
 ]
 
 [[package]]

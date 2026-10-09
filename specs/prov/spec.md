@@ -73,12 +73,13 @@ Nothing shall start until a run (or a connection test) uses the Built-in profile
 **Applies to:** hoardini-server
 **Verification:** test
 
-The child shall stop once no run has used it for `builtin_idle_minutes` (default 10, read at every check; 0 stops it as soon as it is idle), and never while a run holds it. A watchdog checks every 15 seconds.
+The child shall stop once no run has used it for `builtin_idle_minutes` (default 10, read at every check; 0 stops it as soon as it is idle), and never while a run holds it. A watchdog checks every 15 seconds, and it exists only while a child does: it starts when a child is launched and exits once the child is gone (stopped as idle, crashed, or removed), so an app with no child has no watchdog timer (SRV-IDLE-ZERO).
 
 **Acceptance criteria:**
 - While a run holds the child, an idle check one hour later does not stop it.
 - After the run ends, a check at 9 minutes leaves it running and a check at 10 minutes 1 second kills it and reports `running: false`.
 - With the setting at 0, the first check after the run ends stops it.
+- On a paused clock: no watchdog before the first acquire, even after 45 s; one after it, which leaves a held child alone; with the setting at 0, the first tick after the run ends stops the child and the watchdog is gone. A new child brings it back. With the setting at 10, a child that crashes ends the watchdog at the next tick.
 
 ### PROV-BUILTIN-RESTART: A crashed child is restarted when next needed
 **Applies to:** hoardini-server
@@ -94,11 +95,11 @@ When the child has exited on its own, the next run shall start a fresh one rathe
 **Applies to:** hoardini-server
 **Verification:** test
 
-The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <random> --jinja -t <physical cores - 2, at least 1> -c 8192 --no-webui -np 1 --cache-ram 0 --cache-type-k q8_0 --cache-type-v q8_0 -ngl 0 -a <model id>`, with `CREATE_NO_WINDOW` and normal priority, inside a kill-on-close job object so it dies with the app. The Built-in profile is `small: true` and `redact_paths: true`.
+The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <random> --jinja -t <physical cores - 2, at least 1> -c 8192 --no-webui -np 1 --cache-ram 0 --cache-type-k q8_0 --cache-type-v q8_0 -ngl 0 -a <model id>`, with `CREATE_NO_WINDOW` and normal priority, inside a kill-on-close job object so it dies with the app. The Built-in profile is `small: true` (paths are redacted for every provider, AGENT-REDACT).
 
 **Acceptance criteria:**
 - `builtin::args` puts `127.0.0.1` after `--host`, the port after `--port`, the GGUF after `-m`, `0` after `-ngl`, 16384 after `-c`, `physical_cores() - 2` (at least 1) after `-t`, and includes `--jinja` and `--no-webui`.
-- `builtin::profile(id)` is small and redacts paths.
+- `builtin::profile(id)` is small.
 
 ### PROV-BUILTIN-STATUS: The download card's facts
 **Applies to:** hoardini-server

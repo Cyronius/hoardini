@@ -8,12 +8,15 @@ use super::{
     Event, JournalSource, Mode, RefreshKind, RefreshOptions, RefreshRun, WinJournal, WinLister,
     refresh_kind,
 };
-use crate::store::{Db, get_meta};
+use crate::store::Db;
 
 const USAGE: &str = "usage: hoardini index [--db <path>] [--volume C:\\] [--mode background|fast] \
 [--kind auto|full|journal] [--threshold <bytes>] [--workers N] [--memory-cap-mb N]";
 
 const FAST_MAX_WORKERS: usize = 12;
+const LEAN_WORKERS: usize = 2;
+// A safety net only: measured peak use is 46-56 MB.
+const MEMORY_CAP_MB: u64 = 256;
 
 #[derive(Debug, PartialEq)]
 struct ChildArgs {
@@ -87,10 +90,6 @@ fn emit(v: Value) {
     let _ = out.flush();
 }
 
-fn meta_num(conn: &rusqlite::Connection, key: &str) -> Option<u64> {
-    get_meta(conn, key).ok().flatten()?.trim().parse().ok()
-}
-
 fn run(a: ChildArgs) -> Result<i32> {
     let db = Db::open(&a.db)?;
     let conn = db.conn()?;
@@ -99,10 +98,7 @@ fn run(a: ChildArgs) -> Result<i32> {
     {
         tracing::warn!(error = %e, "background mode unavailable; indexing at normal priority");
     }
-    let cap_mb = a
-        .memory_cap_mb
-        .or_else(|| meta_num(&conn, "indexer_memory_cap_mb"))
-        .unwrap_or(256);
+    let cap_mb = a.memory_cap_mb.unwrap_or(MEMORY_CAP_MB);
     let _job = match hoardini_win::cap_process_memory(cap_mb << 20) {
         Ok(g) => Some(g),
         Err(e) => {
@@ -112,9 +108,7 @@ fn run(a: ChildArgs) -> Result<i32> {
     };
     let workers = match (a.workers, a.mode) {
         (Some(n), _) => n,
-        (None, Mode::Background) => meta_num(&conn, "indexer_workers")
-            .and_then(|n| usize::try_from(n).ok())
-            .unwrap_or(2),
+        (None, Mode::Background) => LEAN_WORKERS,
         // The single writer caps throughput; more listers only add kernel lock contention (measured).
         (None, Mode::Fast) => std::thread::available_parallelism()
             .map(|n| (n.get() / 2).clamp(2, FAST_MAX_WORKERS))
