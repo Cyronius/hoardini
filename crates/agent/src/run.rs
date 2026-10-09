@@ -450,12 +450,26 @@ impl Run {
         req: &ChatRequest,
     ) -> Result<AssembledTurn, TurnErr> {
         em.turn_text = None;
-        let mut stream = self
+        let (wtx, mut wrx) = mpsc::unbounded_channel::<u64>();
+        let client = self
             .env
             .client
-            .chat_stream(cfg, key, req)
-            .await
-            .map_err(TurnErr::Provider)?;
+            .clone()
+            .with_wait_notice(Arc::new(move |s| {
+                let _ = wtx.send(s);
+            }));
+        let open = client.chat_stream(cfg, key, req);
+        tokio::pin!(open);
+        let mut stream = loop {
+            tokio::select! {
+                r = &mut open => break r.map_err(TurnErr::Provider)?,
+                Some(seconds) = wrx.recv() => {
+                    em.custom("rate_limit_wait", json!({ "seconds": seconds }))
+                        .await
+                        .map_err(TurnErr::Stop)?;
+                }
+            }
+        };
         while let Some(item) = stream.next().await {
             match item {
                 Err(e) => {
@@ -667,6 +681,12 @@ pub fn describe(e: &ProviderError, cfg: &ProviderConfig) -> String {
         ProviderError::Protocol(m) => {
             format!("The model server sent a response Hoardini could not read: {m}")
         }
+        ProviderError::RateLimited(m) => format!(
+            "The provider at {base} kept saying to slow down ({m}). Wait a minute and try again, or switch provider in the AI tab."
+        ),
+        ProviderError::DailyQuota(_) => format!(
+            "The free tier at {base} is used up for today. It resets on its own, or you can switch to another provider in the AI tab."
+        ),
         ProviderError::Config(m) => format!("The provider settings are invalid: {m}"),
     }
 }

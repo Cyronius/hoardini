@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { routes } from "../api/client";
+import { useAiSetup } from "../aiSetup";
 import { DEFAULT_AGENT_MAX_STEPS, DEFAULT_AI_TIMEOUT_SECONDS } from "../agent/aiTimeouts";
 import type { Preset, ProviderConfig, ProviderView, TestReport } from "../api/types";
 import { EditIcon, PlusIcon, TrashIcon } from "../components/icons";
@@ -313,12 +314,21 @@ export function ProvidersTab() {
   useEffect(() => {
     load();
     routes.presets().then(setPresets).catch(() => {});
+    if (useAiSetup.getState().wantForm) {
+      useAiSetup.setState({ wantForm: false });
+      setForm(blank());
+    }
   }, [load]);
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-muted">The model that answers. Any OpenAI-compatible server works.</p>
+        <div>
+          <p className="text-muted">The model that answers. Any OpenAI-compatible server works.</p>
+          <button className="text-[length:var(--fs-sm)] font-semibold text-brass underline underline-offset-2 hover:no-underline" onClick={() => useAiSetup.getState().setOpen(true)}>
+            Run setup again
+          </button>
+        </div>
         <IconButton title="Add provider" aria-label="Add provider" className="text-brass" onClick={() => setForm(blank())}>
           <PlusIcon />
         </IconButton>

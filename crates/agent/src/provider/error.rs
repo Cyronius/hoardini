@@ -12,6 +12,10 @@ pub enum ProviderError {
     Timeout(String),
     #[error("unexpected provider response: {0}")]
     Protocol(String),
+    #[error("rate limited: {0}")]
+    RateLimited(String),
+    #[error("daily quota used up: {0}")]
+    DailyQuota(String),
     #[error("invalid provider configuration: {0}")]
     Config(String),
 }
@@ -64,4 +68,11 @@ pub fn is_context_overflow(err: &ProviderError) -> bool {
     };
     let lower = text.to_lowercase();
     OVERFLOW_MARKERS.iter().any(|m| lower.contains(m))
+}
+
+const DAILY_MARKERS: &[&str] = &["per day", "per-day", "perday", "per_day", "daily", "a day"];
+
+pub fn is_daily_quota(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    DAILY_MARKERS.iter().any(|m| lower.contains(m))
 }

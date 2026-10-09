@@ -139,18 +139,9 @@ fn insert(conn: &Connection, cfg: &ProviderConfig, active: bool) -> anyhow::Resu
     Ok(id)
 }
 
-// The first run on a fresh install gets an active LM Studio profile so chat works with zero setup.
 pub fn active_for_run(s: &AppState) -> anyhow::Result<Option<ProviderConfig>> {
     let conn = s.db.conn()?;
     let mut rows = load_all(&conn)?;
-    if rows.is_empty()
-        && let Some(p) = presets().into_iter().find(|p| p.id == "lmstudio")
-    {
-        let cfg = ProviderConfig::new(p.name, p.base_url);
-        insert(&conn, &cfg, true)?;
-        rows = load_all(&conn)?;
-        s.bump();
-    }
     let preferred = get_meta(&conn, "active_provider")?.filter(|v| !v.is_empty());
     let pos = rows
         .iter()
@@ -294,9 +285,57 @@ pub async fn test(State(s): State<AppState>, Path(id): Path<String>) -> ApiResul
 pub async fn preset_list() -> ApiResult {
     let v: Vec<Value> = presets()
         .into_iter()
-        .map(|p| json!({"name": p.name, "base_url": p.base_url, "needs_key": p.needs_key}))
+        .map(|p| json!({"id": p.id, "name": p.name, "base_url": p.base_url, "needs_key": p.needs_key, "default_model": p.default_model, "key_url": p.key_url}))
         .collect();
     Ok(Json(json!(v)))
+}
+
+const LOCAL_PRESETS: [&str; 4] = ["lmstudio", "ollama", "llamacpp", "vllm"];
+
+pub async fn local_servers() -> ApiResult {
+    let probes = presets()
+        .into_iter()
+        .filter(|p| LOCAL_PRESETS.contains(&p.id))
+        .map(|p| async move {
+            let mut cfg = ProviderConfig::new(p.name, p.base_url);
+            cfg.timeout_s = 1;
+            let models = Client::new().list_models(&cfg, None).await.ok()?;
+            Some(json!({"id": p.id, "name": p.name, "base_url": p.base_url, "models": models}))
+        });
+    let found: Vec<Value> = futures::future::join_all(probes)
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
+    Ok(Json(json!(found)))
+}
+
+// An install that already has providers predates the pop-up, so it counts as set up.
+pub async fn setup_get(State(s): State<AppState>) -> ApiResult {
+    let st = s.clone();
+    let done = blocking(move || {
+        let conn = st.db.conn()?;
+        if get_meta(&conn, "ai_setup_done")?.as_deref() == Some("1") {
+            return Ok(true);
+        }
+        if load_all(&conn)?.is_empty() {
+            return Ok(false);
+        }
+        set_meta(&conn, "ai_setup_done", "1")?;
+        Ok(true)
+    })
+    .await?;
+    Ok(Json(json!({"done": done})))
+}
+
+pub async fn setup_done(State(s): State<AppState>) -> ApiResult {
+    let st = s.clone();
+    blocking(move || {
+        set_meta(&st.db.conn()?, "ai_setup_done", "1")?;
+        Ok(())
+    })
+    .await?;
+    Ok(Json(json!({"ok": true})))
 }
 
 #[derive(Deserialize)]

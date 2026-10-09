@@ -90,6 +90,9 @@ export const routes = {
 
   providers: () => api<T.ProviderView[]>("/api/providers"),
   presets: () => api<T.Preset[]>("/api/providers/presets"),
+  localServers: () => api<T.LocalServer[]>("/api/providers/local"),
+  setup: () => api<{ done: boolean }>("/api/setup"),
+  setupDone: () => api<{ ok: true }>("/api/setup/done", { body: {} }),
   addProvider: (p: T.ProviderConfig) => api<T.ProviderView>("/api/providers", { body: p }),
   updateProvider: (id: string, p: T.ProviderConfig) => put<T.ProviderView>(`/api/providers/${enc(id)}`, p),
   deleteProvider: (id: string) => del(`/api/providers/${enc(id)}`),
