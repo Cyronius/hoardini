@@ -381,11 +381,12 @@ async fn memory_crud_and_search() {
     let _ = f.h.shutdown.send(());
 }
 
+// Traces: PROV-PRESETS
 #[tokio::test(flavor = "multi_thread")]
-async fn first_agent_run_seeds_an_active_lm_studio_profile() {
+async fn a_run_with_no_provider_creates_none_and_setup_state_round_trips() {
     let f = Fixture::new().await;
-    let (_, before) = f.call("GET", "/api/providers", None).await;
-    assert!(before.as_array().unwrap().is_empty());
+    let (_, setup) = f.call("GET", "/api/setup", None).await;
+    assert_eq!(setup["done"], false);
     let resp = f
         .authed("POST", "/api/agent/run")
         .json(&json!({"threadId": "t1", "runId": "r1", "messages": [{"id": "u1", "role": "user", "content": "hi"}]}))
@@ -393,19 +394,27 @@ async fn first_agent_run_seeds_an_active_lm_studio_profile() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert!(
-        resp.headers()["content-type"]
-            .to_str()
-            .unwrap()
-            .starts_with("text/event-stream")
-    );
-    // Seeding happens before streaming; dropping the stream cancels the run so no real model is called.
-    drop(resp);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("RUN_ERROR"), "{text}");
     let (_, after) = f.call("GET", "/api/providers", None).await;
-    assert_eq!(after[0]["name"], "LM Studio");
-    assert_eq!(after[0]["is_active"], true);
+    assert!(after.as_array().unwrap().is_empty());
     let (_, status) = f.call("GET", "/api/status", None).await;
-    assert_eq!(status["active_provider"]["name"], "LM Studio");
+    assert!(status["active_provider"].is_null());
+    f.call("POST", "/api/setup/done", None).await;
+    let (_, setup) = f.call("GET", "/api/setup", None).await;
+    assert_eq!(setup["done"], true);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: UI-FIRST-RUN
+#[tokio::test(flavor = "multi_thread")]
+async fn an_install_that_already_has_a_provider_counts_as_set_up() {
+    let f = Fixture::new().await;
+    let cfg = json!({"name": "Old", "base_url": "http://127.0.0.1:9/v1"});
+    let (st, _) = f.call("POST", "/api/providers", Some(cfg)).await;
+    assert_eq!(st, 200);
+    let (_, setup) = f.call("GET", "/api/setup", None).await;
+    assert_eq!(setup["done"], true);
     let _ = f.h.shutdown.send(());
 }
 

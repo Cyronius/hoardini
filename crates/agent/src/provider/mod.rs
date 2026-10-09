@@ -8,9 +8,9 @@ pub mod sse;
 pub mod types;
 
 pub use accumulate::{TurnAccumulator, assemble_sse};
-pub use client::{Client, Meter};
+pub use client::{Client, Meter, Sleeper, WaitNotice};
 pub use config::{Params, Preset, ProviderConfig, ProviderView, presets};
-pub use error::{ProviderError, is_context_overflow};
+pub use error::{ProviderError, is_context_overflow, is_daily_quota};
 pub use futures::StreamExt;
 pub use models::suggest_models;
 pub use sanitize::{build_body, deep_merge};

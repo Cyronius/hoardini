@@ -79,6 +79,33 @@ The header mascot is a sumo wrestler whose body girth tracks the used fraction (
 5. Post `{"running_runs":1}`; confirm he alternately lifts and stomps left then right, with dust at each stomp. Post `{"running_runs":0}` to stop.
 6. Enable reduced motion in the OS or browser; confirm no looping animation.
 
+### UI-FIRST-RUN: First-run AI setup
+**Applies to:** hoardini-ui, hoardini-server
+**Verification:** manual
+
+While `meta.ai_setup_done` is unset and no provider exists, a pop-up asks how Hoardini should think, with five choices in this order: Cerebras (recommended), Google Gemini, OpenRouter, A model on this PC, Set up a provider. Each cloud choice has three steps: "Get a free key" (opens the provider's key page in the system browser), a key field (saved through the vault), and an automatic test with the model preselected. "Later" sets done; the chat then shows a one-line "No AI is set up yet. Set up AI" notice while no provider is active. The AI tab has "Run setup again". While a 429 wait runs, a "Waiting on the free tier..." notice counts down.
+
+**Verification (manual):**
+1. Start with `HOARDINI_DATA_DIR` set to an empty scratch folder. The pop-up shows with the five choices; the first index scan runs behind it.
+2. Cerebras, Gemini, OpenRouter each: Get a free key opens the system browser (not an in-app window); paste a key; Save and test ends "Working" and the provider is active with its default model. A wrong key shows the provider's error and can be retried.
+3. A model on this PC with LM Studio running lists its models and Use this makes it active; with nothing running it shows the LM Studio link and Check again.
+4. Set up a provider closes the pop-up and opens the AI tab with the add form.
+5. Later closes it; the "Set up AI" notice appears under the header and reopens the pop-up. After a restart the pop-up does not return.
+6. An existing data dir with a provider never shows the pop-up. AI tab, Run setup again, reopens it.
+7. Against a mock answering 429 with `Retry-After: 5` then 200, the notice counts down from 5 and the answer then arrives.
+
+### UI-TIP-LINE: Tip line under the brand
+**Applies to:** hoardini-ui, hoardini-app
+**Verification:** manual
+
+Under "made to vanish: X" the header shows "♥ Like this? **Tip** my local NPR station", copied from BlabberStack. Only "Tip" is a link, to `https://www.kuaf.com/donate`; the heart uses the accent color, the text is muted and small. The tooltip reads "KUAF, the maintainer's local NPR member station. Not affiliated with Hoardini." It is hidden below the `sm` breakpoint (640 px), where the header wraps. In the desktop app, links that open a new window (`target="_blank"`) and navigations away from the loopback server open in the system browser, routed in Rust (`on_new_window`, `on_navigation` with `tauri-plugin-opener`); the page gets no IPC (UI-NO-IPC).
+
+**Verification (manual):**
+1. Text, heart color, and tooltip match the above; hover shows the tooltip.
+2. Click Tip in `cargo run -p hoardini-app`: the default browser opens kuaf.com/donate and no Hoardini window appears.
+3. Resize the window under 640 px wide: the line disappears.
+4. `typeof window.__TAURI__` is still `"undefined"` and `invoke('plugin:opener|open_url', ...)` still rejects (no capability).
+
 ### UI-THEME-CONTRAST: Every theme is readable
 **Applies to:** hoardini
 **Verification:** test
