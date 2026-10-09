@@ -68,13 +68,14 @@ const del = <R = { ok: true }>(path: string) => api<R>(path, { method: "DELETE" 
 
 export const routes = {
   status: () => api<T.Status>("/api/status"),
-  refresh: (mode: "background" | "fast") => api<{ started: boolean }>("/api/index/refresh", { body: { mode } }),
+  refresh: () => api<{ started: boolean }>("/api/index/refresh", { method: "POST" }),
+  presence: (looking: boolean) => api<{ ok: true }>("/api/presence", { body: { looking } }),
   summary: () => api<T.IndexSummary>("/api/index/summary"),
   cancelRun: (runId: string) => api<{ ok: true }>(`/api/agent/runs/${enc(runId)}/cancel`, { method: "POST", body: {} }),
 
-  threads: () => api<T.ThreadSummary[]>("/api/threads"),
-  thread: (id: string) => api<T.ThreadDetail>(`/api/threads/${enc(id)}`),
-  deleteThread: (id: string) => del(`/api/threads/${enc(id)}`),
+  thread: () => api<T.ThreadDetail>("/api/thread"),
+  startFresh: () => api<{ ok: true }>("/api/thread/fresh", { body: {} }),
+  clearHistory: () => del("/api/thread"),
 
   proposal: (id: string) => api<T.Proposal>(`/api/proposals/${enc(id)}`),
   approve: (id: string, item_ids: number[]) =>
@@ -93,6 +94,9 @@ export const routes = {
 
   providers: () => api<T.ProviderView[]>("/api/providers"),
   presets: () => api<T.Preset[]>("/api/providers/presets"),
+  localServers: () => api<T.LocalServer[]>("/api/providers/local"),
+  setup: () => api<{ done: boolean }>("/api/setup"),
+  setupDone: () => api<{ ok: true }>("/api/setup/done", { body: {} }),
   addProvider: (p: T.ProviderConfig) => api<T.ProviderView>("/api/providers", { body: p }),
   updateProvider: (id: string, p: T.ProviderConfig) => put<T.ProviderView>(`/api/providers/${enc(id)}`, p),
   deleteProvider: (id: string) => del(`/api/providers/${enc(id)}`),
@@ -128,7 +132,7 @@ export const routes = {
     return api<T.HistoryPoint[]>(`/api/history${q.size ? `?${q}` : ""}`);
   },
   settings: () => api<T.Settings>("/api/settings"),
-  putSettings: (s: Partial<T.Settings>) => put<T.Settings>("/api/settings", s),
+  putSettings: (s: Partial<Omit<T.Settings, "index_size_bytes">>) => put<T.Settings>("/api/settings", s),
 };
 
 // EventSource cannot send headers; fetch streaming keeps the token out of the URL.

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hoardini_core::vault::SecretStore;
-use hoardini_server::{ServerHandle, ServerOptions, route_list, start_with};
+use hoardini_server::{ServerHandle, ServerOptions, journal_wait, route_list, start_with};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 
@@ -52,7 +52,15 @@ impl Fixture {
     }
 
     async fn with(ui_dir: Option<PathBuf>, indexer: Option<PathBuf>) -> Fixture {
-        let dir = tempfile::tempdir().unwrap();
+        Self::in_dir(tempfile::tempdir().unwrap(), ui_dir, indexer, false).await
+    }
+
+    async fn in_dir(
+        dir: tempfile::TempDir,
+        ui_dir: Option<PathBuf>,
+        indexer: Option<PathBuf>,
+        refresh_on_start: bool,
+    ) -> Fixture {
         let h = start_with(
             ServerOptions {
                 port: 0,
@@ -60,7 +68,7 @@ impl Fixture {
                 db_path: dir.path().join("h.db"),
                 ui_dir,
                 dialogs: None,
-                refresh_on_start: false,
+                refresh_on_start,
                 indexer_exe: Some(
                     indexer.unwrap_or_else(|| dir.path().join("no-such-indexer.exe")),
                 ),
@@ -77,6 +85,67 @@ impl Fixture {
         }
     }
 
+    async fn stream(&self) -> reqwest::Response {
+        let r = self
+            .authed("GET", "/api/status/stream")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        r
+    }
+
+    async fn presence(&self, looking: bool) {
+        let (st, _) = self
+            .call("POST", "/api/presence", Some(json!({"looking": looking})))
+            .await;
+        assert_eq!(st, 200);
+    }
+}
+
+// A completed index of a fake C:\, last refreshed `age` ago.
+fn seed_index(db_path: &Path, age: Duration) {
+    let db = hoardini_core::store::Db::open(db_path).unwrap();
+    let conn = db.conn().unwrap();
+    let fs = hoardini_core::index::FakeFs::new(r"C:\");
+    fs.file(r"C:\data\big.bin", 3 << 20);
+    let out = hoardini_core::index::refresh(
+        &conn,
+        &fs,
+        r"C:\",
+        &hoardini_core::index::RefreshOptions::default(),
+    )
+    .unwrap();
+    assert!(out.completed);
+    set_index_age(&conn, age);
+}
+
+fn set_index_age(conn: &rusqlite::Connection, age: Duration) {
+    let at = hoardini_core::store::now_ms() - age.as_millis() as i64;
+    conn.execute("UPDATE volume SET last_refresh_ms = ?1", [at])
+        .unwrap();
+}
+
+fn lines(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .collect()
+}
+
+async fn wait_for(path: &Path, pred: impl Fn(&[String]) -> bool, secs: u64) -> Vec<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    loop {
+        let l = lines(path);
+        if pred(&l) || std::time::Instant::now() > deadline {
+            return l;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+impl Fixture {
     fn req(&self, method: &str, path: &str) -> reqwest::RequestBuilder {
         let m = reqwest::Method::from_bytes(method.as_bytes()).unwrap();
         self.http.request(m, format!("{}{path}", self.base))
@@ -299,11 +368,13 @@ async fn a_key_in_a_provider_header_must_be_a_vault_reference() {
 async fn settings_round_trip() {
     let f = Fixture::new().await;
     let (_, s) = f.call("GET", "/api/settings", None).await;
-    assert_eq!(s["threshold_bytes"], 1_048_576);
-    assert_eq!(s["redact_paths"], true);
-    assert_eq!(s["web_search_enabled"], false);
-    assert_eq!(s["indexer_workers"], 2);
-    assert_eq!(s["indexer_memory_cap_mb"], 256);
+    let mut keys: Vec<&str> = s.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["builtin_idle_minutes", "index_size_bytes", "index_speed"]
+    );
+    assert_eq!(s["index_speed"], "lean");
     assert_eq!(s["builtin_idle_minutes"], 10);
     assert!(s["index_size_bytes"].as_u64().unwrap() > 0);
 
@@ -311,22 +382,31 @@ async fn settings_round_trip() {
         .call(
             "PUT",
             "/api/settings",
-            Some(json!({"threshold_bytes": 2_097_152, "redact_paths": false, "indexer_workers": 4, "index_size_bytes": 1})),
+            Some(json!({"index_speed": "fast", "builtin_idle_minutes": 0, "index_size_bytes": 1, "threshold_bytes": 5})),
         )
         .await;
     assert_eq!(st, 200);
-    assert_eq!(s["threshold_bytes"], 2_097_152);
-    assert_eq!(s["redact_paths"], false);
-    assert_eq!(s["indexer_workers"], 4);
+    assert_eq!(s["index_speed"], "fast");
+    assert_eq!(s["builtin_idle_minutes"], 0);
     assert_ne!(s["index_size_bytes"], 1);
+    assert!(s.get("threshold_bytes").is_none());
 
     let (_, again) = f.call("GET", "/api/settings", None).await;
-    assert_eq!(again["threshold_bytes"], 2_097_152);
-    let (st, e) = f
-        .call("PUT", "/api/settings", Some(json!({"redact_paths": "yes"})))
-        .await;
-    assert_eq!(st, 400);
-    assert!(e["error"].is_string());
+    assert_eq!(again["index_speed"], "fast");
+    for bad in [
+        json!({"index_speed": "turbo"}),
+        json!({"index_speed": true}),
+        json!({"builtin_idle_minutes": "x"}),
+    ] {
+        let (st, e) = f.call("PUT", "/api/settings", Some(bad.clone())).await;
+        assert_eq!(st, 400, "{bad}");
+        assert!(e["error"].is_string());
+    }
+    let (_, again) = f.call("GET", "/api/settings", None).await;
+    assert_eq!(
+        again["index_speed"], "fast",
+        "a rejected PUT changes nothing"
+    );
     let _ = f.h.shutdown.send(());
 }
 
@@ -381,11 +461,12 @@ async fn memory_crud_and_search() {
     let _ = f.h.shutdown.send(());
 }
 
+// Traces: PROV-PRESETS
 #[tokio::test(flavor = "multi_thread")]
-async fn first_agent_run_seeds_an_active_lm_studio_profile() {
+async fn a_run_with_no_provider_creates_none_and_setup_state_round_trips() {
     let f = Fixture::new().await;
-    let (_, before) = f.call("GET", "/api/providers", None).await;
-    assert!(before.as_array().unwrap().is_empty());
+    let (_, setup) = f.call("GET", "/api/setup", None).await;
+    assert_eq!(setup["done"], false);
     let resp = f
         .authed("POST", "/api/agent/run")
         .json(&json!({"threadId": "t1", "runId": "r1", "messages": [{"id": "u1", "role": "user", "content": "hi"}]}))
@@ -393,19 +474,27 @@ async fn first_agent_run_seeds_an_active_lm_studio_profile() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert!(
-        resp.headers()["content-type"]
-            .to_str()
-            .unwrap()
-            .starts_with("text/event-stream")
-    );
-    // Seeding happens before streaming; dropping the stream cancels the run so no real model is called.
-    drop(resp);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("RUN_ERROR"), "{text}");
     let (_, after) = f.call("GET", "/api/providers", None).await;
-    assert_eq!(after[0]["name"], "LM Studio");
-    assert_eq!(after[0]["is_active"], true);
+    assert!(after.as_array().unwrap().is_empty());
     let (_, status) = f.call("GET", "/api/status", None).await;
-    assert_eq!(status["active_provider"]["name"], "LM Studio");
+    assert!(status["active_provider"].is_null());
+    f.call("POST", "/api/setup/done", None).await;
+    let (_, setup) = f.call("GET", "/api/setup", None).await;
+    assert_eq!(setup["done"], true);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: UI-FIRST-RUN
+#[tokio::test(flavor = "multi_thread")]
+async fn an_install_that_already_has_a_provider_counts_as_set_up() {
+    let f = Fixture::new().await;
+    let cfg = json!({"name": "Old", "base_url": "http://127.0.0.1:9/v1"});
+    let (st, _) = f.call("POST", "/api/providers", Some(cfg)).await;
+    assert_eq!(st, 200);
+    let (_, setup) = f.call("GET", "/api/setup", None).await;
+    assert_eq!(setup["done"], true);
     let _ = f.h.shutdown.send(());
 }
 
@@ -431,26 +520,16 @@ async fn index_state(f: &Fixture) -> (String, Value) {
 
 // Traces: SRV-ONE-REFRESH
 #[tokio::test(flavor = "multi_thread")]
-async fn one_refresh_at_a_time_and_fast_preempts_background() {
+async fn one_refresh_at_a_time_and_fast_takes_over_lean() {
     let dir = tempfile::tempdir().unwrap();
     let exe = fake_indexer(dir.path(), 10);
-    let f = Fixture::with(None, Some(exe)).await;
+    let fdir = tempfile::tempdir().unwrap();
+    seed_index(&fdir.path().join("h.db"), Duration::ZERO);
+    let f = Fixture::in_dir(fdir, None, Some(exe), false).await;
 
-    let (st, r) = f
-        .call(
-            "POST",
-            "/api/index/refresh",
-            Some(json!({"mode": "background"})),
-        )
-        .await;
+    let (st, r) = f.call("POST", "/api/index/refresh", None).await;
     assert_eq!((st, &r["started"]), (200, &json!(true)));
-    let (_, r) = f
-        .call(
-            "POST",
-            "/api/index/refresh",
-            Some(json!({"mode": "background"})),
-        )
-        .await;
+    let (_, r) = f.call("POST", "/api/index/refresh", None).await;
     assert_eq!(r["started"], false, "a second refresh must not start");
 
     let mut progress = Value::Null;
@@ -466,34 +545,47 @@ async fn one_refresh_at_a_time_and_fast_preempts_background() {
     assert_eq!(progress["phase"], "walk");
     assert_eq!(progress["files"], 2);
 
-    let (_, r) = f
-        .call("POST", "/api/index/refresh", Some(json!({"mode": "fast"})))
+    let (st, _) = f
+        .call("PUT", "/api/settings", Some(json!({"index_speed": "fast"})))
         .await;
-    assert_eq!(
-        r["started"], true,
-        "fast must take over a background refresh"
-    );
-    let (_, r) = f
-        .call("POST", "/api/index/refresh", Some(json!({"mode": "fast"})))
-        .await;
+    assert_eq!(st, 200);
+    let (_, r) = f.call("POST", "/api/index/refresh", None).await;
     assert_eq!(r["started"], false);
 
     let spawns = dir.path().join("spawns.txt");
-    let mut modes = Vec::new();
-    for _ in 0..50 {
-        modes = std::fs::read_to_string(&spawns)
-            .unwrap_or_default()
-            .lines()
-            .map(|l| l.trim().to_string())
-            .collect();
-        if modes.len() >= 2 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert_eq!(modes, ["background", "fast"]);
+    let modes = wait_for(&spawns, |l| l.len() >= 2, 5).await;
+    assert_eq!(
+        modes,
+        ["background", "fast"],
+        "fast takes over a lean refresh"
+    );
     let (_, idx) = index_state(&f).await;
     assert_eq!(idx["mode"], "fast");
+
+    f.call("PUT", "/api/settings", Some(json!({"index_speed": "lean"})))
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(lines(&spawns).len(), 2, "lean lets a fast refresh finish");
+    let (state, idx) = index_state(&f).await;
+    assert_eq!(
+        (state.as_str(), &idx["mode"]),
+        ("refreshing", &json!("fast"))
+    );
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-ONE-REFRESH
+#[tokio::test(flavor = "multi_thread")]
+async fn the_first_full_scan_runs_fast_even_when_lean() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = fake_indexer(dir.path(), 0);
+    let f = Fixture::with(None, Some(exe)).await;
+    let (_, s) = f.call("GET", "/api/settings", None).await;
+    assert_eq!(s["index_speed"], "lean");
+    let (_, r) = f.call("POST", "/api/index/refresh", None).await;
+    assert_eq!(r["started"], true);
+    let modes = wait_for(&dir.path().join("spawns.txt"), |l| !l.is_empty(), 5).await;
+    assert_eq!(modes, ["fast"]);
     let _ = f.h.shutdown.send(());
 }
 
@@ -623,6 +715,7 @@ fn journal_fake_indexer(dir: &Path) -> PathBuf {
 async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("h.db");
+    seed_index(&db_path, Duration::ZERO);
     let db = hoardini_core::store::Db::open(&db_path).unwrap();
     hoardini_core::store::set_meta(&db.conn().unwrap(), "journal_every_s", "1").unwrap();
     let h = start_with(
@@ -641,6 +734,20 @@ async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
     .unwrap();
     let http = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{}/api/status", h.port);
+    let _stream = http
+        .get(format!("http://127.0.0.1:{}/api/status/stream", h.port))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap();
+    let r = http
+        .post(format!("http://127.0.0.1:{}/api/presence", h.port))
+        .bearer_auth(TOKEN)
+        .json(&json!({"looking": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
     let log = dir.path().join("kinds.txt");
     let mut kinds: Vec<String> = Vec::new();
     let mut loud_after_launch = false;
@@ -676,6 +783,270 @@ async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
         "a short timer-driven refresh must not show as refreshing"
     );
     let _ = h.shutdown.send(());
+}
+
+// Logs "<mode> <kind>" per spawn and "end <kind>" when a child finishes uncancelled; `auto` runs `auto_s` seconds.
+fn presence_fake_indexer(dir: &Path, auto_s: u32) -> PathBuf {
+    let log = dir.join("presence.txt");
+    let script = dir.join("presence-indexer.cmd");
+    let body = format!(
+        "@echo off\r\necho %7 %9>>\"{log}\"\r\nif not \"%9\"==\"auto\" goto quick\r\necho {{\"type\":\"start\",\"volume\":\"C:\\\\\",\"mode\":\"%7\",\"gen\":1,\"kind\":\"full\"}}\r\nping -n {n} 127.0.0.1 >nul\r\n:quick\r\necho {{\"type\":\"done\",\"kind\":\"%9\",\"scan_id\":1,\"duration_ms\":5}}\r\necho end %9>>\"{log}\"\r\nexit /b 0\r\n",
+        log = log.display(),
+        n = auto_s + 1
+    );
+    std::fs::write(&script, body).unwrap();
+    script
+}
+
+fn journal_spawns(l: &[String]) -> usize {
+    l.iter()
+        .filter(|x| x.ends_with(" journal") && !x.starts_with("end "))
+        .count()
+}
+
+// Traces: SRV-PRESENCE
+#[test]
+fn the_next_journal_refresh_is_due_when_the_index_reaches_the_interval() {
+    let min = |m: u64| Duration::from_secs(m * 60);
+    assert_eq!(
+        journal_wait(None, min(3)),
+        Duration::ZERO,
+        "never completed"
+    );
+    assert_eq!(journal_wait(Some(min(4)), min(3)), Duration::ZERO);
+    assert_eq!(journal_wait(Some(min(3)), min(3)), Duration::ZERO);
+    assert_eq!(journal_wait(Some(min(1)), min(3)), min(2));
+    assert_eq!(journal_wait(Some(Duration::ZERO), min(3)), min(3));
+}
+
+// Traces: SRV-PRESENCE
+#[tokio::test(flavor = "multi_thread")]
+async fn the_journal_timer_runs_only_while_someone_is_looking() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = presence_fake_indexer(dir.path(), 3);
+    let fdir = tempfile::tempdir().unwrap();
+    let db = hoardini_core::store::Db::open(fdir.path().join("h.db")).unwrap();
+    hoardini_core::store::set_meta(&db.conn().unwrap(), "journal_every_s", "1").unwrap();
+    let f = Fixture::in_dir(fdir, None, Some(exe), true).await;
+    let log = dir.path().join("presence.txt");
+
+    wait_for(&log, |l| !l.is_empty(), 5).await;
+    let s = f.stream().await;
+    f.presence(true).await;
+    drop(s);
+    f.presence(false).await;
+    let (state, _) = index_state(&f).await;
+    assert_eq!(
+        state, "refreshing",
+        "presence never cancels a running refresh"
+    );
+    let l = wait_for(&log, |l| l.iter().any(|x| x == "end auto"), 10).await;
+    assert_eq!(
+        l[1..],
+        ["end auto"],
+        "the launch refresh ran to its end: {l:?}"
+    );
+
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(journal_spawns(&lines(&log)), 0, "nobody looking: no timer");
+    f.presence(true).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        journal_spawns(&lines(&log)),
+        0,
+        "no open stream counts as not looking"
+    );
+
+    let s = f.stream().await;
+    let l = wait_for(&log, |l| journal_spawns(l) >= 1, 3).await;
+    assert!(
+        journal_spawns(&l) >= 1,
+        "looking with a stale index refreshes: {l:?}"
+    );
+    drop(s);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let settled = lines(&log).len();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(
+        lines(&log).len(),
+        settled,
+        "the stream closing stops the timer"
+    );
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-PRESENCE
+#[tokio::test(flavor = "multi_thread")]
+async fn arriving_with_a_stale_index_starts_one_journal_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = presence_fake_indexer(dir.path(), 0);
+    let fdir = tempfile::tempdir().unwrap();
+    let db_path = fdir.path().join("h.db");
+    seed_index(&db_path, Duration::from_secs(10));
+    let db = hoardini_core::store::Db::open(&db_path).unwrap();
+    hoardini_core::store::set_meta(&db.conn().unwrap(), "journal_every_s", "60").unwrap();
+    let f = Fixture::in_dir(fdir, None, Some(exe), true).await;
+    let log = dir.path().join("presence.txt");
+    let l = wait_for(&log, |l| l.iter().any(|x| x == "end auto"), 5).await;
+    assert_eq!(l[0], "background auto");
+
+    let _s = f.stream().await;
+    f.presence(true).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        journal_spawns(&lines(&log)),
+        0,
+        "an index 10 s old is not due"
+    );
+
+    set_index_age(&db.conn().unwrap(), Duration::from_secs(300));
+    f.presence(false).await;
+    f.presence(true).await;
+    let l = wait_for(&log, |l| journal_spawns(l) >= 1, 3).await;
+    assert_eq!(journal_spawns(&l), 1, "{l:?}");
+    assert!(l.contains(&"background journal".to_string()), "{l:?}");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(
+        journal_spawns(&lines(&log)),
+        1,
+        "one refresh, then the interval"
+    );
+    let _ = f.h.shutdown.send(());
+}
+
+fn seed(f: &Fixture, id: &str, role: &str, text: &str) {
+    use hoardini_agent::{provider::ChatMessage, thread};
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let conn = db.conn().unwrap();
+    thread::ensure_conversation(&conn, thread::MAIN, None).unwrap();
+    thread::append(&conn, thread::MAIN, id, &ChatMessage::text(role, text)).unwrap();
+}
+
+fn sql_count(f: &Fixture, sql: &str) -> i64 {
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    db.conn().unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
+}
+
+// Traces: SRV-THREAD
+#[tokio::test(flavor = "multi_thread")]
+async fn the_conversation_routes_report_the_window_start_fresh_and_clear_only_messages() {
+    let f = Fixture::new().await;
+    assert!(
+        route_list()
+            .iter()
+            .all(|(_, p)| !p.starts_with("/api/threads")),
+        "the per-thread routes are gone"
+    );
+    let (st, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(st, 200, "{t}");
+    assert_eq!(t["id"], "main");
+    assert_eq!(t["messages"], json!([]));
+    assert_eq!(t["window_start_id"], Value::Null);
+    assert_eq!(t["has_hidden"], false);
+    assert_eq!(t["fresh"], true);
+
+    seed(&f, "u1", "user", "hello");
+    seed(&f, "a1", "assistant", "hi there");
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(t["window_start_id"], "u1");
+    assert_eq!(t["has_hidden"], false);
+    assert_eq!(t["fresh"], false);
+
+    let (st, r) = f.call("POST", "/api/thread/fresh", None).await;
+    assert_eq!((st, r), (200, json!({"ok": true})));
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(t["window_start_id"], Value::Null);
+    assert_eq!(t["has_hidden"], true);
+    assert_eq!(t["fresh"], true);
+
+    seed(&f, "u2", "user", "a new topic");
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["window_start_id"], "u2");
+    assert_eq!(t["has_hidden"], true);
+    assert_eq!(t["fresh"], false);
+
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let conn = db.conn().unwrap();
+    conn.execute(
+        "UPDATE message SET created_ms = created_ms - 7 * 3600 * 1000",
+        [],
+    )
+    .unwrap();
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["fresh"], true, "the last message is 7 h old");
+
+    conn.execute(
+        "INSERT INTO proposal(id, conversation_id, kind, params_json, status, created_ms)
+         VALUES ('p-keep', 'main', 'delete', '{}', 'pending', 0)",
+        [],
+    )
+    .unwrap();
+    f.call(
+        "POST",
+        "/api/memory",
+        Some(json!({"scope": "global", "key": "k", "kind": "fact", "text": "stays"})),
+    )
+    .await;
+    let memories = sql_count(&f, "SELECT COUNT(*) FROM memory");
+    let (st, r) = f.call("DELETE", "/api/thread", None).await;
+    assert_eq!((st, r), (200, json!({"ok": true})));
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["messages"], json!([]));
+    assert_eq!(t["has_hidden"], false);
+    assert_eq!(t["fresh"], true);
+    assert_eq!(sql_count(&f, "SELECT COUNT(*) FROM message"), 0);
+    assert_eq!(
+        sql_count(&f, "SELECT COUNT(*) FROM proposal WHERE id = 'p-keep'"),
+        1
+    );
+    assert_eq!(sql_count(&f, "SELECT COUNT(*) FROM memory"), memories);
+
+    seed(&f, "u3", "user", "after clearing");
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["window_start_id"], "u3", "the window start was reset");
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-THREAD
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_always_uses_main_and_clearing_is_refused_while_it_runs() {
+    let f = Fixture::new().await;
+    let base = stalled_llm().await;
+    let (_, p) = f
+        .call(
+            "POST",
+            "/api/providers",
+            Some(json!({"name": "stall", "base_url": base, "model": "m"})),
+        )
+        .await;
+    let id = p["id"].as_str().unwrap();
+    f.call("POST", &format!("/api/providers/{id}/activate"), None)
+        .await;
+    let mut resp = f
+        .authed("POST", "/api/agent/run")
+        .json(&json!({"threadId": "t-other", "runId": "r-main", "messages": [{"id": "u-main", "role": "user", "content": "hi"}]}))
+        .send()
+        .await
+        .unwrap();
+    let mut text = String::new();
+    while !text.contains("TEXT_MESSAGE_CONTENT") {
+        let chunk = tokio::time::timeout(Duration::from_secs(10), resp.chunk())
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("stream open");
+        text.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    assert!(text.contains(r#""threadId":"main""#), "{text}");
+    let (st, _) = f.call("DELETE", "/api/thread", None).await;
+    assert_eq!(st, 409);
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["messages"][0]["id"], "u-main");
+    f.call("POST", "/api/agent/runs/r-main/cancel", None).await;
+    drop(resp);
+    let _ = f.h.shutdown.send(());
 }
 
 // Traces: SRV-HISTORY-RANGE

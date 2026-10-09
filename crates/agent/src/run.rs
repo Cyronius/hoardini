@@ -39,6 +39,8 @@ pub struct AgentEnv {
     pub index: Arc<dyn IndexControl>,
     // Profile used for `~` redaction and expansion; None = the real one (tests inject a fake).
     pub redact_profile: Option<String>,
+    // Milliseconds since the epoch; tests move it to cross the session gap.
+    pub clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 impl AgentEnv {
@@ -54,7 +56,12 @@ impl AgentEnv {
             secrets,
             index,
             redact_profile: None,
+            clock: Arc::new(now_ms),
         }
+    }
+
+    pub fn now(&self) -> i64 {
+        (self.clock)()
     }
 
     pub fn profile(&self) -> String {
@@ -69,7 +76,7 @@ const SMALL_GLOBAL_MEMORIES: usize = 10;
 const SMALL_SUMMARY_CHARS: usize = 1500;
 const MAX_SHEDS: usize = 3;
 
-pub const OVERFLOW_MESSAGE: &str = "This conversation no longer fits the model's context window, even after dropping old tool results. Start a new chat, or switch to a provider profile with a larger context window.";
+pub const OVERFLOW_MESSAGE: &str = "This conversation no longer fits the model's context window, even after dropping old tool results and earlier turns. Press Start fresh, or switch to a provider profile with a larger context window.";
 
 pub fn new_id() -> String {
     uuid::Uuid::now_v7().to_string()
@@ -273,7 +280,7 @@ impl Run {
                 Ok(v)
             }
             Ok(None) => Err(Stop::Fail(format!(
-                "{reference} is not in the vault. Set it in Settings, Providers."
+                "{reference} is not in the vault. Set it in Settings, AI."
             ))),
             Err(e) => Err(Stop::Fail(format!(
                 "Could not read {reference} from the vault: {e}"
@@ -308,26 +315,33 @@ impl Run {
         let conv = self.thread_id.clone();
         let provider_id = self.provider.id.clone();
         let messages = input.messages;
-        blocking(move || thread::ingest(&db, &conv, provider_id.as_deref(), &messages)).await?;
+        let now = self.env.now();
+        blocking(move || thread::ingest(&db, &conv, provider_id.as_deref(), &messages, now))
+            .await?;
 
         let max_steps = self.provider.max_tool_steps.max(1);
+        let context_tokens = thread::context_tokens(self.provider.context_window);
         let mut sheds = 0;
         let mut first_system: Option<String> = None;
         loop {
             let (system, mut stored) = self.load_context().await?;
             // The summary's "as of N minutes ago" ticks; a fixed prefix keeps a local server's prompt cache warm.
             let system = first_system.get_or_insert(system).clone();
+            let tools = self.registry.defs();
+            let overhead = system.len() + serde_json::to_string(&tools).map_or(0, |t| t.len());
+            if let Some(i) = thread::trim_point(&stored, overhead, context_tokens) {
+                self.move_window(&stored[i].id).await?;
+                stored.drain(..i);
+            }
             let db = self.env.db.clone();
             let conv = self.thread_id.clone();
             let snapshot = stored.clone();
             let mut msgs = blocking(move || Ok(thread::context(&db, &conv, &snapshot))).await?;
             msgs.insert(0, ChatMessage::text("system", &system));
-            if self.provider.redact_paths {
-                redact_messages(&mut msgs, &self.profile);
-            }
+            redact_messages(&mut msgs, &self.profile);
             let req = ChatRequest {
                 messages: msgs,
-                tools: self.registry.defs(),
+                tools,
                 tool_choice: None,
                 include_usage: false,
             };
@@ -335,10 +349,14 @@ impl Run {
                 Ok(t) => t,
                 Err(TurnErr::Stop(s)) => return Err(s),
                 Err(TurnErr::Provider(e)) if is_context_overflow(&e) => {
-                    if sheds >= MAX_SHEDS || !self.shed(&mut stored).await? {
-                        return Err(Stop::Fail(OVERFLOW_MESSAGE.into()));
+                    if sheds < MAX_SHEDS && self.shed(&mut stored).await? {
+                        sheds += 1;
+                        continue;
                     }
-                    sheds += 1;
+                    let Some(i) = thread::next_turn(&stored) else {
+                        return Err(Stop::Fail(OVERFLOW_MESSAGE.into()));
+                    };
+                    self.move_window(&stored[i].id).await?;
                     continue;
                 }
                 Err(TurnErr::Provider(e)) => return Err(Stop::Fail(describe(&e, &cfg))),
@@ -399,7 +417,7 @@ impl Run {
             } else {
                 GLOBAL_MEMORIES
             };
-            let stored = thread::load(&conn, &conv)?;
+            let stored = thread::load_window(&conn, &conv)?;
             let said = stored.iter().rev().find(|s| s.msg.role == "user");
             let notes = globals_for(
                 &conn,
@@ -418,16 +436,25 @@ impl Run {
                 )
             })
             .collect();
+            let open_proposals = thread::open_proposals(&db, &conv).unwrap_or_default();
             let system = system_prompt(&PromptInput {
                 small,
                 today: fmt_date(now_ms()),
                 index_summary: summary,
                 refresh,
                 globals: notes,
+                open_proposals,
             });
             Ok((system, stored))
         })
         .await
+    }
+
+    async fn move_window(&self, message_id: &str) -> Result<(), Stop> {
+        let db = self.env.db.clone();
+        let conv = self.thread_id.clone();
+        let id = message_id.to_string();
+        blocking(move || thread::set_window_start_at(&db.conn()?, &conv, &id)).await
     }
 
     async fn shed(&self, stored: &mut [Stored]) -> Result<bool, Stop> {
@@ -445,7 +472,8 @@ impl Run {
     async fn store(&self, msgs: Vec<Stored>) -> Result<(), Stop> {
         let db = self.env.db.clone();
         let conv = self.thread_id.clone();
-        blocking(move || thread::append_all(&mut db.conn()?, &conv, &msgs)).await
+        let now = self.env.now();
+        blocking(move || thread::append_all_at(&mut db.conn()?, &conv, &msgs, now)).await
     }
 
     async fn stream_turn(
@@ -456,12 +484,22 @@ impl Run {
         req: &ChatRequest,
     ) -> Result<AssembledTurn, TurnErr> {
         em.turn_text = None;
-        let mut stream = self
-            .env
-            .client
-            .chat_stream(cfg, key, req)
-            .await
-            .map_err(TurnErr::Provider)?;
+        let (wtx, mut wrx) = mpsc::unbounded_channel::<u64>();
+        let client = self.env.client.clone().with_wait_notice(Arc::new(move |s| {
+            let _ = wtx.send(s);
+        }));
+        let open = client.chat_stream(cfg, key, req);
+        tokio::pin!(open);
+        let mut stream = loop {
+            tokio::select! {
+                r = &mut open => break r.map_err(TurnErr::Provider)?,
+                Some(seconds) = wrx.recv() => {
+                    em.custom("rate_limit_wait", json!({ "seconds": seconds }))
+                        .await
+                        .map_err(TurnErr::Stop)?;
+                }
+            }
+        };
         while let Some(item) = stream.next().await {
             match item {
                 Err(e) => {
@@ -660,7 +698,7 @@ pub fn describe(e: &ProviderError, cfg: &ProviderConfig) -> String {
     let base = cfg.base_url.trim();
     match e {
         ProviderError::Http { status, body } if matches!(status, 401 | 403) => format!(
-            "The provider at {base} rejected the request (HTTP {status}): {body}. Check the API key in Settings, Providers."
+            "The provider at {base} rejected the request (HTTP {status}): {body}. Check the API key in Settings, AI."
         ),
         ProviderError::Http { status, body } => {
             format!("The provider at {base} returned HTTP {status}: {body}")
@@ -668,11 +706,17 @@ pub fn describe(e: &ProviderError, cfg: &ProviderConfig) -> String {
         ProviderError::Api(m) => format!("The model provider reported an error: {m}"),
         ProviderError::Transport(m) => format!("Could not reach the model server at {base}: {m}"),
         ProviderError::Timeout(m) => format!(
-            "The model server at {base} did not respond in time ({m}). Try again, or raise the timeout in Settings, Providers."
+            "The model server at {base} did not respond in time ({m}). Try again, or raise the timeout in Settings, AI."
         ),
         ProviderError::Protocol(m) => {
             format!("The model server sent a response Hoardini could not read: {m}")
         }
+        ProviderError::RateLimited(m) => format!(
+            "The provider at {base} kept saying to slow down ({m}). Wait a minute and try again, or switch provider in the AI tab."
+        ),
+        ProviderError::DailyQuota(_) => format!(
+            "The free tier at {base} is used up for today. It resets on its own, or you can switch to another provider in the AI tab."
+        ),
         ProviderError::Config(m) => format!("The provider settings are invalid: {m}"),
     }
 }

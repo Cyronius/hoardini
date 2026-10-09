@@ -152,6 +152,9 @@ impl Client {
                 caps.streamed_tool_calls = started;
                 caps.tools = !turn.tool_calls.is_empty();
             }
+            Err(e @ (ProviderError::RateLimited(_) | ProviderError::DailyQuota(_))) => {
+                return Err(e);
+            }
             Ok((_, None)) | Err(_) => {
                 let turn = self.chat(&cfg, key, &req).await?;
                 caps.tools = !turn.tool_calls.is_empty();

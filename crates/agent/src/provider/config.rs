@@ -23,9 +23,6 @@ fn d_timeout() -> u64 {
 fn d_steps() -> u32 {
     20
 }
-fn d_true() -> bool {
-    true
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -46,8 +43,6 @@ pub struct ProviderConfig {
     pub max_tool_steps: u32,
     #[serde(default)]
     pub small: bool,
-    #[serde(default = "d_true")]
-    pub redact_paths: bool,
     #[serde(default)]
     pub params: Params,
     #[serde(default)]
@@ -68,7 +63,6 @@ impl ProviderConfig {
             timeout_s: d_timeout(),
             max_tool_steps: d_steps(),
             small: false,
-            redact_paths: true,
             params: Params::default(),
             headers: BTreeMap::new(),
             extra_body: Map::new(),
@@ -100,6 +94,8 @@ pub struct Preset {
     pub name: &'static str,
     pub base_url: &'static str,
     pub needs_key: bool,
+    pub default_model: Option<&'static str>,
+    pub key_url: Option<&'static str>,
 }
 
 pub fn presets() -> Vec<Preset> {
@@ -108,14 +104,40 @@ pub fn presets() -> Vec<Preset> {
         name,
         base_url,
         needs_key,
+        default_model: None,
+        key_url: None,
+    };
+    let free = |mut x: Preset, model, key_url| {
+        x.default_model = Some(model);
+        x.key_url = Some(key_url);
+        x
     };
     vec![
+        free(
+            p("cerebras", "Cerebras", "https://api.cerebras.ai/v1", true),
+            "gpt-oss-120b",
+            "https://cloud.cerebras.ai/platform/",
+        ),
+        free(
+            p(
+                "gemini",
+                "Google Gemini",
+                "https://generativelanguage.googleapis.com/v1beta/openai/",
+                true,
+            ),
+            "gemini-3.8-flash",
+            "https://aistudio.google.com/apikey",
+        ),
         p("openai", "OpenAI", "https://api.openai.com/v1", true),
-        p(
-            "openrouter",
-            "OpenRouter",
-            "https://openrouter.ai/api/v1",
-            true,
+        free(
+            p(
+                "openrouter",
+                "OpenRouter",
+                "https://openrouter.ai/api/v1",
+                true,
+            ),
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "https://openrouter.ai/settings/keys",
         ),
         p(
             "anthropic",

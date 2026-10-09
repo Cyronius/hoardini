@@ -40,6 +40,7 @@ pub const FLAG_DENIED: i64 = 1;
 pub const FLAG_PLACEHOLDER: i64 = 2;
 pub const FLAG_HARDLINK_DUP: i64 = 4;
 
+// Tuned by measurement (C: indexes to ~132 MiB); only `hoardini index --threshold` overrides it.
 pub const DEFAULT_THRESHOLD: u64 = 1 << 20;
 
 // A first build inserts in random key order, so it builds these lookup indexes sorted at its end.
@@ -91,16 +92,6 @@ impl FromSql for FileId {
             _ => Err(FromSqlError::InvalidType),
         }
     }
-}
-
-pub fn threshold_setting(conn: &Connection) -> Result<u64> {
-    Ok(crate::store::get_meta(conn, "threshold_bytes")?
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(DEFAULT_THRESHOLD))
-}
-
-pub fn set_threshold_setting(conn: &Connection, bytes: u64) -> Result<()> {
-    crate::store::set_meta(conn, "threshold_bytes", &bytes.to_string())
 }
 
 // Drive roots keep their separator ("C:\"); every other path drops a trailing one.

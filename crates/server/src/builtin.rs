@@ -24,7 +24,7 @@ pub const CONTEXT: u32 = 8_192;
 pub const RECOMMENDED: Option<&str> = None;
 const MODEL_META: &str = "builtin_model";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
-const WATCHDOG_TICK: Duration = Duration::from_secs(15);
+pub const WATCHDOG_TICK: Duration = Duration::from_secs(15);
 
 pub struct ModelInfo {
     pub name: &'static str,
@@ -63,7 +63,6 @@ pub fn profile(model_id: &str) -> ProviderConfig {
     p.id = Some(PROVIDER_ID.into());
     p.model = Some(model_id.into());
     p.small = true;
-    p.redact_paths = true;
     p.context_window = CONTEXT;
     p.timeout_s = 300;
     p.max_tool_steps = 10;
@@ -300,6 +299,8 @@ pub struct Builtin {
     launches: AtomicU64,
     running: AtomicBool,
     pid: Mutex<Option<u32>>,
+    watching: AtomicBool,
+    me: Weak<Builtin>,
     pub install: Installer,
 }
 
@@ -332,7 +333,7 @@ impl Builtin {
         idle_minutes: Arc<dyn Fn() -> u64 + Send + Sync>,
         root: Option<PathBuf>,
     ) -> Arc<Builtin> {
-        Arc::new(Builtin {
+        Arc::new_cyclic(|me| Builtin {
             launcher,
             idle_minutes,
             root,
@@ -342,18 +343,37 @@ impl Builtin {
             launches: AtomicU64::new(0),
             running: AtomicBool::new(false),
             pid: Mutex::new(None),
+            watching: AtomicBool::new(false),
+            me: me.clone(),
             install: Installer::default(),
         })
     }
 
-    pub fn start_watchdog(self: &Arc<Self>) {
-        let weak: Weak<Builtin> = Arc::downgrade(self);
+    pub fn watchdog_running(&self) -> bool {
+        self.watching.load(Ordering::SeqCst)
+    }
+
+    // Callers hold the state lock, so the watchdog cannot decide to exit while a child is being stored.
+    fn start_watchdog(&self) {
+        if self.watching.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let weak = self.me.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(WATCHDOG_TICK).await;
                 let Some(b) = weak.upgrade() else { return };
                 if b.check_idle(Instant::now()).await {
                     tracing::info!("llama-server stopped after the idle timeout");
+                }
+                let mut g = b.state.lock().await;
+                if g.as_mut().is_some_and(|r| r.child.exited().is_some()) {
+                    *g = None;
+                    b.set_running(false, None);
+                }
+                if g.is_none() {
+                    b.watching.store(false, Ordering::SeqCst);
+                    return;
                 }
             }
         });
@@ -429,6 +449,7 @@ impl Builtin {
             api_key: launched.api_key.clone(),
             model_id: model_id.to_string(),
         });
+        self.start_watchdog();
         lease.base_url = base;
         lease.api_key = launched.api_key;
         Ok(lease)
@@ -801,7 +822,7 @@ pub async fn resolve(
         });
     let Some(model) = model.filter(|_| runtime::is_installed(&LLAMA_SERVER, &root)) else {
         return Err(
-            "The built-in model is not installed. Download it in Settings, Providers, or pick another provider."
+            "The built-in model is not installed. Download it in Settings, AI, or pick another provider."
                 .into(),
         );
     };
@@ -855,9 +876,9 @@ mod tests {
     }
 
     #[test]
-    fn profile_is_small_and_redacted() {
+    fn profile_is_small() {
         let p = profile("granite-4.0-micro");
-        assert!(p.small && p.redact_paths);
+        assert!(p.small);
         assert_eq!(p.id.as_deref(), Some(PROVIDER_ID));
         assert_eq!(p.context_window, CONTEXT);
         assert!(

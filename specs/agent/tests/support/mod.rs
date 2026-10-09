@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -303,6 +304,14 @@ pub struct Harness {
 
 impl Harness {
     pub fn new(profile: Option<&str>) -> Harness {
+        Self::build(profile, None)
+    }
+
+    pub fn with_clock(clock: Arc<AtomicI64>) -> Harness {
+        Self::build(None, Some(clock))
+    }
+
+    fn build(profile: Option<&str>, clock: Option<Arc<AtomicI64>>) -> Harness {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = Db::open(dir.path().join("h.db")).expect("db");
         let index = Arc::new(FakeIndex {
@@ -312,6 +321,9 @@ impl Harness {
         let secrets = Arc::new(MemSecrets::default());
         let mut env = AgentEnv::new(db.clone(), Client::new(), secrets.clone(), index.clone());
         env.redact_profile = profile.map(str::to_string);
+        if let Some(c) = clock {
+            env.clock = Arc::new(move || c.load(Ordering::SeqCst));
+        }
         Harness {
             dir,
             db,

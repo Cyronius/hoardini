@@ -73,12 +73,13 @@ Nothing shall start until a run (or a connection test) uses the Built-in profile
 **Applies to:** hoardini-server
 **Verification:** test
 
-The child shall stop once no run has used it for `builtin_idle_minutes` (default 10, read at every check; 0 stops it as soon as it is idle), and never while a run holds it. A watchdog checks every 15 seconds.
+The child shall stop once no run has used it for `builtin_idle_minutes` (default 10, read at every check; 0 stops it as soon as it is idle), and never while a run holds it. A watchdog checks every 15 seconds, and it exists only while a child does: it starts when a child is launched and exits once the child is gone (stopped as idle, crashed, or removed), so an app with no child has no watchdog timer (SRV-IDLE-ZERO).
 
 **Acceptance criteria:**
 - While a run holds the child, an idle check one hour later does not stop it.
 - After the run ends, a check at 9 minutes leaves it running and a check at 10 minutes 1 second kills it and reports `running: false`.
 - With the setting at 0, the first check after the run ends stops it.
+- On a paused clock: no watchdog before the first acquire, even after 45 s; one after it, which leaves a held child alone; with the setting at 0, the first tick after the run ends stops the child and the watchdog is gone. A new child brings it back. With the setting at 10, a child that crashes ends the watchdog at the next tick.
 
 ### PROV-BUILTIN-RESTART: A crashed child is restarted when next needed
 **Applies to:** hoardini-server
@@ -94,11 +95,11 @@ When the child has exited on its own, the next run shall start a fresh one rathe
 **Applies to:** hoardini-server
 **Verification:** test
 
-The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <random> --jinja -t <physical cores - 2, at least 1> -c 8192 --no-webui -np 1 --cache-ram 0 --cache-type-k q8_0 --cache-type-v q8_0 -ngl 0 -a <model id>`, with `CREATE_NO_WINDOW` and normal priority, inside a kill-on-close job object so it dies with the app. The Built-in profile is `small: true` and `redact_paths: true`.
+The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <random> --jinja -t <physical cores - 2, at least 1> -c 8192 --no-webui -np 1 --cache-ram 0 --cache-type-k q8_0 --cache-type-v q8_0 -ngl 0 -a <model id>`, with `CREATE_NO_WINDOW` and normal priority, inside a kill-on-close job object so it dies with the app. The Built-in profile is `small: true` (paths are redacted for every provider, AGENT-REDACT).
 
 **Acceptance criteria:**
 - `builtin::args` puts `127.0.0.1` after `--host`, the port after `--port`, the GGUF after `-m`, `0` after `-ngl`, 16384 after `-c`, `physical_cores() - 2` (at least 1) after `-t`, and includes `--jinja` and `--no-webui`.
-- `builtin::profile(id)` is small and redacts paths.
+- `builtin::profile(id)` is small.
 
 ### PROV-BUILTIN-STATUS: The download card's facts
 **Applies to:** hoardini-server
@@ -126,7 +127,7 @@ The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <rand
 Nothing shall be downloaded until the user clicks the card's download button. The card shows the runtime size, the model size, the free space and the model's license link; while the job runs it shows progress from the status stream and a Cancel button; when done the Built-in row appears in the provider list (active when it is the only provider). The card stays hidden while `recommended` is null and nothing is installed.
 
 **Verification (manual):**
-1. With `RECOMMENDED` set (or a model installed), open Settings, Providers: the "Built-in model" card lists runtime size, model size, free space and a license link that opens the model's license.
+1. With `RECOMMENDED` set (or a model installed), open Settings, AI: the "Built-in model" card lists runtime size, model size, free space and a license link that opens the model's license.
 2. Click "Download": a progress bar advances (`builtin_install` job frames on `/api/status/stream`); Cancel stops it and leaves no `.part` file in the data folder.
 3. Download again to the end: the card shows "idle", the provider list gains "Built-in · on this PC, CPU", and the first chat turn on it answers after the model loads.
 4. Click "Remove built-in model" and confirm: the card reports the freed size, and `%LOCALAPPDATA%\hoardini\runtime\` and `models\` no longer hold the files.
@@ -154,3 +155,28 @@ Closing the app, or the app crashing, shall end the child.
 1. Chat once on the Built-in profile so `llama-server.exe` runs (Task Manager, Details).
 2. Close the app normally: `llama-server.exe` disappears within a few seconds.
 3. Start it again, chat once, then end `hoardini-app.exe` from Task Manager: `llama-server.exe` disappears too (kill-on-close job object).
+
+### PROV-RATE-LIMIT: HTTP 429 waits and retries; a daily quota ends the run
+**Applies to:** hoardini-agent
+**Verification:** test
+
+On HTTP 429 the client shall wait and retry the same request, at most 3 attempts in all. The wait is `Retry-After` (seconds or an HTTP date) when present, else 2 s then 4 s, and never more than 60 s. Before each wait it calls the registered notice with the seconds, and the run loop turns that into `CUSTOM rate_limit_wait {seconds}`. A 429 whose body names a daily limit (`per day`, `per-day`, `PerDay`, `daily`) shall not wait: it fails at once with `ProviderError::DailyQuota`, which the run reports as "the free tier is used up for today" and suggests another provider. Three 429s in a row fail with `ProviderError::RateLimited`. Sleeping is injectable (`Client::with_sleeper`).
+
+**Acceptance criteria:**
+- A mock answering 429 with `Retry-After: 7` and then 200: `chat` returns the turn, 2 requests were made, the sleeper saw exactly 7 s and the notice saw 7.
+- `Retry-After` as an HTTP date 30 s ahead: the sleeper sees 27 to 30 s (streaming path).
+- `Retry-After: 3600` sleeps 60 s.
+- Three 429s without `Retry-After` give `RateLimited` after 3 requests with sleeps of 2 s and 4 s.
+- Bodies mentioning OpenRouter `free-models-per-day`, Gemini `RESOURCE_EXHAUSTED` with `...PerDay...`, and Cerebras "Tokens per day limit exceeded" each give `DailyQuota` after 1 request and no sleep.
+
+### PROV-PRESETS: Free-tier presets, and no implicit provider
+**Applies to:** hoardini-agent, hoardini-server
+**Verification:** test
+
+`presets()` shall include Cerebras (`https://api.cerebras.ai/v1`, default model `gpt-oss-120b`), Google Gemini (`https://generativelanguage.googleapis.com/v1beta/openai/`, a Flash model) and OpenRouter (a `:free` model), each with its key-page URL, besides the existing entries. The server shall never create a provider by itself: a run with no provider ends with `RUN_ERROR` and leaves `GET /api/providers` empty and no active provider. `GET /api/providers/local` lists running local servers (LM Studio, Ollama, llama.cpp, vLLM) by probing each preset's `/models` with a 1 s timeout. `GET /api/setup` reports `meta.ai_setup_done` (an install that already has a provider counts as done); `POST /api/setup/done` sets it.
+
+**Acceptance criteria:**
+- The preset list contains `cerebras` and `gemini` with the base URLs above, a default model for each, and `needs_key`.
+- OpenRouter's default model ends in `:free`; Ollama has no default model.
+- On a fresh data dir `GET /api/setup` is `{done:false}`; `POST /api/agent/run` streams `RUN_ERROR`, `/api/providers` stays `[]`, `/api/status` has no active provider; after `POST /api/setup/done` it is `{done:true}`.
+- After creating a provider, `GET /api/setup` is `{done:true}` on an otherwise fresh data dir.

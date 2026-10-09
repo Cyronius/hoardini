@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { routes } from "../api/client";
+import { useAiSetup } from "../aiSetup";
 import { DEFAULT_AGENT_MAX_STEPS, DEFAULT_AI_TIMEOUT_SECONDS } from "../agent/aiTimeouts";
 import type { Preset, ProviderConfig, ProviderView, TestReport } from "../api/types";
 import { EditIcon, PlusIcon, TrashIcon } from "../components/icons";
@@ -20,7 +21,6 @@ type Form = {
   timeout_s: string;
   max_tool_steps: string;
   small: boolean;
-  redact_paths: boolean;
   params: string;
   headers: string;
   extra_body: string;
@@ -37,7 +37,6 @@ const blank = (): Form => ({
   timeout_s: "",
   max_tool_steps: "",
   small: false,
-  redact_paths: true,
   params: "{}",
   headers: "{}",
   extra_body: "{}",
@@ -55,7 +54,6 @@ const fromView = (p: ProviderView): Form => ({
   timeout_s: p.timeout_s ? String(p.timeout_s) : "",
   max_tool_steps: p.max_tool_steps ? String(p.max_tool_steps) : "",
   small: p.small,
-  redact_paths: p.redact_paths,
   params: JSON.stringify(p.params ?? {}, null, 2),
   headers: JSON.stringify(p.headers ?? {}, null, 2),
   extra_body: JSON.stringify(p.extra_body ?? {}, null, 2),
@@ -93,7 +91,6 @@ export function toConfig(f: Form, keyRef: string | null): ProviderConfig {
     timeout_s: posInt(f.timeout_s, 0),
     max_tool_steps: posInt(f.max_tool_steps, 0),
     small: f.small,
-    redact_paths: f.redact_paths,
     params: parseObject(f.params, "Parameters") as ProviderConfig["params"],
     headers,
     extra_body: parseObject(f.extra_body, "Extra body"),
@@ -248,7 +245,6 @@ function ProviderForm({ initial, presets, onDone, onCancel }: { initial: Form; p
         </Field>
       </div>
       <Toggle checked={f.small} onChange={(v) => set("small", v)} label="Small model" hint="Uses a reduced toolset and shorter prompt." />
-      <Toggle checked={f.redact_paths} onChange={(v) => set("redact_paths", v)} label="Redact paths" hint="Your user name never leaves the machine in prompts." />
       <details className="rounded-lg border border-line-soft px-2.5 py-1.5">
         <summary className="cursor-pointer font-semibold text-muted">Advanced: params, headers, extra body</summary>
         <div className="mt-2 space-y-2">
@@ -313,12 +309,21 @@ export function ProvidersTab() {
   useEffect(() => {
     load();
     routes.presets().then(setPresets).catch(() => {});
+    if (useAiSetup.getState().wantForm) {
+      useAiSetup.setState({ wantForm: false });
+      setForm(blank());
+    }
   }, [load]);
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-muted">The model that answers. Any OpenAI-compatible server works.</p>
+        <div>
+          <p className="text-muted">The model that answers. Any OpenAI-compatible server works.</p>
+          <button className="text-[length:var(--fs-sm)] font-semibold text-brass underline underline-offset-2 hover:no-underline" onClick={() => useAiSetup.getState().setOpen(true)}>
+            Run setup again
+          </button>
+        </div>
         <IconButton title="Add provider" aria-label="Add provider" className="text-brass" onClick={() => setForm(blank())}>
           <PlusIcon />
         </IconButton>

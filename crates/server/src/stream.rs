@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 use futures::StreamExt;
 use hoardini_agent::agui::{Event, RunAgentInput};
 use hoardini_agent::run::run_agent;
+use hoardini_agent::thread;
 use hoardini_core::actions::Job;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
@@ -60,6 +61,7 @@ pub async fn status_stream(State(s): State<AppState>) -> Response {
 }
 
 async fn status_pump(s: AppState, tx: mpsc::Sender<Result<Bytes, Infallible>>) {
+    let _watcher = s.supervisor.watch();
     let mut changes = s.change.subscribe();
     let mut jobs = s.exec.subscribe();
     let mut shutdown = s.shutdown.subscribe();
@@ -133,10 +135,11 @@ impl Drop for RunGuard {
 }
 
 pub async fn agent_run(State(s): State<AppState>, body: Bytes) -> ApiResult<Response> {
-    let input: RunAgentInput = parse(&body)?;
-    if input.run_id.is_empty() || input.thread_id.is_empty() {
-        return Err(ApiError::bad("threadId and runId are required"));
+    let mut input: RunAgentInput = parse(&body)?;
+    if input.run_id.is_empty() {
+        return Err(ApiError::bad("runId is required"));
     }
+    input.thread_id = thread::MAIN.into();
     let provider = {
         let st = s.clone();
         blocking(move || Ok(providers::active_for_run(&st)?)).await?

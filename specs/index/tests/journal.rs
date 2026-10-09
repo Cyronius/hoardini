@@ -221,9 +221,11 @@ fn a_reset_wrapped_or_missing_journal_falls_back_to_a_full_refresh() {
         "a full refresh without a journal stores no position"
     );
 
-    index::set_threshold_setting(&conn, 64 * KIB).unwrap();
-    full(&e, &fs);
-    index::set_threshold_setting(&conn, MIB).unwrap();
+    let small = RefreshOptions {
+        threshold: Some(64 * KIB),
+        ..jopts(&fs)
+    };
+    assert!(refresh(&conn, &fs, fs.root(), &small).unwrap().completed);
     assert!(matches!(auto(RefreshKind::Journal), RefreshRun::Journal(_)));
     assert!(matches!(
         auto(RefreshKind::Auto),

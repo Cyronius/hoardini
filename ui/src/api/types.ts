@@ -91,7 +91,6 @@ export type ProviderConfig = {
   timeout_s: number;
   max_tool_steps: number;
   small: boolean;
-  redact_paths: boolean;
   params: { temperature?: number; max_tokens?: number; top_p?: number };
   headers: Record<string, string>;
   extra_body: Record<string, unknown>;
@@ -106,7 +105,8 @@ export type TestReport = {
   caps: Caps | null;
   latency_ms: number | null;
 };
-export type Preset = { name: string; base_url: string; needs_key: boolean };
+export type Preset = { id: string; name: string; base_url: string; needs_key: boolean; default_model: string | null; key_url: string | null };
+export type LocalServer = { id: string; name: string; base_url: string; models: string[] };
 
 export type Destination = {
   id: string;
@@ -148,22 +148,20 @@ export type HistoryPoint = {
   indexed_bytes: number;
 };
 
+export type IndexSpeed = "lean" | "fast";
 export type Settings = {
-  threshold_bytes: number;
-  redact_paths: boolean;
-  web_search_enabled: boolean;
-  indexer_workers: number;
-  indexer_memory_cap_mb: number;
+  index_speed: IndexSpeed;
   builtin_idle_minutes: number;
   index_size_bytes: number;
 };
 
-export type ThreadSummary = { id: string; title: string; updated_ms: number };
 export type ThreadDetail = {
-  id: string;
-  title: string;
+  id: "main";
   messages: unknown[];
   proposals: Record<string, Proposal>;
+  window_start_id: string | null;
+  has_hidden: boolean;
+  fresh: boolean;
 };
 
 export type ApproveResponse = { approved: true; items: number[]; job_id: string };
