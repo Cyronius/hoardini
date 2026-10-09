@@ -1024,6 +1024,48 @@ async fn the_system_prompt_summarizes_each_watched_drive_and_names_the_selected_
     );
 }
 
+// Traces: AGENT-PROMPT-CONTEXT
+#[tokio::test]
+async fn each_biggest_folder_in_the_prompt_carries_its_location_tag() {
+    let h = Harness::new(None);
+    h.index_fake(
+        r"D:\",
+        &[
+            (r"D:\Media\film.mkv", 7 * GIB),
+            (r"D:\Media\clip.mp4", 5 * GIB),
+            (r"D:\code\covenant-agent\a.dat", 90 * GIB),
+            (r"D:\code\covenant-agent\b.dat", 71 * GIB),
+            (r"D:\code\other\c.dat", 6 * GIB),
+        ],
+    );
+    let conn = h.db.conn().unwrap();
+    set_meta(&conn, "indexed_volumes", r#"["D:\\"]"#).unwrap();
+    set_meta(&conn, "selected_volume", r"D:\").unwrap();
+    memory::location::refresh_volume(
+        &conn,
+        &hoardini_core::policy::PolicyEnv::system(),
+        r"D:\",
+        now_ms(),
+    )
+    .unwrap();
+    let mock = MockLlm::start(vec![Turn::Text("ok".into())]).await;
+    h.run(h.provider(&mock.base_url), user("t-tags", "u1", "hi"))
+        .await;
+    let sys = mock.requests()[0].messages()[0]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        sys.contains(r"- D:\code\covenant-agent 161 GB (unknown; 2 files)"),
+        "{sys}"
+    );
+    assert!(
+        sys.contains(r"- D:\Media 12.0 GB (your photos and videos, keep; 2 files)"),
+        "{sys}"
+    );
+    assert!(sys.contains(r"- D:\code\other 6.0 GB (1 files)"), "{sys}");
+}
+
 // Traces: AGENT-MEMORY-NOTED
 #[tokio::test]
 async fn remember_emits_a_memory_noted_event_for_the_undo_chip() {

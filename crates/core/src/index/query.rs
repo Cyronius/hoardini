@@ -742,10 +742,16 @@ fn summary_with(
     }
     s.push_str(".\nBiggest folders:\n");
     let dirs = prompt_dirs(conn, &st.volume, dir_count)?;
+    let profile = crate::paths::profile_dir().to_string_lossy().into_owned();
     for d in &dirs.items {
+        let tag = crate::memory::location::location_at(conn, &profile, &d.path)?
+            .as_ref()
+            .and_then(crate::memory::location::tag)
+            .map(|t| format!("{t}; "))
+            .unwrap_or_default();
         let _ = writeln!(
             s,
-            "- {} {} ({} files)",
+            "- {} {} ({tag}{} files)",
             d.path,
             humanize_bytes(d.size),
             group_digits(d.files)
