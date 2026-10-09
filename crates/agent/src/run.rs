@@ -19,7 +19,7 @@ use crate::provider::{
     ToolCallMsg, is_context_overflow,
 };
 use crate::thread::{self, Stored};
-use crate::tools::util::redact_all;
+use crate::tools::util::{redact_all, redact_value};
 use crate::tools::{Kind, Outcome, Registry, ToolCtx, ToolError, refresh_note};
 
 // Implemented by the server's indexer supervisor; the agent only asks.
@@ -96,6 +96,8 @@ impl From<anyhow::Error> for Stop {
 struct RoundEnd {
     proposal_pending: bool,
     bad_args: bool,
+    // The answer is written and its follow-ups are shown, so another model round adds nothing.
+    answered: bool,
 }
 
 enum TurnErr {
@@ -364,16 +366,19 @@ impl Run {
             let msg_id = em.turn_text.take().unwrap_or_else(new_id);
             if turn.tool_calls.is_empty() {
                 if !turn.text.trim().is_empty() {
-                    self.store(vec![Stored {
-                        id: msg_id,
-                        msg: turn.to_message(),
-                    }])
+                    self.store(
+                        vec![Stored {
+                            id: msg_id,
+                            msg: turn.to_message(),
+                        }],
+                        Vec::new(),
+                    )
                     .await?;
                 }
                 return Ok(());
             }
             let end = self.handle_calls(em, turn, msg_id, &stored).await?;
-            if end.proposal_pending {
+            if end.proposal_pending || end.answered {
                 return Ok(());
             }
             self.steps += 1;
@@ -469,11 +474,19 @@ impl Run {
         Ok(shed)
     }
 
-    async fn store(&self, msgs: Vec<Stored>) -> Result<(), Stop> {
+    async fn store(&self, msgs: Vec<Stored>, ui: Vec<(String, Value)>) -> Result<(), Stop> {
         let db = self.env.db.clone();
         let conv = self.thread_id.clone();
         let now = self.env.now();
-        blocking(move || thread::append_all_at(&mut db.conn()?, &conv, &msgs, now)).await
+        blocking(move || {
+            let mut conn = db.conn()?;
+            thread::append_all_at(&mut conn, &conv, &msgs, now)?;
+            for (id, data) in &ui {
+                thread::set_ui(&conn, id, data)?;
+            }
+            Ok(())
+        })
+        .await
     }
 
     async fn stream_turn(
@@ -542,6 +555,7 @@ impl Run {
         msg_id: String,
         stored: &[Stored],
     ) -> Result<RoundEnd, Stop> {
+        let has_text = !turn.text.trim().is_empty();
         let mut assistant = turn.to_message();
         let mut seen = thread::call_ids(stored);
         // Some servers reuse ids like "call_0" every turn; results are matched by id, so keep them unique.
@@ -555,8 +569,10 @@ impl Run {
         }
         let calls: Vec<ToolCallMsg> = assistant.tool_calls.clone().unwrap_or_default();
         let mut results: Vec<Stored> = Vec::new();
+        let mut ui: Vec<(String, Value)> = Vec::new();
         let mut pending: Vec<(String, String, String)> = Vec::new();
         let mut bad_args = false;
+        let mut only_suggestions = !calls.is_empty();
         for (i, call) in calls.iter().enumerate() {
             let kind = self.registry.get(&call.function.name).map(|t| t.kind());
             if kind != Some(Kind::Propose) {
@@ -581,9 +597,22 @@ impl Run {
                     pending.push((call.id.clone(), proposal_id, args));
                     continue;
                 }
-                Ok(Outcome::Text { content, custom }) => {
+                Ok(Outcome::Text {
+                    content,
+                    custom,
+                    data,
+                }) => {
                     let result_id = new_id();
                     self.emit_result(em, &result_id, &call.id, &content).await?;
+                    only_suggestions &= call.function.name == "suggest_next" && data.is_some();
+                    if let Some(data) = data {
+                        em.custom(
+                            "tool_data",
+                            json!({"tool_call_id": call.id, "data": redact_value(&data, &self.profile)}),
+                        )
+                        .await?;
+                        ui.push((result_id.clone(), data));
+                    }
                     for (name, value) in custom {
                         em.custom(&name, value).await?;
                     }
@@ -595,6 +624,7 @@ impl Run {
                 }
                 Err(e) => {
                     bad_args |= matches!(e, ToolError::BadArgs(_));
+                    only_suggestions = false;
                     e.message()
                 }
             };
@@ -612,7 +642,7 @@ impl Run {
             msg: assistant,
         }];
         batch.extend(results);
-        self.store(batch).await?;
+        self.store(batch, ui).await?;
         for (call_id, proposal_id, args) in &pending {
             let name = calls
                 .iter()
@@ -630,6 +660,7 @@ impl Run {
         Ok(RoundEnd {
             proposal_pending: !pending.is_empty(),
             bad_args,
+            answered: only_suggestions && has_text,
         })
     }
 

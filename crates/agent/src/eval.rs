@@ -151,6 +151,7 @@ async fn run_turn(
             content: Some(text.to_string()),
             tool_calls: None,
             tool_call_id: None,
+            data: None,
         }],
         ..Default::default()
     };
@@ -220,8 +221,9 @@ pub async fn run(opts: Options) -> Result<Report> {
             let t0 = Instant::now();
             let mut run_error = None;
             for turn in &case.turns {
+                let turn = fx.question(turn);
                 run_error =
-                    run_turn(&env, &opts.provider, &thread_id, turn, opts.turn_timeout).await;
+                    run_turn(&env, &opts.provider, &thread_id, &turn, opts.turn_timeout).await;
                 if run_error.is_some() {
                     break;
                 }

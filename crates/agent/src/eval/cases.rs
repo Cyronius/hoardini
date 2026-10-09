@@ -44,6 +44,7 @@ struct C {
     id: &'static str,
     turns: Vec<String>,
     required: Vec<ToolGroup>,
+    ends_with: Vec<String>,
     propose: bool,
     remember: bool,
     facts: Vec<Rule>,
@@ -57,6 +58,7 @@ impl C {
             id,
             turns: vec![turn.into()],
             required: Vec::new(),
+            ends_with: Vec::new(),
             propose: false,
             remember: false,
             facts: Vec::new(),
@@ -72,6 +74,11 @@ impl C {
 
     fn needs(mut self, any_of: &[&str], args_all: &[&str]) -> C {
         self.required.push(group(any_of, args_all));
+        self
+    }
+
+    fn ends_with_card(mut self) -> C {
+        self.ends_with = PROPOSE.iter().map(|s| s.to_string()).collect();
         self
     }
 
@@ -107,6 +114,7 @@ impl C {
             id: self.id.into(),
             turns: self.turns,
             required: self.required,
+            ends_with: self.ends_with,
             allow_propose: self.propose,
             allow_remember: self.remember,
             facts: self.facts,
@@ -118,6 +126,12 @@ impl C {
 
 const LOOK: &[&str] = &["top_dirs", "top_files", "inspect"];
 const EVIDENCE: &[&str] = &["inspect", "recall"];
+const PROPOSE: &[&str] = &[
+    "propose_delete",
+    "propose_archive",
+    "propose_compress",
+    "propose_dedupe",
+];
 
 pub fn cases(sz: &Sizes) -> Vec<CaseSpec> {
     let dest = DESTINATION;
@@ -257,6 +271,28 @@ pub fn cases(sz: &Sizes) -> Vec<CaseSpec> {
             .may_propose()
             .fact("names the hoardini target", r"hoardini")
             .fact("gives a size", &format!("{}|{}", size_re(sz.target_growth), r"\d+(?:\.\d+)?\s?GB"))
+            .done(),
+        C::new(
+            "hotspots",
+            "Show me the biggest hotspots and what changed since the last refresh.",
+        )
+        .needs(&["top_dirs"], &[])
+        .needs(&["changes"], &[])
+        .fact(
+            "names a mover or the free-space drop",
+            r"coder|target|hoardini|lm ?studio|less free|free space (?:fell|dropped|went down|decreased|shrank)|lost \d",
+        )
+        .done(),
+        C::new("code-cleanup", r"What can I delete in C:\code?")
+            .needs(LOOK, &[r"code"])
+            .ends_with_card()
+            .may_propose()
+            .fact("names build output", r"target|node_modules|build")
+            .never(
+                "proposed a whole project or the code folder",
+                &[],
+                r"(?m:^[A-Z]:\\code(?:\\[^\\\n]+)?\\?$)",
+            )
             .done(),
     ]
 }

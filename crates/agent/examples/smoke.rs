@@ -86,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
             content: Some(question.into()),
             tool_calls: None,
             tool_call_id: None,
+            data: None,
         }],
         ..Default::default()
     };

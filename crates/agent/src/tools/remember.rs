@@ -84,6 +84,7 @@ impl Tool for Remember {
                 "memory_noted".into(),
                 json!({"memory_id": m.id, "text": m.text, "tool_call_id": ctx.tool_call_id, "pinned": m.pinned}),
             )],
+            data: None,
         })
     }
 }

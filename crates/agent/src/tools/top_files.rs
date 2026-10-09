@@ -5,8 +5,11 @@ use hoardini_core::paths::humanize_bytes;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::util::{abs_path, conn, date, failed, index_age, limit, opt_days, opt_size, opt_string, opt_u64, parse};
-use super::{Outcome, Tool, ToolCtx, ToolError};
+use super::util::{
+    abs_path, as_of_ms, conn, date, failed, index_age, limit, opt_days, opt_size, opt_string,
+    opt_u64, parse,
+};
+use super::{DATA_VERSION, Outcome, Tool, ToolCtx, ToolError};
 
 pub struct TopFiles;
 
@@ -97,6 +100,26 @@ impl Tool for TopFiles {
         if let Some(more) = r.more_line() {
             let _ = writeln!(out, "{more}");
         }
-        Ok(Outcome::text(out))
+        let items: Vec<Value> = r
+            .items
+            .iter()
+            .map(|f| {
+                json!({"path": f.path, "size": f.size, "modified_ms": f.mtime_ms, "accessed_ms": f.atime_ms})
+            })
+            .collect();
+        let data = json!({
+            "v": DATA_VERSION,
+            "kind": "files",
+            "filters": {
+                "under": under,
+                "min_size": a.min_size.filter(|m| *m > 0),
+                "ext": a.ext,
+                "not_used_for_days": a.not_used_for,
+            },
+            "as_of_ms": as_of_ms(&conn, under.as_deref()),
+            "items": items,
+            "more": {"count": r.more_count, "bytes": r.more_bytes},
+        });
+        Ok(Outcome::text(out).with_data(data))
     }
 }

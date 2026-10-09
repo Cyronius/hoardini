@@ -381,6 +381,7 @@ pub fn msg(id: &str, role: &str, content: &str) -> AgMessage {
         content: Some(content.into()),
         tool_calls: None,
         tool_call_id: None,
+        data: None,
     }
 }
 

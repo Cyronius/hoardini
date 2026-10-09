@@ -5,8 +5,10 @@ use hoardini_core::paths::humanize_bytes;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::util::{abs_path, conn, digits, failed, index_age, limit, opt_string, opt_u64, parse};
-use super::{Outcome, Tool, ToolCtx, ToolError};
+use super::util::{
+    abs_path, as_of_ms, conn, digits, failed, index_age, limit, opt_string, opt_u64, parse,
+};
+use super::{DATA_VERSION, Outcome, Tool, ToolCtx, ToolError};
 
 pub struct TopDirs;
 
@@ -71,6 +73,20 @@ impl Tool for TopDirs {
         if let Some(more) = r.more_line() {
             let _ = writeln!(out, "{more}");
         }
-        Ok(Outcome::text(out))
+        let items: Vec<Value> = r
+            .items
+            .iter()
+            .map(|d| json!({"path": d.path, "size": d.size, "files": d.files, "denied": d.denied}))
+            .collect();
+        let data = json!({
+            "v": DATA_VERSION,
+            "kind": "folders",
+            "under": under,
+            "depth": depth,
+            "as_of_ms": as_of_ms(&conn, under.as_deref()),
+            "items": items,
+            "more": {"count": r.more_count, "bytes": r.more_bytes},
+        });
+        Ok(Outcome::text(out).with_data(data))
     }
 }
