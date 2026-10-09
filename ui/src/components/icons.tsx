@@ -48,12 +48,6 @@ export const StopIcon = () => (
     <rect x="5" y="5" width="14" height="14" rx="3" />
   </svg>
 );
-export const HistoryIcon = () => (
-  <Svg>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M12 7v5l3 2" />
-  </Svg>
-);
 export const FreshStartIcon = () => (
   <Svg>
     <path d="M12 2v8" />

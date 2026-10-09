@@ -125,7 +125,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
       const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: text };
       askedRef.current = userMsg;
       stuckRef.current = true;
-      markAsked();
+      markAsked(userMsg.id, messages.length > 0);
       addMessage(userMsg);
       useActivity.getState().clear();
       agentClient.startNewRun();
@@ -295,7 +295,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
     }
     scrollback.push(body);
   }
-  if (boundaryDue || (meta?.has_hidden && meta.window_start_id == null)) scrollback.push(<Boundary key="boundary-end" />);
+  const boundaryAtEnd = boundaryDue || (!!meta?.has_hidden && meta.window_start_id == null);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -345,6 +345,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
                   : `Hoardini stopped without a final answer. It may have hit the tool call limit (${limits.maxSteps}).`}
             </Prompt>
           )}
+          {boundaryAtEnd && <Boundary />}
           {(meta ? meta.fresh : messages.length === 0) && !isStreaming && <Greeting onAsk={(t) => void sendText(t)} />}
         </div>
       </div>

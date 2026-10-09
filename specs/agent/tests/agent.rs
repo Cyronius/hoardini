@@ -522,8 +522,20 @@ async fn an_overflow_with_no_tool_result_to_drop_moves_the_window_one_turn_and_r
     let h = Harness::new(None);
     let conn = h.db.conn().unwrap();
     thread::ensure_conversation(&conn, "t-over3", None).unwrap();
-    thread::append(&conn, "t-over3", "u1", &ChatMessage::text("user", "old question")).unwrap();
-    thread::append(&conn, "t-over3", "a1", &ChatMessage::text("assistant", "old answer")).unwrap();
+    thread::append(
+        &conn,
+        "t-over3",
+        "u1",
+        &ChatMessage::text("user", "old question"),
+    )
+    .unwrap();
+    thread::append(
+        &conn,
+        "t-over3",
+        "a1",
+        &ChatMessage::text("assistant", "old answer"),
+    )
+    .unwrap();
     let overflow = json!({"error": {"message": "request exceeds the available context size"}});
     let mock = MockLlm::start(vec![
         Turn::Http(400, overflow.to_string()),
@@ -531,7 +543,10 @@ async fn an_overflow_with_no_tool_result_to_drop_moves_the_window_one_turn_and_r
     ])
     .await;
     let ev = h
-        .run(h.provider(&mock.base_url), user("t-over3", "u2", "new question"))
+        .run(
+            h.provider(&mock.base_url),
+            user("t-over3", "u2", "new question"),
+        )
         .await;
     assert_eq!(types(&ev).last().unwrap(), "RUN_FINISHED");
     let reqs = mock.requests();
@@ -589,10 +604,34 @@ async fn requests_start_at_the_stored_window_start() {
     let h = Harness::new(None);
     let conn = h.db.conn().unwrap();
     thread::ensure_conversation(&conn, "t-win", None).unwrap();
-    thread::append(&conn, "t-win", "u1", &ChatMessage::text("user", "hidden question")).unwrap();
-    thread::append(&conn, "t-win", "a1", &ChatMessage::text("assistant", "hidden answer")).unwrap();
-    thread::append(&conn, "t-win", "u2", &ChatMessage::text("user", "seen question")).unwrap();
-    thread::append(&conn, "t-win", "a2", &ChatMessage::text("assistant", "seen answer")).unwrap();
+    thread::append(
+        &conn,
+        "t-win",
+        "u1",
+        &ChatMessage::text("user", "hidden question"),
+    )
+    .unwrap();
+    thread::append(
+        &conn,
+        "t-win",
+        "a1",
+        &ChatMessage::text("assistant", "hidden answer"),
+    )
+    .unwrap();
+    thread::append(
+        &conn,
+        "t-win",
+        "u2",
+        &ChatMessage::text("user", "seen question"),
+    )
+    .unwrap();
+    thread::append(
+        &conn,
+        "t-win",
+        "a2",
+        &ChatMessage::text("assistant", "seen answer"),
+    )
+    .unwrap();
     thread::set_window_start_at(&conn, "t-win", "u2").unwrap();
     let mock = MockLlm::start(vec![Turn::Text("ok".into())]).await;
     h.run(h.provider(&mock.base_url), user("t-win", "u3", "next"))
@@ -636,7 +675,13 @@ async fn a_card_answered_after_its_turn_left_the_window_reaches_the_model_as_a_n
     let pid = pending_delete(&h, "t-late", "call_old", &victim);
     let conn = h.db.conn().unwrap();
     thread::ensure_conversation(&conn, "t-late", None).unwrap();
-    thread::append(&conn, "t-late", "u1", &ChatMessage::text("user", "delete the model")).unwrap();
+    thread::append(
+        &conn,
+        "t-late",
+        "u1",
+        &ChatMessage::text("user", "delete the model"),
+    )
+    .unwrap();
     let assistant = ChatMessage {
         role: "assistant".into(),
         tool_calls: Some(vec![ToolCallMsg::new(
@@ -663,7 +708,10 @@ async fn a_card_answered_after_its_turn_left_the_window_reaches_the_model_as_a_n
     assert_eq!(msgs.len(), 2, "{msgs:?}");
     assert_eq!(msgs[1]["role"], "user");
     let note = msgs[1]["content"].as_str().unwrap();
-    assert!(note.contains(&format!("Proposal {pid} (delete) was declined")), "{note}");
+    assert!(
+        note.contains(&format!("Proposal {pid} (delete) was declined")),
+        "{note}"
+    );
     assert!(!msgs.iter().any(|m| m["role"] == "tool"));
 }
 
@@ -945,6 +993,7 @@ async fn remember_emits_a_memory_noted_event_for_the_undo_chip() {
     let v = &noted[0]["value"];
     assert_eq!(v["tool_call_id"], "c1");
     assert_eq!(v["text"], "Keep Qwen 27B");
+    assert_eq!(v["pinned"], false);
     let id = v["memory_id"].as_i64().unwrap();
     let m = memory::get(&h.db.conn().unwrap(), id)
         .unwrap()
@@ -954,6 +1003,38 @@ async fn remember_emits_a_memory_noted_event_for_the_undo_chip() {
     let result = t.iter().position(|x| x == "TOOL_CALL_RESULT").unwrap();
     let custom_pos = ev.iter().position(|e| e["name"] == "memory_noted").unwrap();
     assert!(result < custom_pos);
+}
+
+// Traces: AGENT-MEMORY-NOTED, MEM-PIN-USER
+#[tokio::test]
+async fn remember_with_user_asked_pins_the_note_and_the_chip_says_so() {
+    let h = Harness::new(None);
+    let mock = MockLlm::start(vec![
+        Turn::Calls(
+            None,
+            vec![call(
+                "c1",
+                "remember",
+                json!({"scope": "global", "kind": "fact", "text": "D:\\scratch is disposable", "user_asked": true}),
+            )],
+        ),
+        Turn::Text("Noted.".into()),
+    ])
+    .await;
+    let ev = h
+        .run(
+            h.provider(&mock.base_url),
+            user("t-pin", "u1", "remember scratch"),
+        )
+        .await;
+    let noted = custom(&ev, "memory_noted");
+    assert_eq!(noted.len(), 1);
+    let v = &noted[0]["value"];
+    assert_eq!(v["pinned"], true);
+    let m = memory::get(&h.db.conn().unwrap(), v["memory_id"].as_i64().unwrap())
+        .unwrap()
+        .expect("memory row");
+    assert!(m.pinned);
 }
 
 // Traces: AGENT-TOOL-OUTPUT
@@ -1141,7 +1222,14 @@ fn contents(req: &Captured) -> Vec<String> {
     req.messages()
         .iter()
         .skip(1)
-        .map(|m| m["content"].as_str().unwrap_or("").chars().take(8).collect())
+        .map(|m| {
+            m["content"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(8)
+                .collect()
+        })
         .collect()
 }
 
@@ -1158,8 +1246,7 @@ async fn past_75_percent_the_window_moves_to_a_user_message_under_40_percent_the
     .await;
     let mut p = h.provider(&mock.base_url);
     p.context_window = 400_000;
-    h.run(p.clone(), user("t-trim", "n1", "new question"))
-        .await;
+    h.run(p.clone(), user("t-trim", "n1", "new question")).await;
     let conn = h.db.conn().unwrap();
     let start = thread::window_start(&conn, "t-trim").unwrap();
     assert_eq!(start, first_user_seq(&h, "t-trim", "u6"));
@@ -1170,7 +1257,11 @@ async fn past_75_percent_the_window_moves_to_a_user_message_under_40_percent_the
     assert_eq!(first.len(), 7);
     assert_eq!(first[6], "new ques");
     let second = contents(&reqs[1]);
-    assert_eq!(second[..7], first[..], "the prefix is unchanged between trims");
+    assert_eq!(
+        second[..7],
+        first[..],
+        "the prefix is unchanged between trims"
+    );
     assert_eq!(second[7..], ["first", "follow-u"]);
     assert_eq!(thread::window_start(&conn, "t-trim").unwrap(), start);
 }

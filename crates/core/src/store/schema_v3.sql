@@ -30,3 +30,10 @@ ALTER TABLE memory ADD COLUMN forgotten_ms INTEGER;
 UPDATE memory SET last_used_ms = updated_ms;
 UPDATE memory SET pinned = 1 WHERE source = 'user';
 CREATE INDEX memory_lru ON memory(forgotten_ms, pinned, last_used_ms);
+
+-- Touching last_used_ms must not re-index the note text.
+DROP TRIGGER memory_au;
+CREATE TRIGGER memory_au AFTER UPDATE OF text, key ON memory BEGIN
+  INSERT INTO memory_fts(memory_fts, rowid, text, key) VALUES ('delete', old.id, old.text, old.key);
+  INSERT INTO memory_fts(rowid, text, key) VALUES (new.id, new.text, new.key);
+END;

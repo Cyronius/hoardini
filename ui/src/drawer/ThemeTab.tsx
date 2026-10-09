@@ -1,5 +1,12 @@
+import { useState } from "react";
 import { useStore } from "../store";
-import { SYSTEM, THEMES, themeDef, type ThemeDef } from "../theme";
+import { SYSTEM, THEMES, groupOf, resolveTheme, systemPrefersDark, themeDef, type ThemeDef, type ThemeGroup } from "../theme";
+
+const GROUPS: { id: ThemeGroup; label: string }[] = [
+  { id: "dark", label: "Dark" },
+  { id: "midtone", label: "Midtone" },
+  { id: "light", label: "Light" },
+];
 
 function Swatch({ t, active, onPick }: { t: ThemeDef; active: boolean; onPick: () => void }) {
   const k = t.tokens;
@@ -23,8 +30,8 @@ function Swatch({ t, active, onPick }: { t: ThemeDef; active: boolean; onPick: (
 export function ThemeTab() {
   const pref = useStore((s) => s.themePref);
   const set = useStore((s) => s.setThemePref);
-  const light = THEMES.filter((t) => t.mode === "light");
-  const dark = THEMES.filter((t) => t.mode === "dark");
+  const [group, setGroup] = useState<ThemeGroup>(() => groupOf(resolveTheme(pref, systemPrefersDark())));
+  const list = THEMES.filter((t) => groupOf(t) === group);
   return (
     <div className="space-y-3">
       <button
@@ -36,16 +43,25 @@ export function ThemeTab() {
         <div className="font-bold">Follow system</div>
         <div className="text-[length:var(--fs-xs)] text-faint">Marshmallow by day, Marshmallow Night after dark.</div>
       </button>
-      {([["Light", light], ["Dark", dark]] as const).map(([title, list]) => (
-        <div key={title}>
-          <div className="label mb-1 text-[length:var(--fs-xs)]">{title}</div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {list.map((t) => (
-              <Swatch key={t.id} t={t} active={pref === t.id} onPick={() => set(themeDef(t.id).id)} />
-            ))}
-          </div>
-        </div>
-      ))}
+      <div role="tablist" aria-label="Theme group" className="flex gap-1 rounded-xl border border-line-soft p-1">
+        {GROUPS.map((g) => (
+          <button
+            key={g.id}
+            type="button"
+            role="tab"
+            aria-selected={group === g.id}
+            onClick={() => setGroup(g.id)}
+            className={`flex-1 rounded-lg px-2 py-1 text-[length:var(--fs-sm)] font-semibold ${group === g.id ? "bg-brass text-on-accent" : "text-muted hover:text-paper"}`}
+          >
+            {g.label}
+          </button>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-1.5">
+        {list.map((t) => (
+          <Swatch key={t.id} t={t} active={pref === t.id} onPick={() => set(themeDef(t.id).id)} />
+        ))}
+      </div>
     </div>
   );
 }

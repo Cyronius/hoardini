@@ -152,7 +152,6 @@ pub fn set_window_start_at(conn: &Connection, conv: &str, message_id: &str) -> a
     Ok(())
 }
 
-// The next message stored is the first one the model sees.
 pub fn start_fresh(conn: &Connection, conv: &str) -> anyhow::Result<()> {
     ensure_conversation(conn, conv, None)?;
     conn.execute(
@@ -232,8 +231,11 @@ fn msg_chars(m: &ChatMessage) -> usize {
     serde_json::to_string(m).map_or(0, |s| s.len())
 }
 
-// Index the window should start at after a trim, or None to keep it (AGENT-CONTEXT-WINDOW).
-pub fn trim_point(window: &[Stored], overhead_chars: usize, context_tokens: usize) -> Option<usize> {
+pub fn trim_point(
+    window: &[Stored],
+    overhead_chars: usize,
+    context_tokens: usize,
+) -> Option<usize> {
     let budget = context_tokens.saturating_mul(CHARS_PER_TOKEN);
     let sizes: Vec<usize> = window.iter().map(|s| msg_chars(&s.msg)).collect();
     let total: usize = sizes.iter().sum();
@@ -254,7 +256,6 @@ pub fn trim_point(window: &[Stored], overhead_chars: usize, context_tokens: usiz
     last_user
 }
 
-// Overflow's last step before giving up: drop the oldest user turn in the window.
 pub fn next_turn(window: &[Stored]) -> Option<usize> {
     window
         .iter()
@@ -451,7 +452,8 @@ pub fn ingest(
             "user" => {
                 let text = m.content.as_deref().unwrap_or("");
                 if !text.trim().is_empty() {
-                    let gap = last_message_ms(&conn, conv)?.is_some_and(|t| now - t > SESSION_GAP_MS);
+                    let gap =
+                        last_message_ms(&conn, conv)?.is_some_and(|t| now - t > SESSION_GAP_MS);
                     append_at(&conn, conv, &m.id, &ChatMessage::text("user", text), now)?;
                     if gap {
                         set_window_start_at(&conn, conv, &m.id)?;

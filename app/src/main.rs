@@ -8,6 +8,7 @@ use hoardini_core::paths;
 use hoardini_server::{DialogProvider, ServerOptions};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_opener::OpenerExt;
 
 struct TauriDialogs(tauri::AppHandle);
 
@@ -49,6 +50,7 @@ fn main() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let opts = ServerOptions {
                 port: 0,
@@ -72,7 +74,25 @@ fn main() {
             };
             let url = server.url().parse()?;
             app.manage(Shutdown(Mutex::new(Some(server.shutdown))));
+            let opener = app.handle().clone();
+            let nav_opener = opener.clone();
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+                .on_new_window(move |target, _| {
+                    // Rust-side only: the page keeps zero IPC (UI-NO-IPC), so no capability is granted.
+                    if matches!(target.scheme(), "http" | "https") {
+                        let _ = opener.opener().open_url(target.as_str(), None::<&str>);
+                    }
+                    tauri::webview::NewWindowResponse::Deny
+                })
+                .on_navigation(move |target| {
+                    if target.host_str() == Some("127.0.0.1") {
+                        return true;
+                    }
+                    if matches!(target.scheme(), "http" | "https") {
+                        let _ = nav_opener.opener().open_url(target.as_str(), None::<&str>);
+                    }
+                    false
+                })
                 .title("Hoardini")
                 .inner_size(1000.0, 820.0)
                 .min_inner_size(720.0, 560.0)

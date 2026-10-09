@@ -4,9 +4,13 @@ use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 
 use crate::paths;
-use crate::store::now_ms;
+use crate::store::{get_meta, now_ms, set_meta};
 
 pub const USAGE_REVIEW_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+pub const FORGOTTEN_PURGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+pub const DEFAULT_LIMIT: usize = 200;
+pub const MIN_LIMIT: usize = 10;
+const LIMIT_KEY: &str = "memory_limit";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -77,6 +81,9 @@ pub struct Memory {
     pub created_ms: i64,
     pub updated_ms: i64,
     pub review_after_ms: Option<i64>,
+    pub pinned: bool,
+    pub last_used_ms: Option<i64>,
+    pub forgotten_ms: Option<i64>,
 }
 
 impl Memory {
@@ -94,6 +101,7 @@ pub struct NewMemory {
     pub source: String,
     pub confidence: Option<f64>,
     pub review_after_ms: Option<i64>,
+    pub pinned: bool,
 }
 
 impl NewMemory {
@@ -106,6 +114,7 @@ impl NewMemory {
             source: source.to_string(),
             confidence: None,
             review_after_ms: None,
+            pinned: false,
         }
     }
 }
@@ -119,10 +128,11 @@ pub struct MemoryPatch {
     pub source: Option<String>,
     pub confidence: Option<Option<f64>>,
     pub review_after_ms: Option<Option<i64>>,
+    pub pinned: Option<bool>,
 }
 
-const COLS: &str =
-    "id, scope, key, kind, text, source, confidence, created_ms, updated_ms, review_after_ms";
+const COLS: &str = "id, scope, key, kind, text, source, confidence, created_ms, updated_ms, review_after_ms, pinned, last_used_ms, forgotten_ms";
+const M_COLS: &str = "m.id, m.scope, m.key, m.kind, m.text, m.source, m.confidence, m.created_ms, m.updated_ms, m.review_after_ms, m.pinned, m.last_used_ms, m.forgotten_ms";
 
 fn from_row(r: &Row) -> rusqlite::Result<Memory> {
     let bad = |i: usize| {
@@ -141,6 +151,9 @@ fn from_row(r: &Row) -> rusqlite::Result<Memory> {
         created_ms: r.get(7)?,
         updated_ms: r.get(8)?,
         review_after_ms: r.get(9)?,
+        pinned: r.get(10)?,
+        last_used_ms: r.get(11)?,
+        forgotten_ms: r.get(12)?,
     })
 }
 
@@ -188,19 +201,21 @@ pub fn remember_with(
             |r| r.get(0),
         )
         .optional()?;
+    let pinned = new.pinned || new.source == "user";
     if let Some(id) = existing {
         conn.execute(
-            "UPDATE memory SET updated_ms = ?1 WHERE id = ?2",
-            params![now, id],
+            "UPDATE memory SET updated_ms = ?1, last_used_ms = ?1, forgotten_ms = NULL, pinned = pinned OR ?2 WHERE id = ?3",
+            params![now, pinned, id],
         )?;
+        enforce_limit(conn, now)?;
         return get(conn, id)?.ok_or_else(|| anyhow::anyhow!("memory vanished"));
     }
     let review_after = new.review_after_ms.or_else(|| {
         (new.kind == Kind::Fact && new.source != "catalog").then_some(now + USAGE_REVIEW_MS)
     });
     conn.execute(
-        "INSERT INTO memory(scope, key, kind, text, source, confidence, created_ms, updated_ms, review_after_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)",
+        "INSERT INTO memory(scope, key, kind, text, source, confidence, created_ms, updated_ms, review_after_ms, pinned, last_used_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9, ?7)",
         params![
             new.scope.as_str(),
             key,
@@ -209,10 +224,12 @@ pub fn remember_with(
             new.source,
             new.confidence,
             now,
-            review_after
+            review_after,
+            pinned
         ],
     )?;
     let id = conn.last_insert_rowid();
+    enforce_limit(conn, now)?;
     get(conn, id)?.ok_or_else(|| anyhow::anyhow!("memory vanished"))
 }
 
@@ -227,8 +244,10 @@ pub fn get(conn: &Connection, id: i64) -> anyhow::Result<Option<Memory>> {
 }
 
 pub fn list(conn: &Connection) -> anyhow::Result<Vec<Memory>> {
+    purge_forgotten(conn, now_ms())?;
     let mut stmt = conn.prepare(&format!(
-        "SELECT {COLS} FROM memory ORDER BY updated_ms DESC, id DESC"
+        "SELECT {COLS} FROM memory
+         ORDER BY forgotten_ms IS NOT NULL, forgotten_ms DESC, last_used_ms DESC, id DESC"
     ))?;
     let rows = stmt
         .query_map([], from_row)?
@@ -277,6 +296,9 @@ pub fn update_with(
     if let Some(r) = patch.review_after_ms {
         m.review_after_ms = r;
     }
+    if let Some(p) = patch.pinned {
+        m.pinned = p;
+    }
     m.key = normalize_key_with(m.scope, &m.key, profile);
     if m.key.is_empty() || m.text.trim().is_empty() {
         anyhow::bail!("memory needs a key and text");
@@ -285,7 +307,7 @@ pub fn update_with(
         compile_glob(&m.key)?;
     }
     conn.execute(
-        "UPDATE memory SET scope=?1, key=?2, kind=?3, text=?4, source=?5, confidence=?6, review_after_ms=?7, updated_ms=?8 WHERE id=?9",
+        "UPDATE memory SET scope=?1, key=?2, kind=?3, text=?4, source=?5, confidence=?6, review_after_ms=?7, updated_ms=?8, last_used_ms=?8, pinned=?9 WHERE id=?10",
         params![
             m.scope.as_str(),
             m.key,
@@ -295,9 +317,11 @@ pub fn update_with(
             m.confidence,
             m.review_after_ms,
             now,
+            m.pinned,
             id
         ],
     )?;
+    enforce_limit(conn, now)?;
     get(conn, id)
 }
 
@@ -337,6 +361,12 @@ pub fn recall_path_with(
     abs_path: &str,
     profile: &str,
 ) -> anyhow::Result<Vec<Memory>> {
+    let rows = covering(conn, abs_path, profile)?;
+    touch(conn, rows.iter().map(|m| m.id), now_ms())?;
+    Ok(rows)
+}
+
+fn covering(conn: &Connection, abs_path: &str, profile: &str) -> anyhow::Result<Vec<Memory>> {
     let norm = normalize_key_with(
         Scope::Path,
         abs_path.strip_prefix(r"\\?\").unwrap_or(abs_path),
@@ -346,7 +376,7 @@ pub fn recall_path_with(
     let mut found: Vec<(usize, Memory)> = Vec::new();
 
     let mut stmt = conn.prepare(&format!(
-        "SELECT {COLS} FROM memory WHERE scope = 'path' AND key = ?1 COLLATE NOCASE ORDER BY id"
+        "SELECT {COLS} FROM memory WHERE scope = 'path' AND key = ?1 COLLATE NOCASE AND forgotten_ms IS NULL ORDER BY id"
     ))?;
     for (rank, k) in chain.iter().enumerate() {
         for m in stmt.query_map([k], from_row)? {
@@ -355,7 +385,7 @@ pub fn recall_path_with(
     }
 
     let mut gstmt = conn.prepare(&format!(
-        "SELECT {COLS} FROM memory WHERE scope = 'glob' ORDER BY id"
+        "SELECT {COLS} FROM memory WHERE scope = 'glob' AND forgotten_ms IS NULL ORDER BY id"
     ))?;
     let globs = gstmt
         .query_map([], from_row)?
@@ -384,9 +414,13 @@ pub fn protect_covering_with(
     abs_path: &str,
     profile: &str,
 ) -> anyhow::Result<Option<Memory>> {
-    Ok(recall_path_with(conn, abs_path, profile)?
+    let found = covering(conn, abs_path, profile)?
         .into_iter()
-        .find(|m| m.kind == Kind::Protect))
+        .find(|m| m.kind == Kind::Protect);
+    if let Some(m) = &found {
+        touch(conn, [m.id], now_ms())?;
+    }
+    Ok(found)
 }
 
 // Free text becomes quoted OR-ed prefix terms so FTS5 operators in user input cannot raise syntax errors.
@@ -400,25 +434,40 @@ pub fn fts_query(q: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" OR "))
 }
 
-pub fn recall_text(conn: &Connection, q: &str) -> anyhow::Result<Vec<Memory>> {
+fn fts_live(conn: &Connection, q: &str, with_forgotten: bool) -> anyhow::Result<Vec<Memory>> {
     let Some(query) = fts_query(q) else {
         return Ok(Vec::new());
     };
-    let mut stmt = conn.prepare(
-        "SELECT m.id, m.scope, m.key, m.kind, m.text, m.source, m.confidence, m.created_ms, m.updated_ms, m.review_after_ms
-         FROM memory_fts f JOIN memory m ON m.id = f.rowid
-         WHERE memory_fts MATCH ?1 ORDER BY bm25(memory_fts), m.id LIMIT 50",
-    )?;
+    let live = if with_forgotten {
+        ""
+    } else {
+        "AND m.forgotten_ms IS NULL"
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {M_COLS} FROM memory_fts f JOIN memory m ON m.id = f.rowid
+         WHERE memory_fts MATCH ?1 {live} ORDER BY bm25(memory_fts), m.id LIMIT 50"
+    ))?;
     let rows = stmt
         .query_map([query], from_row)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
+pub fn recall_text(conn: &Connection, q: &str) -> anyhow::Result<Vec<Memory>> {
+    let rows = fts_live(conn, q, false)?;
+    touch(conn, rows.iter().map(|m| m.id), now_ms())?;
+    Ok(rows)
+}
+
+// The drawer's search: sees forgotten notes and is not a use.
+pub fn search(conn: &Connection, q: &str) -> anyhow::Result<Vec<Memory>> {
+    fts_live(conn, q, true)
+}
+
 pub fn globals(conn: &Connection, cap: usize) -> anyhow::Result<Vec<Memory>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {COLS} FROM memory WHERE scope = 'global'
-         ORDER BY CASE kind WHEN 'protect' THEN 0 WHEN 'preference' THEN 1 ELSE 2 END, updated_ms DESC, id DESC
+        "SELECT {COLS} FROM memory WHERE scope = 'global' AND forgotten_ms IS NULL
+         ORDER BY CASE kind WHEN 'protect' THEN 0 ELSE 1 END, pinned DESC, last_used_ms DESC, id DESC
          LIMIT ?1"
     ))?;
     let rows = stmt
@@ -427,8 +476,73 @@ pub fn globals(conn: &Connection, cap: usize) -> anyhow::Result<Vec<Memory>> {
     Ok(rows)
 }
 
+// A global note counts as used when the user's message matches it; matches are marked before ranking.
+pub fn globals_for(conn: &Connection, cap: usize, user_text: &str) -> anyhow::Result<Vec<Memory>> {
+    let hits = fts_live(conn, user_text, false)?;
+    touch(
+        conn,
+        hits.iter()
+            .filter(|m| m.scope == Scope::Global)
+            .map(|m| m.id),
+        now_ms(),
+    )?;
+    globals(conn, cap)
+}
+
 pub fn default_globals(conn: &Connection) -> anyhow::Result<Vec<Memory>> {
     globals(conn, 30)
+}
+
+fn touch(conn: &Connection, ids: impl IntoIterator<Item = i64>, now: i64) -> anyhow::Result<()> {
+    let mut stmt = conn.prepare_cached("UPDATE memory SET last_used_ms = ?1 WHERE id = ?2")?;
+    for id in ids {
+        stmt.execute(params![now, id])?;
+    }
+    Ok(())
+}
+
+pub fn limit(conn: &Connection) -> usize {
+    get_meta(conn, LIMIT_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map_or(DEFAULT_LIMIT, |n| n.max(MIN_LIMIT))
+}
+
+pub fn set_limit(conn: &Connection, n: usize) -> anyhow::Result<usize> {
+    let n = n.max(MIN_LIMIT);
+    set_meta(conn, LIMIT_KEY, &n.to_string())?;
+    enforce_limit(conn, now_ms())?;
+    Ok(n)
+}
+
+pub fn purge_forgotten(conn: &Connection, now: i64) -> anyhow::Result<usize> {
+    Ok(conn.execute(
+        "DELETE FROM memory WHERE forgotten_ms IS NOT NULL AND forgotten_ms <= ?1",
+        [now - FORGOTTEN_PURGE_MS],
+    )?)
+}
+
+// Pinned and protect notes are exempt and not counted; the oldest-used of the rest are forgotten, never deleted.
+pub fn enforce_limit(conn: &Connection, now: i64) -> anyhow::Result<usize> {
+    purge_forgotten(conn, now)?;
+    let n = limit(conn) as i64;
+    Ok(conn.execute(
+        "UPDATE memory SET forgotten_ms = ?1 WHERE id IN (
+           SELECT id FROM memory WHERE forgotten_ms IS NULL AND pinned = 0 AND kind <> 'protect'
+           ORDER BY last_used_ms DESC, id DESC LIMIT -1 OFFSET ?2)",
+        params![now, n],
+    )?)
+}
+
+pub fn restore(conn: &Connection, id: i64) -> anyhow::Result<Option<Memory>> {
+    let now = now_ms();
+    conn.execute(
+        "UPDATE memory SET forgotten_ms = NULL, last_used_ms = ?1 WHERE id = ?2",
+        params![now, id],
+    )?;
+    enforce_limit(conn, now)?;
+    get(conn, id)
 }
 
 #[cfg(test)]

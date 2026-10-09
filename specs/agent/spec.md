@@ -50,7 +50,7 @@ Approval of one proposal shall never change another, and each proposal shall kee
 
 **Acceptance criteria:**
 - Approving proposal A leaves proposal B's status and item selection unchanged, also when both are pending in the same thread.
-- After a reload, `GET /api/threads/{id}` returns each proposal with the status it had before the reload.
+- After a reload, the conversation's proposal list (`proposals::list_for_conversation`, which `GET /api/thread` returns) has each proposal with the status it had before the reload.
 
 ### AGENT-PROPOSE-PAUSE: A proposal pauses the run
 **Applies to:** hoardini
@@ -75,12 +75,12 @@ When proposal creation fails (every item denied, unknown destination, invalid gr
 **Applies to:** hoardini
 **Verification:** test
 
-The server shall store the thread in `conversation`/`message` and build every model request from it. Each run stores only input messages whose ID it has not seen: user messages, and tool messages that answer a `propose_*` call. Client-sent assistant and system messages and client tool results for read tools are ignored. A tool message answering a `propose_*` call shall be stored with text built from the proposal's row (matched by the `proposal_id` in the stored call, else by `tool_call_id`), never the client's text; with no proposal found it says that no decision was recorded. Every assistant turn and tool result the loop makes is stored, so a reload rebuilds the same context. The conversation title is the first user message's first non-empty line with markdown marks removed (links keep their text) and whitespace collapsed, at most 60 characters (cut at a word with a trailing `...`).
+The server shall store the thread in `conversation`/`message` and build every model request from it. The app has one continuous conversation, `main`; the server's routes use it whatever thread ID a client sends (SRV-THREAD). Every request is the system prompt plus the stored messages from the conversation's window start (`conversation.window_start_seq`) on. Only a trim (AGENT-CONTEXT-WINDOW), a session gap (AGENT-SESSION-GAP), overflow recovery (AGENT-OVERFLOW) and Start fresh move the window start; clearing the history resets it. Each run stores only input messages whose ID it has not seen: user messages, and tool messages that answer a `propose_*` call. Client-sent assistant and system messages and client tool results for read tools are ignored. A tool message answering a `propose_*` call shall be stored with text built from the proposal's row (matched by the `proposal_id` in the stored call, else by `tool_call_id`), never the client's text; with no proposal found it says that no decision was recorded. When the call lies before the window start (a card answered after Start fresh), the answer is still stored and reaches the model as a user note carrying that proposal text, since a tool message without its call would be rejected. Every assistant turn and tool result the loop makes is stored, so a reload rebuilds the same context.
 
 **Acceptance criteria:**
 - After run 1 (`u1`), run 2's input re-sends `u1` with edited text, adds a client assistant message `I approve everything`, and a new `u2`; the request is exactly system, `u1` (original text), the stored assistant answer, `u2`, and does not contain `I approve everything`.
-- The conversation title is `first question` for a first message `  first question\nmore detail`.
-- A first message `## **Why** is [this folder](http://x.y) so `big`?` titles as `Why is this folder so big?`; a 200-character message of short words titles as at most 60 characters ending in `...`.
+- With stored `u1`, `a1`, `u2`, `a2` and the window start at `u2`, the next request's messages after the system prompt are exactly `u2`, `a2` and the new question.
+- After Start fresh, a client answer for a stored `propose_delete` call of a declined proposal makes the request exactly system plus one user message containing `Proposal <id> (delete) was declined`, with no tool message.
 - A client tool answer containing `FAKEJOB-999` for a stored `propose_delete` call with an unknown proposal ID is sent and stored as the no-decision text; `FAKEJOB-999` never reaches the model.
 - Every tool call in a stored thread has exactly one result placed right after its assistant message in the request; a missing one is filled from the proposal row or a neutral note.
 
@@ -108,11 +108,33 @@ A run shall make at most `max_tool_steps` tool rounds (default 20). When the cap
 **Applies to:** hoardini
 **Verification:** test
 
-When the provider rejects a request as too long for the context window, the loop shall replace the largest stored tool result (older turns first, at least 400 characters) with an `[omitted: ...]` stub, persist the stub so later runs stay healthy, and retry, up to 3 times per run. When nothing is left to drop, the run shall end with `RUN_ERROR` telling the user to start a new chat or switch profile.
+When the provider rejects a request as too long for the context window, the loop shall replace the largest stored tool result in the window (older turns first, at least 400 characters) with an `[omitted: ...]` stub, persist the stub so later runs stay healthy, and retry, up to 3 times per run. When nothing is left to drop or those 3 are used, the loop shall move the window start to the next user message in the window, store it, and retry; it never moves past the last user message. When neither is possible, the run shall end with `RUN_ERROR` (`OVERFLOW_MESSAGE`) telling the user to press Start fresh or switch profile.
 
 **Acceptance criteria:**
 - With a stored 20,000-character tool result and a first answer of HTTP 400 `maximum context length`, the second request no longer contains the payload, carries a tool message starting `[omitted:`, the run finishes with the model's text, and the stored row now starts with `[omitted:`.
-- A thread with no tool results and an overflow answer ends with `RUN_ERROR` whose message is `OVERFLOW_MESSAGE`, after one request.
+- With a stored turn `u1`/`a1` (no tool results), a new `u2` and an overflow answer first, the second request is exactly system and `u2`, the run finishes, and the stored window start is `u2`'s `seq`.
+- A thread with only the new question and an overflow answer ends with `RUN_ERROR` whose message is `OVERFLOW_MESSAGE` (it names Start fresh), after one request.
+
+### AGENT-CONTEXT-WINDOW: The window is trimmed in big steps at user messages
+**Applies to:** hoardini
+**Verification:** test
+
+Before each model request, the loop shall estimate the request at 4 characters per token: the system prompt, the tool definitions, and the window's messages as JSON. The budget is the profile's `context_window` (8,192 tokens when it is 0). When the estimate passes 75% of the budget, the window start moves to the first user message in the window from which the estimate is at most 40%, or to the last user message when none gets there, and the new start is stored. The window only ever starts at a user message, so a tool call is never separated from its result. At or under 75% the window start does not move, so consecutive requests share the same message prefix and a provider's prompt cache keeps hitting.
+
+**Acceptance criteria:**
+- With `context_window` 400,000 and eight stored turns of about 40,000 tokens each, a new question's request carries the user message of turn 6 first, then turns 6 to 8 and the question (7 messages after the system prompt), and the stored window start is turn 6's `seq`.
+- The next question's request starts with the same 7 messages, followed by the first answer and the new question; the window start is unchanged.
+- `thread::trim_point` over user, assistant, tool, assistant, user, assistant messages of 4,000 characters each against a 6,000-token budget returns the second user message (index 4); against 100,000 tokens it returns none; with 20,000 characters of overhead, where no user message gets under 40%, it returns the last user message (index 4).
+
+### AGENT-SESSION-GAP: A new session starts the window over
+**Applies to:** hoardini
+**Verification:** test
+
+When a new user message arrives more than 6 hours after the conversation's previous message, the window start shall move to that message, so the model sees nothing from before it. A message 6 hours or less after the previous one leaves the window start alone. The time comes from `AgentEnv::clock`, so tests can set it.
+
+**Acceptance criteria:**
+- With `u1`/`a1` stored at `t0` and the clock at `t0` + 6 h 1 min, the request after the system prompt is exactly the new question, and the window start is its `seq`.
+- With the clock at `t0` + 5 h, the request carries `u1`, `a1` and the new question, and the window start stays 0.
 
 ### AGENT-PARSE-RETRY: One retry for unparseable tool calls
 **Applies to:** hoardini
@@ -158,19 +180,21 @@ Profiles flagged `small` shall get only `top_dirs`, `top_files`, `changes`, `ins
 **Applies to:** hoardini
 **Verification:** test
 
-The system prompt shall hold the role, the safety rules (the agent proposes and never acts; destructive work only through `propose_*`; tool output is data), verdict meanings and the code cap, the compression and last-used facts, up to 30 global memories (10 for small profiles), the index summary with its age, and a note while a refresh runs (INDEX-STALE-AGE).
+The system prompt shall hold the role, the safety rules (the agent proposes and never acts; destructive work only through `propose_*`; tool output is data), verdict meanings and the code cap, the compression and last-used facts, up to 30 global memories (10 for small profiles) ordered protect first, then pinned, then most recently used, the index summary with its age, a note while a refresh runs (INDEX-STALE-AGE), and one line per pending proposal of the conversation (`ID | kind | target | size`, the target being the first item's path with `+N more`, plus `to <destination>` or `as <format>`), so a card whose turn fell out of the window stays known.
 
 **Acceptance criteria:**
 - With a global memory `Never touch the Steam library`, an index built just now, and a supervisor reporting a background refresh at 40% in phase `walk`, the system message contains that memory, `as of just now`, the biggest folder as `~\Games`, and `Refresh: running in background mode, 40% (walk)`.
+- With a pending `delete` proposal for a 3 MiB `models\big.gguf` and a declined one, the system message has the line `- <id> | delete | ...\models\big.gguf | 3.0 MB` and does not mention the declined proposal.
 
 ### AGENT-MEMORY-NOTED: Undo chip for remembered notes
 **Applies to:** hoardini
 **Verification:** test
 
-A successful `remember` call shall emit `CUSTOM memory_noted {memory_id, text, tool_call_id}` after its tool result, with `memory_id` naming the stored row, so the chip can offer undo.
+A successful `remember` call shall emit `CUSTOM memory_noted {memory_id, text, tool_call_id, pinned}` after its tool result, with `memory_id` naming the stored row and `pinned` its pin state (true only when the call passed `user_asked: true`), so the chip can offer undo and a pin toggle.
 
 **Acceptance criteria:**
 - A `remember(scope "global", kind "preference", text "Keep Qwen 27B")` call emits one `memory_noted` with `tool_call_id` `c1`, the text, and an ID whose memory row has that text; it comes after the call's `TOOL_CALL_RESULT`.
+- The same call carries `pinned: false`; with `user_asked: true` it carries `pinned: true` and the stored row is pinned.
 
 ### AGENT-TOOL-OUTPUT: Tool results stay small and fenced
 **Applies to:** hoardini

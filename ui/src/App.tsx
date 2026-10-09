@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { routes, streamStatus } from "./api/client";
+import { AiNotices } from "./components/AiNotices";
 import { ChatSession } from "./components/Chat";
+import { FirstRun } from "./components/FirstRun";
 import { Header } from "./components/Header";
 import { Drawer } from "./drawer/Drawer";
 import { useStore } from "./store";
@@ -50,8 +52,10 @@ export function App() {
   return (
     <div className="flex h-full flex-col bg-ink-900 text-paper">
       <Header />
+      <AiNotices />
       {nonce > 0 ? <ChatSession key={nonce} seed={seed} /> : <div className="flex-1" />}
       <Drawer />
+      <FirstRun />
     </div>
   );
 }

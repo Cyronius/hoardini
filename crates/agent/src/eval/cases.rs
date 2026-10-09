@@ -159,6 +159,11 @@ pub fn cases(sz: &Sizes) -> Vec<CaseSpec> {
         )
         .never("proposed the gemma model", &[], r"gemma")
         .done(),
+        C::new("remember-asked", r"Remember that D:\scratch is disposable.")
+            .needs(&["remember"], &[r"scratch", r#""user_asked"\s*:\s*true"#])
+            .may_remember()
+            .fact("acknowledges", r"noted|remember|saved|recorded|stored|got it|all set|okay|\bok\b|\bdone\b")
+            .done(),
         C::new("archive-isos", &format!("Archive the old ISO files in my Downloads to the {dest}."))
             .needs(&["propose_archive"], &[r"win11[^\n]*\.iso", r"ubuntu[^\n]*\.iso", r"(?m:^nas$)"])
             .may_propose()

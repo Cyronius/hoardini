@@ -481,3 +481,145 @@ fn suggestions_rank_near_matches_first() {
     assert!(!s.contains(&"deepseek-r1".to_string()));
     assert!(suggest_models("zzzzzz", &avail).is_empty());
 }
+
+const OK_CHAT: &str = r#"{"choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}"#;
+
+type Waits = Arc<std::sync::Mutex<Vec<std::time::Duration>>>;
+type Notices = Arc<std::sync::Mutex<Vec<u64>>>;
+
+fn recording_client() -> (Client, Waits, Notices) {
+    let waits: Waits = Arc::default();
+    let noticed: Notices = Arc::default();
+    let (w, n) = (waits.clone(), noticed.clone());
+    let client = Client::new()
+        .with_sleeper(Arc::new(move |d| {
+            w.lock().unwrap().push(d);
+            Box::pin(async {})
+        }))
+        .with_wait_notice(Arc::new(move |s| n.lock().unwrap().push(s)));
+    (client, waits, noticed)
+}
+
+// The ctype slot is written raw into the response head, so it can carry an extra header.
+fn limited(first: &'static str, hits: Arc<AtomicUsize>, then_ok: bool) -> Handler {
+    Arc::new(move |_, _, _| {
+        let n = hits.fetch_add(1, Ordering::SeqCst);
+        if then_ok && n >= 1 {
+            (200, "application/json", OK_CHAT.into())
+        } else {
+            (429, first, r#"{"error":{"message":"slow down"}}"#.into())
+        }
+    })
+}
+
+fn cfg_for(base: &str) -> ProviderConfig {
+    ProviderConfig::new("mock", base)
+}
+
+// Traces: PROV-RATE-LIMIT
+#[tokio::test]
+async fn retry_after_is_honored_then_the_request_succeeds() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let base = serve(limited("application/json\r\nRetry-After: 7", hits.clone(), true)).await;
+    let (client, waits, noticed) = recording_client();
+    let turn = client
+        .chat(&cfg_for(&base), None, &user_req("hi"))
+        .await
+        .expect("retried");
+    assert_eq!(turn.text, "hello");
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    assert_eq!(*waits.lock().unwrap(), vec![std::time::Duration::from_secs(7)]);
+    assert_eq!(*noticed.lock().unwrap(), vec![7]);
+}
+
+// Traces: PROV-RATE-LIMIT
+#[tokio::test]
+async fn retry_after_http_date_and_streaming_path() {
+    let at = std::time::SystemTime::now() + std::time::Duration::from_secs(30);
+    let ctype: &'static str = Box::leak(
+        format!("application/json\r\nRetry-After: {}", httpdate::fmt_http_date(at)).into_boxed_str(),
+    );
+    let hits = Arc::new(AtomicUsize::new(0));
+    let base = serve(limited(ctype, hits.clone(), true)).await;
+    let (client, waits, _) = recording_client();
+    let mut s = client
+        .chat_stream(&cfg_for(&base), None, &user_req("hi"))
+        .await
+        .expect("retried");
+    while s.next().await.is_some() {}
+    let w = waits.lock().unwrap()[0].as_secs();
+    assert!((27..=30).contains(&w), "{w}");
+}
+
+// Traces: PROV-RATE-LIMIT
+#[tokio::test]
+async fn waits_are_capped_at_sixty_seconds() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let base = serve(limited("application/json\r\nRetry-After: 3600", hits, true)).await;
+    let (client, waits, _) = recording_client();
+    client.chat(&cfg_for(&base), None, &user_req("hi")).await.expect("ok");
+    assert_eq!(*waits.lock().unwrap(), vec![std::time::Duration::from_secs(60)]);
+}
+
+// Traces: PROV-RATE-LIMIT
+#[tokio::test]
+async fn three_429s_in_a_row_end_with_a_rate_limit_error() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let base = serve(limited("application/json", hits.clone(), false)).await;
+    let (client, waits, _) = recording_client();
+    let err = client
+        .chat(&cfg_for(&base), None, &user_req("hi"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProviderError::RateLimited(_)), "{err:?}");
+    assert_eq!(hits.load(Ordering::SeqCst), 3);
+    let secs: Vec<u64> = waits.lock().unwrap().iter().map(|d| d.as_secs()).collect();
+    assert_eq!(secs, vec![2, 4]);
+}
+
+// Traces: PROV-RATE-LIMIT
+#[tokio::test]
+async fn daily_quota_429s_end_at_once() {
+    let bodies = [
+        r#"{"error":{"message":"Rate limit exceeded: free-models-per-day"}}"#,
+        r#"{"error":{"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded for metric GenerateRequestsPerDayPerProjectPerModel-FreeTier"}}"#,
+        r#"{"message":"Tokens per day limit exceeded - too many tokens processed."}"#,
+    ];
+    for body in bodies {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        let base = serve(Arc::new(move |_, _, _| {
+            h.fetch_add(1, Ordering::SeqCst);
+            (429, "application/json", body.to_string())
+        }))
+        .await;
+        let (client, waits, _) = recording_client();
+        let err = client
+            .chat_stream(&cfg_for(&base), None, &user_req("hi"))
+            .await
+            .err()
+            .expect("error");
+        assert!(matches!(err, ProviderError::DailyQuota(_)), "{body}: {err:?}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert!(waits.lock().unwrap().is_empty());
+    }
+}
+
+// Traces: PROV-PRESETS
+#[test]
+fn cerebras_and_gemini_presets_have_base_urls_and_models() {
+    let all = presets();
+    let get = |id: &str| all.iter().find(|p| p.id == id).expect(id);
+    let c = get("cerebras");
+    assert_eq!(c.base_url, "https://api.cerebras.ai/v1");
+    assert_eq!(c.default_model, Some("gpt-oss-120b"));
+    assert!(c.needs_key);
+    let g = get("gemini");
+    assert_eq!(
+        g.base_url,
+        "https://generativelanguage.googleapis.com/v1beta/openai/"
+    );
+    assert!(g.default_model.is_some_and(|m| m.contains("flash")));
+    assert!(get("openrouter").default_model.is_some_and(|m| m.ends_with(":free")));
+    assert!(get("ollama").default_model.is_none());
+}

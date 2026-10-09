@@ -64,6 +64,7 @@ path = "agent/tests/approval.rs"
 anyhow = "1.0.104"
 blake3 = "1.8.7"
 hoardini-agent = { path = "../crates/agent" }
+httpdate = "1.0.3"
 hoardini-core = { path = "../crates/core" }
 hoardini-server = { path = "../crates/server" }
 hoardini-win = { path = "../crates/win" }

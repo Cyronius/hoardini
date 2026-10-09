@@ -11,9 +11,9 @@ export const TADA_MS = 5000;
 interface NotedMemory {
   memoryId: number;
   text: string;
+  pinned: boolean;
 }
 
-// The server keeps one conversation; the model sees only its window.
 export const THREAD_ID = "main";
 
 export type ThreadMeta = Pick<ThreadDetail, "window_start_id" | "has_hidden" | "fresh">;
@@ -59,7 +59,7 @@ interface State {
   markCallsBefore(messageId: string, callIds: string[]): void;
   loadThread(): Promise<void>;
   refreshThreadMeta(): Promise<void>;
-  markAsked(): void;
+  markAsked(messageId: string, hadMessages: boolean): void;
   startFresh(): Promise<void>;
   clearHistory(): Promise<void>;
 }
@@ -157,7 +157,13 @@ export const useStore = create<State>((set, get) => ({
       // keep the last known boundary
     }
   },
-  markAsked: () => set((s) => (s.threadMeta?.fresh ? { threadMeta: { ...s.threadMeta, fresh: false } } : s)),
+  // A question asked while fresh opens the new window; mirror that until the run's refetch.
+  markAsked: (messageId, hadMessages) =>
+    set((s) =>
+      s.threadMeta?.fresh
+        ? { threadMeta: { window_start_id: messageId, has_hidden: s.threadMeta.has_hidden || hadMessages, fresh: false } }
+        : s,
+    ),
   async startFresh() {
     await routes.startFresh();
     await get().refreshThreadMeta();
