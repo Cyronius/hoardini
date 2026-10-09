@@ -838,6 +838,7 @@ async fn remember_emits_a_memory_noted_event_for_the_undo_chip() {
     let v = &noted[0]["value"];
     assert_eq!(v["tool_call_id"], "c1");
     assert_eq!(v["text"], "Keep Qwen 27B");
+    assert_eq!(v["pinned"], false);
     let id = v["memory_id"].as_i64().unwrap();
     let m = memory::get(&h.db.conn().unwrap(), id)
         .unwrap()
@@ -847,6 +848,38 @@ async fn remember_emits_a_memory_noted_event_for_the_undo_chip() {
     let result = t.iter().position(|x| x == "TOOL_CALL_RESULT").unwrap();
     let custom_pos = ev.iter().position(|e| e["name"] == "memory_noted").unwrap();
     assert!(result < custom_pos);
+}
+
+// Traces: AGENT-MEMORY-NOTED, MEM-PIN-USER
+#[tokio::test]
+async fn remember_with_user_asked_pins_the_note_and_the_chip_says_so() {
+    let h = Harness::new(None);
+    let mock = MockLlm::start(vec![
+        Turn::Calls(
+            None,
+            vec![call(
+                "c1",
+                "remember",
+                json!({"scope": "global", "kind": "fact", "text": "D:\\scratch is disposable", "user_asked": true}),
+            )],
+        ),
+        Turn::Text("Noted.".into()),
+    ])
+    .await;
+    let ev = h
+        .run(
+            h.provider(&mock.base_url),
+            user("t-pin", "u1", "remember scratch"),
+        )
+        .await;
+    let noted = custom(&ev, "memory_noted");
+    assert_eq!(noted.len(), 1);
+    let v = &noted[0]["value"];
+    assert_eq!(v["pinned"], true);
+    let m = memory::get(&h.db.conn().unwrap(), v["memory_id"].as_i64().unwrap())
+        .unwrap()
+        .expect("memory row");
+    assert!(m.pinned);
 }
 
 // Traces: AGENT-TOOL-OUTPUT

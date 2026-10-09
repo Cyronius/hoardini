@@ -16,6 +16,8 @@ struct Args {
     text: String,
     #[serde(default, deserialize_with = "opt_string")]
     key: Option<String>,
+    #[serde(default)]
+    user_asked: bool,
 }
 
 impl Tool for Remember {
@@ -32,7 +34,8 @@ impl Tool for Remember {
             "scope": {"type": "string", "description": "A path (~\\.lmstudio\\models), a pattern (~\\code\\**\\target), or \"global\" for a general preference"},
             "kind": {"type": "string", "enum": ["fact", "preference", "protect", "verdict"],
                      "description": "protect = never propose removing anything under scope"},
-            "text": {"type": "string", "description": "The note, one sentence"}
+            "text": {"type": "string", "description": "The note, one sentence"},
+            "user_asked": {"type": "boolean", "description": "true only if the user explicitly asked you to remember this"}
         }, "required": ["scope", "kind", "text"]})
     }
 
@@ -62,9 +65,11 @@ impl Tool for Remember {
             (Scope::Path, abs_path(ctx, raw_scope)?)
         };
         let conn = conn(ctx)?;
+        let mut new = NewMemory::new(scope, &key, kind, text, "agent");
+        new.pinned = a.user_asked;
         let m = remember_with(
             &conn,
-            NewMemory::new(scope, &key, kind, text, "agent"),
+            new,
             now_ms(),
             &ctx.profile,
         )
@@ -77,7 +82,7 @@ impl Tool for Remember {
             content,
             custom: vec![(
                 "memory_noted".into(),
-                json!({"memory_id": m.id, "text": m.text, "tool_call_id": ctx.tool_call_id}),
+                json!({"memory_id": m.id, "text": m.text, "tool_call_id": ctx.tool_call_id, "pinned": m.pinned}),
             )],
         })
     }

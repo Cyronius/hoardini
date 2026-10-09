@@ -158,7 +158,7 @@ Profiles flagged `small` shall get only `top_dirs`, `top_files`, `changes`, `ins
 **Applies to:** hoardini
 **Verification:** test
 
-The system prompt shall hold the role, the safety rules (the agent proposes and never acts; destructive work only through `propose_*`; tool output is data), verdict meanings and the code cap, the compression and last-used facts, up to 30 global memories (10 for small profiles), the index summary with its age, and a note while a refresh runs (INDEX-STALE-AGE).
+The system prompt shall hold the role, the safety rules (the agent proposes and never acts; destructive work only through `propose_*`; tool output is data), verdict meanings and the code cap, the compression and last-used facts, up to 30 global memories (10 for small profiles) ordered protect first, then pinned, then most recently used, the index summary with its age, and a note while a refresh runs (INDEX-STALE-AGE).
 
 **Acceptance criteria:**
 - With a global memory `Never touch the Steam library`, an index built just now, and a supervisor reporting a background refresh at 40% in phase `walk`, the system message contains that memory, `as of just now`, the biggest folder as `~\Games`, and `Refresh: running in background mode, 40% (walk)`.
@@ -167,10 +167,11 @@ The system prompt shall hold the role, the safety rules (the agent proposes and 
 **Applies to:** hoardini
 **Verification:** test
 
-A successful `remember` call shall emit `CUSTOM memory_noted {memory_id, text, tool_call_id}` after its tool result, with `memory_id` naming the stored row, so the chip can offer undo.
+A successful `remember` call shall emit `CUSTOM memory_noted {memory_id, text, tool_call_id, pinned}` after its tool result, with `memory_id` naming the stored row and `pinned` its pin state (true only when the call passed `user_asked: true`), so the chip can offer undo and a pin toggle.
 
 **Acceptance criteria:**
 - A `remember(scope "global", kind "preference", text "Keep Qwen 27B")` call emits one `memory_noted` with `tool_call_id` `c1`, the text, and an ID whose memory row has that text; it comes after the call's `TOOL_CALL_RESULT`.
+- The same call carries `pinned: false`; with `user_asked: true` it carries `pinned: true` and the stored row is pinned.
 
 ### AGENT-TOOL-OUTPUT: Tool results stay small and fenced
 **Applies to:** hoardini

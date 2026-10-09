@@ -89,10 +89,11 @@ const summary: T.IndexSummary = {
 };
 
 const memories: T.Memory[] = [
-  { id: 1, scope: "path", key: "~\\.lmstudio\\models\\qwen3.8-27b", kind: "protect", text: "Keep Qwen3.8 27B; it is my daily driver.", source: "chat 2026-09-12", confidence: 0.95, created_ms: now() - 26 * 86_400_000, updated_ms: now() - 26 * 86_400_000, review_after_ms: null },
-  { id: 2, scope: "glob", key: "**\\node_modules", kind: "verdict", text: "Safe to delete when the project has not been touched in 60 days; npm install brings it back.", source: "web: https://docs.npmjs.com/cli/commands/npm-install", confidence: 0.7, created_ms: now() - 9 * 86_400_000, updated_ms: now() - 9 * 86_400_000, review_after_ms: null },
-  { id: 3, scope: "global", key: "", kind: "preference", text: "Prefer archiving to the NAS over deleting when a file is bigger than 10 GB.", source: "chat 2026-10-01", confidence: null, created_ms: now() - 7 * 86_400_000, updated_ms: now() - 7 * 86_400_000, review_after_ms: null },
+  { id: 1, scope: "path", key: "~\\.lmstudio\\models\\qwen3.8-27b", kind: "protect", text: "Keep Qwen3.8 27B; it is my daily driver.", source: "chat 2026-09-12", confidence: 0.95, created_ms: now() - 26 * 86_400_000, updated_ms: now() - 26 * 86_400_000, review_after_ms: null, pinned: true, last_used_ms: now() - 2 * 86_400_000, forgotten_ms: null },
+  { id: 2, scope: "glob", key: "**\\node_modules", kind: "verdict", text: "Safe to delete when the project has not been touched in 60 days; npm install brings it back.", source: "web: https://docs.npmjs.com/cli/commands/npm-install", confidence: 0.7, created_ms: now() - 9 * 86_400_000, updated_ms: now() - 9 * 86_400_000, review_after_ms: null, pinned: false, last_used_ms: now() - 5 * 86_400_000, forgotten_ms: null },
+  { id: 3, scope: "global", key: "", kind: "preference", text: "Prefer archiving to the NAS over deleting when a file is bigger than 10 GB.", source: "chat 2026-10-01", confidence: null, created_ms: now() - 7 * 86_400_000, updated_ms: now() - 7 * 86_400_000, review_after_ms: null, pinned: false, last_used_ms: now() - 7 * 86_400_000, forgotten_ms: now() - 3 * 86_400_000 },
 ];
+let memLimit = 200;
 let memSeq = 10;
 
 const providers: T.ProviderView[] = [
@@ -243,8 +244,8 @@ async function agentRun(input: { threadId: string; runId: string; messages: { ro
       if (/^remember|remember that/i.test(text)) {
         await say(s, "Got it.");
         const toolCallId = await readTool(s, "remember", { scope: "global", kind: "preference", text }, JSON.stringify({ id: ++memSeq }), 300);
-        memories.push({ id: memSeq, scope: "global", key: "", kind: "preference", text: text.replace(/^remember( that)?/i, "").trim() || text, source: "chat", confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null });
-        s.send({ type: "CUSTOM", name: "memory_noted", value: { memory_id: memSeq, text: text.replace(/^remember( that)?/i, "").trim() || text, tool_call_id: toolCallId } });
+        memories.push({ id: memSeq, scope: "global", key: "", kind: "preference", text: text.replace(/^remember( that)?/i, "").trim() || text, source: "chat", confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null, pinned: false, last_used_ms: now(), forgotten_ms: null });
+        s.send({ type: "CUSTOM", name: "memory_noted", value: { memory_id: memSeq, text: text.replace(/^remember( that)?/i, "").trim() || text, tool_call_id: toolCallId, pinned: false } });
       } else {
         await say(s, "Let me look at what is in `~\\.lmstudio`.\n\n");
         await readTool(s, "top_dirs", { under: "~\\.lmstudio", depth: 2, limit: 10 }, "~\\.lmstudio 96.1 GB\n  models 95.4 GB (9 files)\n  cache 0.6 GB", 700);
@@ -371,15 +372,20 @@ async function route(req: Request): Promise<Response> {
       if (!seg[1]) return json([...jobs.values()]);
       return json({ ok: true });
     case "memory": {
+      if (seg[1] === "limit") {
+        if (method === "PUT") memLimit = Math.max(10, (await body<{ limit: number }>()).limit);
+        return json({ limit: memLimit });
+      }
       if (!seg[1]) {
         if (method === "POST") {
           const b = await body<Omit<T.Memory, "id">>();
-          const m: T.Memory = { id: ++memSeq, scope: b.scope, key: b.key, kind: b.kind, text: b.text, source: "you", confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null };
+          const m: T.Memory = { id: ++memSeq, scope: b.scope, key: b.key, kind: b.kind, text: b.text, source: "you", confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null, pinned: true, last_used_ms: now(), forgotten_ms: null };
           memories.push(m);
           return json(m);
         }
         const q = url.searchParams.get("q")?.toLowerCase();
-        return json(memories.filter((m) => !q || `${m.text} ${m.key}`.toLowerCase().includes(q)));
+        const rows = memories.filter((m) => !q || `${m.text} ${m.key}`.toLowerCase().includes(q));
+        return json([...rows.filter((m) => !m.forgotten_ms).sort((a, b) => (b.last_used_ms ?? 0) - (a.last_used_ms ?? 0)), ...rows.filter((m) => m.forgotten_ms)]);
       }
       const idx = memories.findIndex((m) => m.id === Number(seg[1]));
       if (idx < 0) return err("not found", 404);
@@ -387,7 +393,11 @@ async function route(req: Request): Promise<Response> {
         memories.splice(idx, 1);
         return json({ ok: true });
       }
-      Object.assign(memories[idx]!, await body<Partial<T.Memory>>(), { updated_ms: now() });
+      if (seg[2] === "restore") {
+        Object.assign(memories[idx]!, { forgotten_ms: null, last_used_ms: now() });
+        return json(memories[idx]);
+      }
+      Object.assign(memories[idx]!, await body<Partial<T.Memory>>(), { updated_ms: now(), last_used_ms: now() });
       return json(memories[idx]);
     }
     case "providers": {
