@@ -254,7 +254,7 @@ The drawer has its own Theme tab. "Follow system" sits above a Dark / Midtone / 
 
 The `changes` tool card shall show the free-space chart above its usual content when the call's range holds at least
 3 refreshes, and only the numbers otherwise. The points come from `GET /api/history` limited to the `range_ms` line
-in the tool result, so the chart ends at the call's own latest refresh and a reload or scrolled-back card shows the
+in the tool result, for the drive that line names, so the chart ends at the call's own latest refresh and a reload or scrolled-back card shows the
 same data. The `range_ms` line is not shown in the card's result text.
 
 **Verification (manual):**

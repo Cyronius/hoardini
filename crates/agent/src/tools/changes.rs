@@ -18,6 +18,8 @@ struct Args {
     since: Option<String>,
     #[serde(default, deserialize_with = "opt_u64")]
     limit: Option<u64>,
+    #[serde(default, deserialize_with = "opt_string")]
+    drive: Option<String>,
 }
 
 fn signed(delta: i64) -> String {
@@ -54,7 +56,8 @@ impl Tool for Changes {
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
             "since": {"type": "string", "description": "\"previous\" (default), a number of days like \"30d\", or a refresh id"},
-            "limit": {"type": "integer", "description": "Max entries per section (default 10)"}
+            "limit": {"type": "integer", "description": "Max entries per section (default 10)"},
+            "drive": {"type": "string", "description": "Drive letter like D: (default: the drive the user is looking at)"}
         }})
     }
 
@@ -71,7 +74,18 @@ impl Tool for Changes {
             .parse()
             .map_err(|e: anyhow::Error| ToolError::BadArgs(e.to_string()))?;
         let conn = conn(ctx)?;
-        let Some(ch) = changes(&conn, None, since, limit(a.limit, 10)).map_err(failed)? else {
+        let drive = a
+            .drive
+            .map(|d| format!("{}\\", d.trim().trim_end_matches(['\\', '/'])))
+            .or_else(|| hoardini_core::index::focus(&conn));
+        let volume_id = match drive {
+            Some(d) => match hoardini_core::index::index_status(&conn, Some(&d)).map_err(failed)? {
+                Some(st) => Some(st.volume_id),
+                None => return Ok(Outcome::text(format!("{d} is not indexed."))),
+            },
+            None => None,
+        };
+        let Some(ch) = changes(&conn, volume_id, since, limit(a.limit, 10)).map_err(failed)? else {
             return Ok(Outcome::text(
                 "No earlier refresh to compare with yet; changes appear after the second refresh.",
             ));
@@ -105,7 +119,7 @@ impl Tool for Changes {
         if let Some(line) = free_summary(&range).map(|f| f.line()) {
             let _ = writeln!(out, "{line}");
         }
-        let _ = writeln!(out, "range_ms: {}..{}", ch.from.finished_ms, ch.to.finished_ms);
+        let _ = writeln!(out, "range_ms: {}..{} {}", ch.from.finished_ms, ch.to.finished_ms, ch.volume);
         Ok(Outcome::text(out))
     }
 }

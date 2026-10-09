@@ -1,6 +1,6 @@
 use hoardini_core::index::{
-    TopFilesQuery, VolumeChange, finish_forgetting, forget, plan_change, selected, store_change,
-    system_root, top_files, watched,
+    TopFilesQuery, VolumeChange, finish_forgetting, focus, forget, index_status, plan_change,
+    selected, store_change, system_root, top_files, watched,
 };
 use hoardini_core::store::set_meta;
 use rusqlite::{Connection, params};
@@ -254,4 +254,27 @@ fn a_delete_cut_short_finishes_at_the_next_start() {
         )
         .unwrap();
     assert_eq!(pending, "[]");
+}
+
+// Traces: INDEX-VOLUMES
+#[test]
+fn history_and_status_follow_the_selected_drive_once_it_has_an_index() {
+    let e = env();
+    two_drives(&e);
+    let conn = e.db.conn().unwrap();
+    set_meta(&conn, "indexed_volumes", r#"["C:\\", "D:\\"]"#).unwrap();
+    set_meta(&conn, "selected_volume", r"D:\").unwrap();
+    assert_eq!(focus(&conn).as_deref(), Some(r"D:\"));
+    let st = index_status(&conn, focus(&conn).as_deref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(st.volume_id, volume_id(&conn, r"D:\"));
+
+    set_meta(&conn, "indexed_volumes", r#"["C:\\", "D:\\", "Q:\\"]"#).unwrap();
+    set_meta(&conn, "selected_volume", r"Q:\").unwrap();
+    assert_eq!(
+        focus(&conn),
+        None,
+        "a drive with no index yet falls back to the latest refresh"
+    );
 }

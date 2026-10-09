@@ -60,6 +60,12 @@ pub fn selected(conn: &Connection) -> String {
         .unwrap_or_else(|| w[0].clone())
 }
 
+// Before the selected drive has an index, callers fall back to the most recently refreshed one.
+pub fn focus(conn: &Connection) -> Option<String> {
+    let s = selected(conn);
+    stored_volume(conn, &s).ok().flatten().map(|_| s)
+}
+
 pub fn connected(root: &str) -> bool {
     Path::new(root).is_dir()
 }

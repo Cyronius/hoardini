@@ -7,24 +7,26 @@ import { FreeSpaceChart } from "./FreeSpaceChart";
 import { SpinnerIcon, ToolIcon } from "./icons";
 
 const MIN_CHART_POINTS = 3;
-const RANGE_RE = /^range_ms: (\d+)\.\.(\d+)\s*$/m;
+// Older results carry no drive; those charts follow the selected drive.
+const RANGE_RE = /^range_ms: (\d+)\.\.(\d+)(?: (.+?))?\s*$/m;
 
 function ChangesChart({ result }: { result: string }) {
   const m = RANGE_RE.exec(result);
   const [points, setPoints] = useState<HistoryPoint[]>([]);
   const since = m ? Number(m[1]) : null;
   const until = m ? Number(m[2]) : null;
+  const volume = m?.[3];
   useEffect(() => {
     if (since == null || until == null) return;
     let live = true;
     routes
-      .history(since, until)
+      .history(since, until, volume)
       .then((p) => live && setPoints(p))
       .catch(() => live && setPoints([]));
     return () => {
       live = false;
     };
-  }, [since, until]);
+  }, [since, until, volume]);
   if (points.length < MIN_CHART_POINTS) return null;
   return (
     <div className="mt-1 rounded-xl border border-line-soft bg-ink-850/70 px-2.5 pb-1 pt-2">

@@ -520,12 +520,14 @@ async fn destination_test(State(s): State<AppState>, Path(id): Path<String>) -> 
 struct HistoryQuery {
     since_ms: Option<i64>,
     until_ms: Option<i64>,
+    volume: Option<String>,
 }
 
 async fn history_points(State(s): State<AppState>, Query(q): Query<HistoryQuery>) -> ApiResult {
     blocking(move || {
         let conn = s.db.conn()?;
-        let Some(st) = index::index_status(&conn, None)? else {
+        let volume = q.volume.clone().or_else(|| index::focus(&conn));
+        let Some(st) = index::index_status(&conn, volume.as_deref())? else {
             return Ok(Json(json!([])));
         };
         let scans = history::scans_between(&conn, st.volume_id, q.since_ms, q.until_ms)?;

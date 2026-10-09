@@ -111,7 +111,7 @@ With the window minimized and no job or chat run in progress, the app shall have
 **Applies to:** hoardini-server
 **Verification:** test
 
-`GET /api/history` returns one point per completed refresh of the indexed volume, oldest first. The optional
+`GET /api/history` returns one point per completed refresh of one volume, oldest first: the `volume` query parameter's, else the selected drive's once it has an index (INDEX-VOLUMES), else the most recently refreshed one. The optional
 `since_ms` and `until_ms` query parameters keep only points whose `finished_ms` is inside the range, both ends
 inclusive; with neither, every point is returned. With no indexed volume the result is `[]`.
 

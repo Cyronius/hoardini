@@ -173,7 +173,11 @@ impl Supervisor {
             .db
             .conn()
             .ok()
-            .and_then(|c| index::index_status(&c, None).ok().flatten())
+            .and_then(|c| {
+                index::index_status(&c, index::focus(&c).as_deref())
+                    .ok()
+                    .flatten()
+            })
             .map(|s| (s.last_refresh_ms, s.generation))
             .unwrap_or((None, 0));
         json!({

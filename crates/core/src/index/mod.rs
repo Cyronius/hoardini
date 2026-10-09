@@ -26,8 +26,8 @@ pub use query::{
 };
 pub use verify::{SnapRow, snapshot, verify_totals};
 pub use volumes::{
-    StoredVolume, VolumeChange, connected, finish_forgetting, forget, never_indexed, plan_change,
-    prompt_summary, selected, store_change, stored_volume, system_root, watched,
+    StoredVolume, VolumeChange, connected, finish_forgetting, focus, forget, never_indexed,
+    plan_change, prompt_summary, selected, store_change, stored_volume, system_root, watched,
 };
 pub use walk::{Event, Mode, Progress, RefreshOptions, RefreshOutcome, refresh};
 
