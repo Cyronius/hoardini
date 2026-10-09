@@ -290,7 +290,8 @@ function ChangesBody({ data, onAsk }: { data: ChangesData; onAsk: Ask }) {
 }
 
 function changesHeadline(d: ChangesData): ReactNode {
-  const vol = d.volume.replace(/\\+$/, "");
+  const root = d.volume.replace(/\\+$/, "");
+  const vol = /^[a-z]:$/i.test(root) ? root : `…\\${fileName(root)}`;
   const since = sinceLabel(d.from.ms);
   const fd = d.free_delta;
   if (fd == null) return `Changes on ${vol} since ${since}`;
@@ -334,7 +335,12 @@ export function ToolCard({ name, args, result, data, onAsk }: { name: string; ar
   return (
     <section className="@container fade-up my-2 rounded-2xl border border-line bg-ink-850 px-3 pb-2 pt-2.5" aria-label={typeof title === "string" ? title : "What changed"}>
       <header className="flex items-baseline gap-2">
-        <h3 className="min-w-0 font-[family-name:var(--font-display)] text-[length:var(--fs-md)] font-bold leading-snug text-paper">{title}</h3>
+        <h3
+          className={`font-[family-name:var(--font-display)] text-[length:var(--fs-md)] font-bold leading-snug text-paper ${typeof title === "string" ? "shrink-0 whitespace-nowrap" : "min-w-0"}`}
+          title={data.kind === "changes" ? data.volume : undefined}
+        >
+          {title}
+        </h3>
         {scope && (
           <span className="min-w-0 truncate text-[length:var(--fs-sm)] text-muted" title={scope}>
             {scope}

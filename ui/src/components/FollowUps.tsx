@@ -13,7 +13,7 @@ function fromCard(d: CardData): FollowUp[] {
     const scope = d.under ?? top?.path;
     const out: FollowUp[] = [];
     if (top) out.push({ label: `What's inside ${fileName(top.path)} (${humanBytes(top.size)})?`, kind: "ask", path: top.path, send: `What's inside ${top.path}?` });
-    if (scope) out.push({ label: `Clean up ${scope}`, kind: "clean_up", path: scope, send: cleanUpIn(scope) });
+    if (scope) out.push({ label: `Clean up ${scope.length > 24 ? fileName(scope) : scope}`, kind: "clean_up", path: scope, send: cleanUpIn(scope) });
     return out;
   }
   if (d.kind === "files") {

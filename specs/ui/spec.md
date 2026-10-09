@@ -303,7 +303,7 @@ When a `top_dirs`, `top_files` or `changes` call has `data` (AGENT-TOOL-DATA: li
 7. Reload: the same cards come back from the stored thread.
 8. Repeat steps 2 and 6 with a dark theme (Marshmallow Night) and at 430 px wide: text, bars, and the green and red deltas stay readable, and rows do not overflow.
 9. With `hoardini serve` and a model that calls `top_dirs`: the card renders live, and again after a reload from `GET /api/thread`.
-(2026-10-09: steps 1–8 pass against the mock in headless Chromium through Playwright, in Marshmallow and Marshmallow Night; step 9 not run.)
+(2026-10-09: steps 1–8 pass against the mock in headless Chromium through Playwright, in Marshmallow and Marshmallow Night. Step 9 passes against `hoardini serve` on a scratch folder with a scripted OpenAI-compatible model calling `top_dirs`, `changes` and `suggest_next`: both cards rendered live and after a reload, ▸ listed the folder from `/api/index/children`, no chip showed, and no model request held card data.)
 
 ### UI-ITEM-TREE: The ▸ tree under a folder
 **Applies to:** hoardini
@@ -318,13 +318,13 @@ When a `top_dirs`, `top_files` or `changes` call has `data` (AGENT-TOOL-DATA: li
 4. Hover `covenant-agent\target` and press Show in Explorer: the mock records the path (`GET /api/mock/revealed`).
 5. Against `hoardini serve`, Show in Explorer opens Explorer with the item selected (SRV-REVEAL), and on a path that is gone the row says "not found".
 6. At 430 px wide the rows keep name, percentage and size; at 1000 px the bar, file count and date show too.
-(2026-10-09: steps 1–4 and 6 pass against the mock in headless Chromium; step 5 not run.)
+(2026-10-09: steps 1–4 and 6 pass against the mock in headless Chromium, and the tree also opened against `hoardini serve` (UI-TOOL-CARDS step 9); step 5 was not run, since it opens Explorer on the desktop.)
 
 ### UI-FOLLOW-UPS: Follow-up pills under the answer
 **Applies to:** hoardini
 **Verification:** manual
 
-Under the settled last answer the chat shall show up to 3 pills styled like the greeting's starters: hidden while a run streams, gone as soon as the user sends anything, and absent while the turn waits on a proposal card. The turn is everything after the last question or card decision. The model's pills from the turn's `suggest_next` results (AGENT-SUGGEST-NEXT) come first; pills built from the turn's cards fill the rest: from a folders card, "What's inside {name} ({size})?" for its biggest row (it sends "What's inside {path}?") and "Clean up {scope}" for its `under` folder, else its biggest row; from a files card, "What is {name} ({size})?" for its biggest file; from a changes card, "Why did {name} grow (+X)?" for its biggest top-level grower. A pill with the same kind and path as an earlier one, or the same label when it has no path, is skipped. An `ask` pill sends its label (a built one its full-path question), and a `clean_up` pill sends "What can I clean up in {path}?". A pill never approves anything. The `suggest_next` call itself shows no chip.
+Under the settled last answer the chat shall show up to 3 pills styled like the greeting's starters: hidden while a run streams, gone as soon as the user sends anything, and absent while the turn waits on a proposal card. The turn is everything after the last question or card decision. The model's pills from the turn's `suggest_next` results (AGENT-SUGGEST-NEXT) come first; pills built from the turn's cards fill the rest: from a folders card, "What's inside {name} ({size})?" for its biggest row (it sends "What's inside {path}?") and "Clean up {scope}" for its `under` folder, else its biggest row (the folder's name instead of the path when the path is long); from a files card, "What is {name} ({size})?" for its biggest file; from a changes card, "Why did {name} grow (+X)?" for its biggest top-level grower. A pill with the same kind and path as an earlier one, or the same label when it has no path, is skipped. An `ask` pill sends its label (a built one its full-path question), and a `clean_up` pill sends "What can I clean up in {path}?". A pill never approves anything. The `suggest_next` call itself shows no chip.
 
 **Verification (manual):**
 1. Against the mock (UI-TOOL-CARDS step 1), press Show hotspots. Under the answer: "What's in covenant-agent?", "Clean up C:\code" (the model's; its third pill names a path not in the index and is dropped) and "What's inside Users (652 GB)?" (built from the folders card). No pills show while the answer streams.
@@ -332,7 +332,7 @@ Under the settled last answer the chat shall show up to 3 pills styled like the 
 3. Press "Clean up C:\code": the pills disappear at once, the question "What can I clean up in C:\code?" is sent, and the new answer gets "Clean up C:\code\covenant-agent" (the model's), then "What's inside covenant-agent (161 GB)?" and "Clean up C:\code" (built).
 4. Ask "List the biggest files": the pills are "Which models haven't I used lately?" and "What is llama-3.3-70b-Q4_K_M.gguf (42.5 GB)?".
 5. Ask "what is in lmstudio": the turn ends on a proposal card and no pills show; approve it and the answer after the card shows no pills built from the earlier card.
-(2026-10-09: steps 1–5 pass against the mock in headless Chromium.)
+(2026-10-09: steps 1–5 pass against the mock in headless Chromium; against `hoardini serve` with a scripted model, the model's pill came first, then the two built from the folders card, and the same three came back after a reload.)
 
 ### UI-DRIVE-SELECTOR: The header shows one drive, picked from a menu
 **Applies to:** hoardini
