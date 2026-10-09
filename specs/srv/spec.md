@@ -100,12 +100,29 @@ With the window minimized and no job or chat run in progress, the app shall have
 **Applies to:** hoardini-server
 **Verification:** test
 
-`GET /api/settings` returns exactly `index_speed` (`"lean"` | `"fast"`, default `"lean"`), `builtin_idle_minutes` (default 10), and read-only `index_size_bytes` (database plus WAL size). `PUT` stores `index_speed` and `builtin_idle_minutes`, ignores `index_size_bytes` and any other key, and rejects a wrong value with 400 without storing anything from that request. The old keys (`threshold_bytes`, `redact_paths`, `web_search_enabled`, `indexer_workers`, `indexer_memory_cap_mb`) are gone: the threshold is fixed (INDEX-THRESHOLD), redaction is always on (AGENT-REDACT), web search follows its provider (AGENT-WEB-SEARCH), and workers and the memory cap follow `index_speed` (INDEX-POLITE, INDEX-MEMORY-CAP).
+`GET /api/settings` returns exactly `index_speed` (`"lean"` | `"fast"`, default `"lean"`), `builtin_idle_minutes` (default 10), read-only `index_size_bytes` (database plus WAL size), and `online_checks` (`{asked, services: {huggingface, winget}}`, all false by default; EVID-COPY-CONSENT). `PUT` stores `index_speed`, `builtin_idle_minutes`, and a partial `online_checks` (only the given fields change), ignores `index_size_bytes` and any other key, and rejects a wrong value (including an `online_checks` that is not an object, a non-boolean, or an unknown service or field) with 400 without storing anything from that request. Saving `online_checks` starts a copy-check pass (EVID-COPY-BACKGROUND). The old keys (`threshold_bytes`, `redact_paths`, `web_search_enabled`, `indexer_workers`, `indexer_memory_cap_mb`) are gone: the threshold is fixed (INDEX-THRESHOLD), redaction is always on (AGENT-REDACT), web search follows its provider (AGENT-WEB-SEARCH), and workers and the memory cap follow `index_speed` (INDEX-POLITE, INDEX-MEMORY-CAP).
 
 **Acceptance criteria:**
-- A fresh database returns exactly the three keys with `lean`, 10, and a size above 0.
+- A fresh database returns exactly the four keys with `lean`, 10, a size above 0, and `online_checks` all false.
 - After `PUT {index_speed: "fast", builtin_idle_minutes: 0, index_size_bytes: 1, threshold_bytes: 5}` a `GET` shows `fast` and 0, `index_size_bytes` is not 1, and there is no `threshold_bytes`.
-- `PUT {index_speed: "turbo"}`, `{index_speed: true}`, and `{builtin_idle_minutes: "x"}` → 400, and `index_speed` is unchanged.
+- `PUT {online_checks: {asked: true, services: {huggingface: true}}}` returns and stores `asked` true, `huggingface` true, `winget` false.
+- `PUT {index_speed: "turbo"}`, `{index_speed: true}`, `{builtin_idle_minutes: "x"}`, `{online_checks: 3}`, `{online_checks: {services: {huggingface: "yes"}}}`, `{online_checks: {services: {bing: true}}}`, and `{index_speed: "lean", online_checks: {asked: "no"}}` → 400, and `index_speed` and `online_checks` are unchanged.
+
+### SRV-COPY-CHECKS: Copy-check answers for a path
+**Applies to:** hoardini-server
+**Verification:** test
+
+`GET /api/copy-checks?path=<path>` (absolute or `~\...`) returns `{path, results, only_copy, note}`: the stored answers
+that still match the file's id, size, and mtime (EVID-COPY-CHECK), each as `{check, locator, confidence, checked_ms,
+detail, note}`, plus `copycheck::only_copy` and `copycheck::note_for`. Nothing runs; answers come from the background
+worker and from `inspect`. Every string in it shows the profile as `~`. A missing `path` is 400.
+`GET /api/copy-checks/waiting` returns `{online_waiting}`, the number of candidates the last pass found waiting on online
+consent (the UI's cue for the consent notice).
+
+**Acceptance criteria:**
+- With a stored `identical` Hugging Face answer for a temp file, the route answers the same for the absolute path and its `~` form: path in `~` form, `only_copy` false, the note, one result with check, confidence, locator, `checked_ms`, and a `detail.root` shown with `~`; the body never holds the profile path.
+- After the file changes, `results` is empty. Without `path`: 400.
+- With meta `copy_online_waiting` 3, `/api/copy-checks/waiting` is `{"online_waiting": 3}`.
 
 ### SRV-HISTORY-RANGE: History points can be limited to a time range
 **Applies to:** hoardini-server

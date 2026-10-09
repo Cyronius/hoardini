@@ -71,6 +71,7 @@ pub struct Inner {
     pub secrets: Arc<dyn SecretStore>,
     pub exec: Arc<Executor>,
     pub supervisor: Arc<Supervisor>,
+    pub copy: Arc<crate::copywork::CopyWorker>,
     pub builtin: Arc<Builtin>,
     pub env: Arc<AgentEnv>,
     pub dialogs: Option<Arc<dyn DialogProvider>>,

@@ -20,6 +20,8 @@ use serde_json::json;
 use tokio::sync::watch;
 
 pub mod builtin;
+mod copychecks;
+mod copywork;
 mod providers;
 mod rclone;
 mod routes;
@@ -264,6 +266,8 @@ pub async fn start_with_launcher(
         change.clone(),
         tokio::runtime::Handle::current(),
     );
+    let copy = copywork::CopyWorker::new(db.clone(), &supervisor);
+    supervisor.set_copy_worker(&copy);
     let index: Arc<dyn IndexControl> = supervisor.clone();
     let env = Arc::new(AgentEnv::new(
         db.clone(),
@@ -288,6 +292,7 @@ pub async fn start_with_launcher(
         secrets: secrets.clone(),
         exec: Arc::new(Executor::new(db, secrets)),
         supervisor: supervisor.clone(),
+        copy: copy.clone(),
         builtin: built_in.clone(),
         env,
         dialogs: opts.dialogs,
@@ -343,6 +348,7 @@ pub async fn start_with_launcher(
             }
         }
         supervisor.shutdown();
+        copy.shutdown();
         built_in.shutdown();
         let _ = stop_tx.send(true);
         if tokio::time::timeout(Duration::from_secs(2), &mut serve)
