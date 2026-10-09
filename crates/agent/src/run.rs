@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use futures::StreamExt;
 use hoardini_core::history::fmt_date;
-use hoardini_core::index::summary_for_prompt;
+use hoardini_core::index::prompt_summary;
 use hoardini_core::memory::globals_for;
 use hoardini_core::paths::profile_dir;
 use hoardini_core::store::{Db, now_ms};
@@ -403,7 +403,7 @@ impl Run {
         blocking(move || {
             let conn = db.conn()?;
             // A broken summary should cost the model context, not the whole chat.
-            let mut summary = summary_for_prompt(&conn, None)
+            let mut summary = prompt_summary(&conn, small)
                 .unwrap_or_else(|e| format!("The index summary is unavailable ({e})."));
             if small && summary.len() > SMALL_SUMMARY_CHARS {
                 let mut cut = SMALL_SUMMARY_CHARS;

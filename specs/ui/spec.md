@@ -109,7 +109,7 @@ the empty capability set, not the absence of the global.)
 **Applies to:** hoardini
 **Verification:** manual
 
-The header mascot is a sumo wrestler whose body girth tracks the used fraction (1 - free/total) of the system volume (the `C:\` volume, else the first volume), growing continuously and steeply near full. While an agent run is in progress he performs the shiko stomp, raising and stomping the left leg, then the right, repeatedly. With `prefers-reduced-motion` he holds a static pose.
+The header mascot is a sumo wrestler whose body girth tracks the used fraction (1 - free/total) of the selected drive (UI-DRIVE-SELECTOR; else the `C:\` volume, else the first watched volume), growing continuously and steeply near full, and his tooltip names that drive. While an agent run is in progress he performs the shiko stomp, raising and stomping the left leg, then the right, repeatedly. With `prefers-reduced-motion` he holds a static pose.
 
 **Verification (manual):**
 1. In `ui/`, run `MOCK_FILL=0.30 bun run mock` and `bun run dev`; open http://localhost:5193/.
@@ -118,6 +118,8 @@ The header mascot is a sumo wrestler whose body girth tracks the used fraction (
 4. Post `{"fill":0.6}`; confirm he slims back down, and that 90% looks visibly chubbier than 60%.
 5. Post `{"running_runs":1}`; confirm he alternately lifts and stomps left then right, with dust at each stomp. Post `{"running_runs":0}` to stop.
 6. Enable reduced motion in the OS or browser; confirm no looping animation.
+7. Open the drive menu and click D:: he slims to D:'s fullness and the tooltip reads "D: is 56% full". Click C: again: he widens back.
+(2026-10-09, step 7: headless Chromium against the mock; the tooltip went from "C: is 97% full" to "D: is 56% full" and the girth followed.)
 
 ### UI-MASCOT-POKE: The sumo reacts when poked
 **Applies to:** hoardini
@@ -261,3 +263,30 @@ same data. The `range_ms` line is not shown in the card's result text.
 2. Reload the page: the same chart is drawn from the stored tool result.
 3. Run another refresh, then scroll back to that card: it still ends at the refresh the call saw.
 4. With only 2 refreshes in the index, ask again: the card shows no chart, only the numbers.
+
+### UI-DRIVE-SELECTOR: The header shows one drive, picked from a menu
+**Applies to:** hoardini
+**Verification:** manual
+
+The header shall show only the selected drive's free-space bar (INDEX-VOLUMES), so drives never stack. Its drive letter is a dropdown button (`C: ▾`) that opens a menu of every fixed drive (`GET /api/volumes`) with its letter, label (or "Local Disk"), a free-space bar, and "N free of M". A watched folder (a test setup) shows as `…\<last segment>`, with the full path as its tooltip.
+
+- A watched drive has a check. Clicking it selects it (`PUT /api/volumes`) and closes the menu; the header bar, the mascot's girth (UI-MASCOT-FULLNESS), and the welcome-back card (UI-WELCOME-BACK, through `/api/index/summary`) follow it.
+- Any other drive has **Add**, which watches and selects it and closes the menu; its first scan starts at once, fast.
+- Each watched drive has **Stop watching** behind a confirm step ("Stop watching D:? Its index and history are deleted. Your files stay." with Stop watching and Cancel). For the last watched drive it is disabled, with the tooltip "At least one drive stays watched". Stopping the selected drive selects the first one left.
+- A drive that is not connected is greyed out and says "not connected" in place of its bar.
+- A drive without a change journal (FAT, exFAT) says "no change journal: every refresh is a full scan".
+- A server error shows inline at the bottom of the menu.
+
+Keyboard: Enter or Space on the button opens the menu with focus on the selected drive. Arrow Up and Down, Home, and End move between the menu's buttons. Escape cancels an open confirm step (focus returns to that row's Stop watching), else closes the menu and returns focus to the button. A click outside the menu or tabbing out of it closes it.
+
+**Verification (manual):**
+1. In `ui/`, run `MOCK_IDLE=1 bun run mock` and `bun run dev`; open http://localhost:5193/. The header shows one bar: `C:` and its free space.
+2. Click `C: ▾`. The menu lists C: Windows and D: Data with checks, E: Camera with Add and the no-change-journal note, and F: Old backup greyed out as "not connected". Focus is on C:.
+3. Press Arrow Down: focus moves to C:'s Stop watching. Press Escape: the menu closes and focus is back on the button. Open it again and click outside: it closes.
+4. Open it and click D:. The menu closes, the header shows `D:` and its bar, the mascot slims to D:'s fullness (tooltip "D: is 56% full"), and the welcome-back card names D:.
+5. Open it and press Add on E:. The header shows `E:`, and a fast scan starts ("Scanning fast").
+6. Open it and press Stop watching on D:. The confirm step appears with focus on Cancel, and Escape cancels it. Press it again and confirm: D: loses its check and shows Add.
+7. Stop watching every drive but one: the last one's Stop watching is disabled, with "At least one drive stays watched".
+8. Start `hoardini serve --port 72xx --token dev --no-refresh` against a scratch `HOARDINI_DATA_DIR`, with Vite proxying to that port. Use `PUT /api/volumes` to watch three scratch folders, then rename one. The menu shows it greyed as "not connected", and Rescan now skips it (the log says `volume not connected; skipped`). Stop watching the selected folder: the log says `stopped watching; its index is deleted`, and the next folder becomes selected.
+
+(2026-10-09: steps 1–7 pass against the mock in headless Chromium on ports 7291 and 5291. Step 8 passes against `hoardini serve --port 7291 --no-refresh` with three scratch folders: the renamed one showed "not connected" and was skipped by a refresh, and stopping the selected one deleted its 3 index rows and selected the next. The machine's `subst` drives (X:, Y:, Z:) were not listed.)

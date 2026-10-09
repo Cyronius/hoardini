@@ -634,6 +634,20 @@ fn prompt_dirs(conn: &Connection, root: &str, n: usize) -> Result<Ranked<DirItem
 }
 
 pub fn summary_for_prompt(conn: &Connection, volume: Option<&str>) -> Result<String> {
+    summary_with(conn, volume, 15, true)
+}
+
+// For watched drives other than the selected one: no change list and only the top folders.
+pub fn compact_summary_for_prompt(conn: &Connection, volume: &str) -> Result<String> {
+    summary_with(conn, Some(volume), 5, false)
+}
+
+fn summary_with(
+    conn: &Connection,
+    volume: Option<&str>,
+    dir_count: usize,
+    with_changes: bool,
+) -> Result<String> {
     let Some(st) = index_status(conn, volume)? else {
         return Ok("No index yet: the first refresh has not finished.".into());
     };
@@ -674,7 +688,7 @@ pub fn summary_for_prompt(conn: &Connection, volume: Option<&str>) -> Result<Str
         );
     }
     s.push_str(".\nBiggest folders:\n");
-    let dirs = prompt_dirs(conn, &st.volume, 15)?;
+    let dirs = prompt_dirs(conn, &st.volume, dir_count)?;
     for d in &dirs.items {
         let _ = writeln!(
             s,
@@ -687,7 +701,12 @@ pub fn summary_for_prompt(conn: &Connection, volume: Option<&str>) -> Result<Str
     if let Some(more) = dirs.more_line() {
         let _ = writeln!(s, "{more} folders over 1 GB");
     }
-    if let Some(ch) = history::changes(conn, Some(st.volume_id), Since::Previous, 5)? {
+    let changes = if with_changes {
+        history::changes(conn, Some(st.volume_id), Since::Previous, 5)?
+    } else {
+        None
+    };
+    if let Some(ch) = changes {
         let ago = humanize_age(ch.to.finished_ms - ch.from.finished_ms).replace(" ago", "");
         let _ = write!(s, "Since the refresh before ({ago} earlier):");
         if let Some(fd) = ch.free_delta {

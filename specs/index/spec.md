@@ -2,7 +2,7 @@
 
 Canonical spec for the indexer (`hoardini-core::index`, `hoardini index`). Design: `.claude/plans/hoardini-design.md` §5.1.
 
-Tests: `specs/index/tests/index.rs` and its modules `journal.rs` and `compact.rs` (`cargo test -p hoardini-specs --test index`). Most run
+Tests: `specs/index/tests/index.rs` and its modules `journal.rs`, `compact.rs`, and `volumes.rs` (`cargo test -p hoardini-specs --test index`); INDEX-VOLUMES also has server tests in `specs/srv/tests/srv.rs`. Most run
 against `index::FakeFs`, an in-memory volume with a fake change journal; the `real_*` tests run the real lister
 (`index::WinLister`) and, for the journal, the real C: change journal (`index::WinJournal`) on a temp directory.
 
@@ -331,3 +331,25 @@ header and notes a refresh that has not finished.
 2. Start a second refresh; while it runs, run `hoardini --db <db> top`.
 3. The header reads "Index of C:\ as of N minutes ago (refresh 1), a newer refresh has not finished".
 4. After it completes, `top` reads "as of just now (refresh 2)" with no unfinished note.
+
+### INDEX-VOLUMES: Watched drives, the selected drive, and removing one
+**Applies to:** hoardini-core, hoardini-server
+**Verification:** test
+
+The watched roots are `meta.indexed_volumes` (a JSON array, default the system drive) and the selected one is `meta.selected_volume` (default the system drive when it is watched, else the first watched root). Roots are stored normalized (`d:` and `d:/` become `D:\`), without duplicates.
+
+- `GET /api/volumes` lists every fixed drive except `subst` drives (which are folders on another volume), then any watched root that is not one of them, each as `{root, label, fs, total_bytes, free_bytes, watched, selected, connected, has_journal}`. `has_journal` is true for NTFS and ReFS. A root that does not exist now reports `connected: false` and the label, file system, and sizes its last refresh stored.
+- `PUT /api/volumes {watched, selected}` answers 400 and stores nothing when `watched` is empty, when `selected` is not among it, when a root is not a drive-letter path, or when a root it adds does not exist. Otherwise it stores both and answers the new list.
+- A root it adds gets its first scan at once: when no refresh runs, a pass over the added roots only; during a pass, that pass takes it. A volume with no completed index is always scanned fast (SRV-ONE-REFRESH).
+- A root it removes is no longer refreshed. If its indexer child is running, the child is killed first; then its `volume` row, its `node` rows (deleted in chunks so other writers wait briefly), its scan history (`scan`, `scan_dir`, `scan_file`), its `evidence_cache` entries, and its duplicate-group members are deleted, and a duplicate group left with one copy is dropped. Other volumes' rows are untouched. The root is listed in `meta.volumes_forgetting` until the delete finishes; a delete cut short (a crash) finishes at the next server start, unless the root is watched again.
+- Every refresh pass skips a watched root that does not exist (an unplugged drive) and keeps its index.
+- `/api/status` reports each watched root in the same shape; `/api/index/summary` (the welcome-back card) reports the selected drive.
+
+**Acceptance criteria:**
+- `plan_change`: watched `["c:", "C:\\", "d:/"]` with selected `d:` gives `["C:\\", "D:\\"]`, selected `D:\`, added `D:\`; an empty list, a selection outside the list, `relative\x`, `\\nas\share`, and adding a missing drive are refused with a reason; an unplugged drive may stay watched and selected.
+- A fresh database watches and selects the system drive; a stored change round-trips; a stale `selected_volume` falls back to the system drive, then to the first watched root.
+- With fake `C:\` and `D:\` indexes (two refreshes each), an evidence row on each, and duplicate groups within C:, across C: and D:, and within D:, `forget("d:")` leaves no D: volume, node, scan, `scan_dir`, `scan_file`, or evidence row, keeps only the C:-only group, leaves every C: count unchanged, `top_files` lists only C: paths, and `PRAGMA integrity_check` is `ok`.
+- A removal stored without its delete (a crash) is finished by `finish_forgetting`, which leaves `volumes_forgetting` as `[]`.
+- Server, with a fake indexer: `GET /api/volumes` lists every non-`subst` fixed drive as connected, with only the system drive watched and selected. Adding a scratch folder (sent with `/` separators) selects it and spawns exactly one child, for that folder, in `fast` mode; `/api/status` shows both roots with the new one selected; the four bad bodies above answer 400 and change nothing.
+- Server: removing a folder whose 10 s child is running answers within 8 s, deletes its rows while keeping the C: counts, the pass moves on to the system drive, the removed child never finishes, and the database passes `integrity_check`. Removing the last watched drive answers 400.
+- Server: a watched folder that was deleted is skipped by `POST /api/index/refresh` (only the system drive spawns), keeps its rows, and is listed watched, selected, not connected, with its stored size.

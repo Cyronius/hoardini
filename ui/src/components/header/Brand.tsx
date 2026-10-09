@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { humanBytes } from "../../format";
 import { useStore } from "../../store";
 import { Mascot, type MascotState } from "../Mascot";
-import { systemVolume } from "../mascot/girth";
+import { selectedVolume } from "../mascot/girth";
 
 function useMascotState(): MascotState {
   const tadaUntil = useStore((s) => s.tadaUntil);
@@ -29,7 +29,7 @@ export function Brand() {
   const vanished = status?.vanished_total_bytes ?? 0;
   return (
     <div className="flex items-center gap-2.5">
-      <Mascot state={mood} volume={systemVolume(status?.volumes)} className="h-14 w-14 shrink-0" />
+      <Mascot state={mood} volume={selectedVolume(status?.volumes)} className="h-14 w-14 shrink-0" />
       <div className="leading-tight">
         <div className="font-[family-name:var(--font-display)] text-[17px] font-extrabold tracking-tight">Hoardini</div>
         <div className="text-[length:var(--fs-xs)] text-muted" title="Total space freed by approved jobs">

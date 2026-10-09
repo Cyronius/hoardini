@@ -11,8 +11,8 @@ export function girthFor(used: number): number {
   return GIRTH_MIN + (GIRTH_MAX - GIRTH_MIN) * (0.35 * u + 0.65 * u ** 4);
 }
 
-export function systemVolume(volumes: Volume[] | undefined): Volume | undefined {
-  return volumes?.find((v) => v.root.toUpperCase().startsWith("C:")) ?? volumes?.[0];
+export function selectedVolume(volumes: Volume[] | undefined): Volume | undefined {
+  return volumes?.find((v) => v.selected) ?? volumes?.find((v) => v.root.toUpperCase().startsWith("C:")) ?? volumes?.[0];
 }
 
 export function usedFraction(v: Volume | undefined): number | null {

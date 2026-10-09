@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 
 use crate::state::{ApiError, ApiResult, AppState, blocking, parse};
 use crate::supervisor::index_speed;
-use crate::{builtin, providers, rclone, status, stream};
+use crate::{builtin, providers, rclone, status, stream, volumes};
 
 pub struct Entry {
     pub method: &'static str,
@@ -82,6 +82,8 @@ fn entries() -> Vec<Entry> {
         get_("/api/status/stream", stream::status_stream),
         post_("/api/index/refresh", index_refresh),
         post_("/api/presence", presence),
+        get_("/api/volumes", volumes::list),
+        put_("/api/volumes", volumes::put),
         get_("/api/index/summary", index_summary),
         post_("/api/agent/run", stream::agent_run),
         post_("/api/agent/runs/{run_id}/cancel", stream::cancel_run),
@@ -183,7 +185,9 @@ async fn presence(State(s): State<AppState>, body: Bytes) -> ApiResult {
 async fn index_summary(State(s): State<AppState>) -> ApiResult {
     blocking(move || {
         let conn = s.db.conn()?;
-        let Some(st) = index::index_status(&conn, None)?.filter(|s| s.last_refresh_ms.is_some())
+        let selected = index::selected(&conn);
+        let Some(st) =
+            index::index_status(&conn, Some(&selected))?.filter(|s| s.last_refresh_ms.is_some())
         else {
             return Err(ApiError::not_found("index"));
         };

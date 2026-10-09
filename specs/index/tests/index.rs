@@ -11,6 +11,7 @@ use hoardini_core::store::Db;
 
 mod compact;
 mod journal;
+mod volumes;
 
 const KIB: u64 = 1 << 10;
 const MIB: u64 = 1 << 20;

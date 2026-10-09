@@ -12,7 +12,7 @@ use hoardini_agent::tools::{Kind, Outcome, Registry, ToolCtx, ToolError};
 use hoardini_core::index::{RefreshOptions, WinLister, normalize_path, refresh};
 use hoardini_core::memory::{self, Kind as MemKind, NewMemory, Scope};
 use hoardini_core::proposals;
-use hoardini_core::store::now_ms;
+use hoardini_core::store::{now_ms, set_meta};
 use serde_json::{Value, json};
 use support::*;
 
@@ -974,6 +974,53 @@ async fn the_system_prompt_carries_global_notes_the_index_summary_and_its_age() 
     assert!(
         sys.contains("Refresh: running in background mode, 40% (walk)"),
         "{sys}"
+    );
+}
+
+// Traces: AGENT-PROMPT-CONTEXT
+#[tokio::test]
+async fn the_system_prompt_summarizes_each_watched_drive_and_names_the_selected_one() {
+    let h = Harness::new(None);
+    h.index_fake(r"C:\", &[(r"C:\Games\huge.pak", 5 * GIB)]);
+    h.index_fake(r"D:\", &[(r"D:\Media\film.mkv", 7 * GIB)]);
+    let conn = h.db.conn().unwrap();
+    set_meta(&conn, "indexed_volumes", r#"["C:\\", "D:\\", "Q:\\"]"#).unwrap();
+    set_meta(&conn, "selected_volume", r"D:\").unwrap();
+    let mock = MockLlm::start(vec![Turn::Text("a".into()), Turn::Text("b".into())]).await;
+    h.run(
+        h.provider(&mock.base_url),
+        user("t-drives", "u1", "what's big?"),
+    )
+    .await;
+    let mut small = h.provider(&mock.base_url);
+    small.small = true;
+    h.run(small, user("t-drives", "u2", "and now?")).await;
+    let sys = |i: usize| {
+        mock.requests()[i].messages()[0]["content"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let full = sys(0);
+    let looking = full
+        .find(r"The user is looking at D:\")
+        .unwrap_or_else(|| panic!("{full}"));
+    let d = full.find(r"Index of D:\").unwrap();
+    let c = full.find(r"Index of C:\").unwrap();
+    assert!(looking < d && d < c, "the selected drive leads: {full}");
+    assert!(
+        full.contains(r"D:\Media") && full.contains(r"C:\Games"),
+        "{full}"
+    );
+    assert!(full.contains(r"Q:\: no index yet"), "{full}");
+
+    let small = sys(1);
+    assert!(small.contains(r"The user is looking at D:\"), "{small}");
+    assert!(small.contains(r"Index of D:\"), "{small}");
+    assert!(
+        !small.contains(r"Index of C:\") && !small.contains(r"Q:\"),
+        "{small}"
     );
 }
 
