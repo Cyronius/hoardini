@@ -107,3 +107,20 @@ The drawer has its own Theme tab. "Follow system" sits above a Dark / Midtone / 
 4. Pick Kraft: it is listed under Midtone. Pick Follow system: the active theme is Marshmallow or Marshmallow Night per the OS setting.
 5. With the Network panel open (cache disabled), pick a theme with a non-default font (for example Space Grotesk): font files load only from the app's own origin, and none from another host.
 6. On Rosewood, an accent-filled button or pill shows readable text.
+
+### UI-CHANGES-CHART: The changes card draws free space over time
+**Applies to:** hoardini
+**Verification:** manual
+
+The `changes` tool card shall show the free-space chart above its usual content when the call's range holds at least
+3 refreshes, and only the numbers otherwise. The points come from `GET /api/history` limited to the `range_ms` line
+in the tool result, so the chart ends at the call's own latest refresh and a reload or scrolled-back card shows the
+same data. The `range_ms` line is not shown in the card's result text.
+
+**Verification (manual):**
+1. With an index holding at least 3 refreshes, ask "How has my free space changed over time?". The `changes` card shows
+   a "Free space over time" chart above the collapsed tool row; hovering a dot shows its date and free space.
+2. Reload the page: the same chart is drawn from the stored tool result.
+3. Run another refresh, then scroll back to that card: it still ends at the refresh the call saw.
+4. With only 2 refreshes in the index, ask again: the card shows no chart, only the numbers.
+

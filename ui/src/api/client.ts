@@ -118,7 +118,12 @@ export const routes = {
   installBuiltin: (model_id: string) => api<T.Job>("/api/builtin/install", { body: { model_id } }),
   removeBuiltin: () => del<{ ok: true; freed_bytes: number }>("/api/builtin"),
 
-  history: () => api<T.HistoryPoint[]>("/api/history"),
+  history: (since_ms?: number, until_ms?: number) => {
+    const q = new URLSearchParams();
+    if (since_ms != null) q.set("since_ms", String(since_ms));
+    if (until_ms != null) q.set("until_ms", String(until_ms));
+    return api<T.HistoryPoint[]>(`/api/history${q.size ? `?${q}` : ""}`);
+  },
   settings: () => api<T.Settings>("/api/settings"),
   putSettings: (s: Partial<T.Settings>) => put<T.Settings>("/api/settings", s),
 };
