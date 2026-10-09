@@ -339,8 +339,9 @@ impl Executor {
             job.status = "failed".into();
             job.error = Some(format!("could not start the job: {e}"));
             job.finished_ms = Some(now_ms());
-            let _ = persist_job(&conn, &job);
             let _ = proposals::set_status(&conn, proposal_id, "failed");
+            follow_up(&self.db, &self.shared.env, proposal_id);
+            let _ = persist_job(&conn, &job);
             return Err(anyhow::anyhow!("could not start the job: {e}"));
         }
         Ok(ApproveResult {
@@ -569,7 +570,15 @@ fn run_proposal_job(
         let _ = proposals::set_status(&conn, &proposal_id, "failed");
     }
     drop(turn);
+    // Before the terminal broadcast, so the client's refetch on job end already sees follow_up_id.
+    follow_up(&ctx.db, &ctx.shared.env, &proposal_id);
     finish_job(&ctx, Some(&conn), &mut job);
+}
+
+fn follow_up(db: &Db, env: &PolicyEnv, proposal_id: &str) {
+    if let Err(e) = proposals::create_follow_up(db, env, proposal_id) {
+        tracing::warn!(proposal = %proposal_id, error = %e, "could not create the follow-up proposal");
+    }
 }
 
 const PUBLISH_EVERY: Duration = Duration::from_millis(200);

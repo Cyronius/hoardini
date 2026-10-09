@@ -15,7 +15,8 @@ Then one of three outcomes:
   every path is denied fails with an error that names each path and reason.
 - **Blocked**: the item is stored and shown with `status = "blocked"`, a `block_reason`, and `selected = false`. It
   cannot be approved.
-- **Selectable**: `status = "pending"`; `total_alloc` sums these items only.
+- **Selectable**: `status = "pending"`; `total_alloc` sums these items only. It starts ticked or unticked per
+  POLICY-DEFAULT-TICK.
 
 Each item stores a `cap` (`keep` / `review` / none) and the shown `verdict`, which is the LLM's verdict raised to at
 least the cap (`Verdict::capped`). `policy::cap_for(conn, path, catalog_cap, in_use)` exposes the same cap to evidence.
@@ -108,3 +109,34 @@ path is denied. The stored verdict is the LLM verdict raised to the cap; a verdi
 - LLM `redownload` on a whole `models--org--name` folder → `redownload`, no cap; `safe` on `node_modules` → `safe`, no cap.
 - LLM `keep` on an unknown file stays `keep` and the item starts unselected.
 - `cap_for_with(.., in_use = true)` and the cap of the profile root are `keep`; every item satisfies verdict ≥ cap.
+
+### POLICY-DEFAULT-TICK: Only worthwhile safe or redownload items start ticked
+**Applies to:** hoardini
+**Verification:** test
+
+A new proposal's item shall start ticked (`selected = true`) only when all three hold: it is not blocked; its stored
+verdict, which is already capped (POLICY-VERDICT-CAP), is `safe` or `redownload` (an item with no verdict counts as
+`review`); and it is not small. An item is small when its `alloc` is under 50 MiB **and** under 2% of the proposal's
+`total_alloc`, so a card made only of small files still ticks its biggest ones. Every item's JSON carries
+`small: boolean`. The rule is `proposals::is_small(alloc, total)` and `proposals::default_tick(blocked, verdict, small)`.
+A follow-up proposal (ACT-FOLLOW-UP) keeps the approved tick state instead. Tests: `specs/policy/tests/policy.rs`;
+the item JSON is also checked in `specs/srv/tests/srv.rs`.
+
+**Acceptance criteria:**
+- `is_small`: 50 MiB − 1 byte of a huge total is small; exactly 50 MiB and 50 MiB + 1 are not. 1,999 of 100,000 is small; exactly 2,000 (2%) and 2,001 are not. 3 MiB of a 3 MiB + 40 KiB card is not small while 4 KiB of it is. 0 of 0 is not small.
+- `default_tick` is true for unblocked, not-small `safe` and `redownload`; false when blocked, small, `review`, `keep`, or no verdict.
+- In one proposal: a `node_modules` folder the model calls `safe` and an HF `models--org--m` folder it calls `redownload` start ticked; a `node_modules` called `review`, one with no verdict, and an unknown file called `safe` (shown as `review`) start unticked; a 4 KiB `node_modules` called `safe` is `small` and unticked; no other item is `small`.
+
+### POLICY-ITEM-MEMORY: Each item shows the note that covers it
+**Applies to:** hoardini
+**Verification:** test
+
+When a proposal is created, each item shall store `memory_note`: the text of the first non-protect, non-forgotten
+memory covering its path in MEM-RECALL-ANCESTRY order (the path itself, then each ancestor, then globs), or null.
+Attaching a note marks that note used (MEM-USAGE); other covering notes are not touched. A protect memory still refuses
+the path (POLICY-PROTECT). The server redacts the note like the other item text.
+
+**Acceptance criteria:**
+- With notes on `work` ("work folder"), `work\scratch` ("scratch is disposable"), and `work\scratch\old` ("old builds, fine to drop"): `work\scratch\old\a.bin` carries "old builds, fine to drop", `work\scratch\b.bin` carries "scratch is disposable", and a file outside `work` carries null.
+- `work\keep\d.bin`, under both a fact and a protect ("family photos") on `work\keep`, is in `dropped` with the protect text.
+- The "scratch is disposable" note's `last_used_ms` moves to the proposal time; the "work folder" note's stays at its old value.

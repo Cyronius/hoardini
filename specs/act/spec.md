@@ -90,6 +90,29 @@ a restart.
 - Delete rows carry `{"kind":"none"}` and `freed_bytes` equal to the item's allocated size; the archive row carries `{"kind":"restore","archive_entry_id","dest_uri"}` matching its `archive_entry`.
 - `vanished_total()` equals the sum of `freed_bytes` and is unchanged after a new `Executor` opens the same database.
 
+### ACT-FOLLOW-UP: A finished job leaves a refreshed card for what was not done
+**Applies to:** hoardini
+**Verification:** test
+
+When a delete, archive, or compress job ends (done, partial, failed, or cancelled), the executor shall create a pending
+follow-up proposal whose `parent_id` is the job's proposal, in the same conversation, holding every item whose status is
+not `done`. Each item starts with the tick it was approved with: an approved item that failed or was skipped comes back
+ticked; an item left unticked comes back unticked. The items go through proposal creation again, so path resolution,
+the deny list, `alloc`, blocks, caps, in-use status, and the memory note are current: a newly blocked item is unticked,
+and a newly denied path is listed in `dropped`. An item whose path no longer exists is left out. Kind, destination,
+format, summary, verdicts, and reasons carry over; the follow-up has no `tool_call_id`. Nothing is created when no item
+is left, and dedupe jobs get no follow-up. The follow-up row is committed before the job's terminal update is broadcast
+(`Executor::subscribe`, so the status stream's `job` frame too). Proposal JSON (`GET /api/proposals/{id}` and the
+`proposals` map of `GET /api/thread`) carries `parent_id` and `follow_up_id` (the newest proposal whose `parent_id` is
+this one), both null when absent. A job interrupted by a restart (marked failed at startup) gets no follow-up. Tests:
+`specs/act/tests/follow_up.rs`; the JSON and stream order are also checked in `specs/srv/tests/srv.rs`.
+
+**Acceptance criteria:**
+- Of seven delete items, one done, one grown after the proposal (approved, skipped as changed), one left unticked, one deleted before approval, one opened after the proposal and still open, one open at proposal time (blocked) and closed before approval, and one under a protect memory added before approval: when the job's terminal update arrives the parent already has `follow_up_id`. The follow-up has `parent_id`, status `pending`, kind `delete`, conversation `main`, and the parent's summary, and holds four items. The grown file is ticked with a larger `alloc` and its verdict and reason; the unticked one is unticked; the still-open one is `blocked` and unticked with an `Open in` reason; the formerly blocked one is `pending` and unticked. The done, deleted, and protected files are not items; the protected one is in `dropped` with the memory text.
+- A job where every item is done, and one whose only item not done was deleted, leave `follow_up_id` null and no child row. A delete dedupe whose second copy fails leaves none either.
+- An archive whose copy fails verification gets a follow-up of kind `archive` with the same destination and the item ticked. An archive cancelled during its first copy ends `cancelled` with the second item ticked and `pending` in the follow-up. An `lzx` compress that fails up front gets a follow-up of kind `compress`, format `lzx`, item ticked.
+- Through the server: a two-item delete with one approved streams its terminal `job` frame after `GET /api/proposals/{id}` already shows `follow_up_id`; the follow-up's `parent_id` names the parent, it holds the unapproved item unticked with its memory note, and `GET /api/thread` shows both links.
+
 ### ACT-RESTORE: Restore puts back the original path and content
 **Applies to:** hoardini
 **Verification:** test

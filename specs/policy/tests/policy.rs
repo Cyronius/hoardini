@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use hoardini_core::memory::{self, Kind, NewMemory, Scope, remember_with};
 use hoardini_core::policy::{Verdict, cap_for_with, deny_reason};
-use hoardini_core::proposals::{self, NewItem, ProposalKind};
+use hoardini_core::proposals::{self, NewItem, ProposalKind, SMALL_BYTES, default_tick, is_small};
 use hoardini_win::set_file_times;
 use support::*;
 
@@ -540,5 +540,163 @@ fn shown_verdict_never_exceeds_the_policy_cap() {
     assert_eq!(
         cap_for_with(&conn, &fx.env, &fx.profile, None, false).unwrap(),
         Some(Verdict::Keep)
+    );
+}
+
+// Traces: POLICY-DEFAULT-TICK
+#[test]
+fn small_means_under_50_mib_and_under_2_percent_of_the_card() {
+    const MIB: i64 = 1024 * 1024;
+    assert_eq!(SMALL_BYTES, 50 * MIB);
+    let huge = 100_000 * MIB;
+    assert!(is_small(50 * MIB - 1, huge));
+    assert!(!is_small(50 * MIB, huge), "50 MiB itself is not small");
+    assert!(!is_small(50 * MIB + 1, huge));
+    assert!(is_small(1_999, 100_000));
+    assert!(!is_small(2_000, 100_000), "exactly 2% is not small");
+    assert!(!is_small(2_001, 100_000));
+    // A card made only of small files still ticks its biggest ones.
+    assert!(!is_small(3 * MIB, 3 * MIB + 10 * 4096));
+    assert!(is_small(4096, 3 * MIB + 10 * 4096));
+    assert!(!is_small(0, 0));
+}
+
+// Traces: POLICY-DEFAULT-TICK
+#[test]
+fn only_unblocked_safe_or_redownload_items_that_are_not_small_start_ticked() {
+    for v in [Verdict::Safe, Verdict::Redownload] {
+        assert!(default_tick(false, Some(v), false), "{v:?}");
+        assert!(!default_tick(true, Some(v), false), "blocked {v:?}");
+        assert!(!default_tick(false, Some(v), true), "small {v:?}");
+    }
+    for v in [Some(Verdict::Review), Some(Verdict::Keep), None] {
+        assert!(!default_tick(false, v, false), "{v:?}");
+    }
+}
+
+// Traces: POLICY-DEFAULT-TICK
+#[test]
+fn the_capped_verdict_decides_the_default_tick() {
+    let fx = Fx::new();
+    let chunk = data(64 * 1024, 1);
+    fx.file(r"a\node_modules\pkg\index.js", &chunk);
+    fx.file(r"b\node_modules\pkg\index.js", &chunk);
+    fx.file(r"c\node_modules\pkg\index.js", &chunk);
+    fx.file(r"tiny\node_modules\pkg\index.js", &data(4096, 2));
+    fx.pfile(r".cache\huggingface\hub\models--org--m\blobs\0123", &chunk);
+    let mystery = fx.file("mystery.bin", &chunk);
+    let safe_nm = fx.work.join(r"a\node_modules");
+    let review_nm = fx.work.join(r"b\node_modules");
+    let bare_nm = fx.work.join(r"c\node_modules");
+    let tiny_nm = fx.work.join(r"tiny\node_modules");
+    let model = fx.profile.join(r".cache\huggingface\hub\models--org--m");
+
+    let mut req = fx.request(ProposalKind::Delete, &[], None);
+    for (p, v) in [
+        (&safe_nm, Some(Verdict::Safe)),
+        (&review_nm, Some(Verdict::Review)),
+        (&bare_nm, None),
+        (&tiny_nm, Some(Verdict::Safe)),
+        (&model, Some(Verdict::Redownload)),
+        (&mystery, Some(Verdict::Safe)),
+    ] {
+        req.items.push(NewItem {
+            path: s(p),
+            verdict: v,
+            reason: None,
+        });
+    }
+    let p = proposals::create_with(&fx.db, &fx.env, req).unwrap();
+    assert!(p.items.iter().all(|i| i.status == "pending"));
+    let ticked = |path: &Path| item(&p, path).selected;
+
+    assert!(ticked(&safe_nm));
+    assert!(ticked(&model), "redownload, no cap");
+    assert!(!ticked(&review_nm), "the model said review");
+    assert!(!ticked(&bare_nm), "no verdict counts as review");
+    assert_eq!(item(&p, &mystery).verdict, Some(Verdict::Review));
+    assert!(!ticked(&mystery), "safe, capped to review");
+    let tiny = item(&p, &tiny_nm);
+    assert_eq!(tiny.verdict, Some(Verdict::Safe));
+    assert!(tiny.small && !tiny.selected, "{tiny:#?}");
+    assert!(
+        p.items
+            .iter()
+            .filter(|i| i.path != tiny.path)
+            .all(|i| !i.small)
+    );
+}
+
+// Traces: POLICY-ITEM-MEMORY
+#[test]
+fn each_item_carries_the_most_specific_non_protect_note_and_protect_still_refuses() {
+    let fx = Fx::new();
+    let conn = fx.db.conn().unwrap();
+    let profile = s(&fx.profile);
+    let old = fx.file(r"scratch\old\a.bin", &data(8192, 1));
+    let loose = fx.file(r"scratch\b.bin", &data(8192, 2));
+    let kept = fx.file(r"keep\d.bin", &data(8192, 3));
+    let elsewhere = write(&fx.root().join(r"elsewhere\c.bin"), &data(8192, 4));
+    let note = |key: &Path, kind: Kind, text: &str| {
+        remember_with(
+            &conn,
+            NewMemory::new(Scope::Path, &s(key), kind, text, "user"),
+            1,
+            &profile,
+        )
+        .unwrap()
+    };
+    let broad = note(&fx.work, Kind::Fact, "work folder");
+    let scratch = note(
+        &fx.work.join("scratch"),
+        Kind::Fact,
+        "scratch is disposable",
+    );
+    note(
+        &fx.work.join(r"scratch\old"),
+        Kind::Preference,
+        "old builds, fine to drop",
+    );
+    note(&fx.work.join("keep"), Kind::Fact, "photos live here");
+    note(&fx.work.join("keep"), Kind::Protect, "family photos");
+
+    let before = hoardini_core::store::now_ms();
+    let p = fx
+        .propose(
+            ProposalKind::Delete,
+            &[&old, &loose, &elsewhere, &kept],
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        item(&p, &old).memory_note.as_deref(),
+        Some("old builds, fine to drop")
+    );
+    assert_eq!(
+        item(&p, &loose).memory_note.as_deref(),
+        Some("scratch is disposable")
+    );
+    assert_eq!(item(&p, &elsewhere).memory_note, None);
+    assert_eq!(p.items.len(), 3);
+    let refused = p
+        .dropped
+        .iter()
+        .find(|d| d.path.eq_ignore_ascii_case(&s(&kept)))
+        .expect("the protected file is refused");
+    assert!(
+        refused.reason.contains("family photos"),
+        "{}",
+        refused.reason
+    );
+
+    let used = |id: i64| memory::get(&conn, id).unwrap().unwrap().last_used_ms;
+    assert!(
+        used(scratch.id).unwrap() >= before,
+        "the shown note counts as used"
+    );
+    assert_eq!(
+        used(broad.id),
+        Some(1),
+        "a covering note that is not shown stays unused"
     );
 }

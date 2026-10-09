@@ -3,8 +3,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::destinations;
 use crate::index::is_ancestor_path;
+use crate::memory;
 use crate::policy::{self, Action, FsState, ItemKind, PolicyEnv, Verdict};
 use crate::store::{Db, now_ms};
+
+pub const SMALL_BYTES: i64 = 50 * 1024 * 1024;
+
+// Both bounds, so a card made only of small files still ticks its biggest ones.
+pub fn is_small(alloc: i64, total: i64) -> bool {
+    alloc < SMALL_BYTES && alloc.saturating_mul(50) < total
+}
+
+pub fn default_tick(blocked: bool, verdict: Option<Verdict>, small: bool) -> bool {
+    !blocked && matches!(verdict, Some(Verdict::Safe | Verdict::Redownload)) && !small
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -90,6 +102,8 @@ pub struct ProposalItem {
     pub selected: bool,
     pub status: String,
     pub detail: Option<String>,
+    pub small: bool,
+    pub memory_note: Option<String>,
 }
 
 // A requested path the gate refused outright (deny list, protect memory, not absolute, nested).
@@ -117,6 +131,8 @@ pub struct Proposal {
     pub items: Vec<ProposalItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dropped: Vec<DroppedItem>,
+    pub parent_id: Option<String>,
+    pub follow_up_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -168,6 +184,8 @@ struct Row {
     ex: policy::Examined,
     verdict: Option<Verdict>,
     reason: Option<String>,
+    note: Option<String>,
+    tick: Option<bool>,
 }
 
 fn nothing_left(dropped: &[DroppedItem]) -> anyhow::Error {
@@ -180,6 +198,67 @@ fn nothing_left(dropped: &[DroppedItem]) -> anyhow::Error {
 }
 
 pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result<Proposal> {
+    build(db, env, req, None)?.map_err(|dropped| nothing_left(&dropped))
+}
+
+// A follow-up keeps each item's approved tick (aligned with the request's items) instead of the default.
+struct Carry {
+    parent_id: String,
+    ticks: Vec<bool>,
+}
+
+// Every item the parent's job did not finish, re-examined; None when nothing is left.
+pub(crate) fn create_follow_up(
+    db: &Db,
+    env: &PolicyEnv,
+    parent_id: &str,
+) -> anyhow::Result<Option<Proposal>> {
+    let Some(p) = load(&db.conn()?, parent_id)? else {
+        return Ok(None);
+    };
+    if p.kind == ProposalKind::Dedupe {
+        return Ok(None);
+    }
+    let (items, ticks): (Vec<NewItem>, Vec<bool>) = p
+        .items
+        .iter()
+        .filter(|i| i.status != "done" && std::fs::symlink_metadata(&i.path).is_ok())
+        .map(|i| {
+            let item = NewItem {
+                path: i.path.clone(),
+                verdict: i.verdict,
+                reason: i.reason.clone(),
+            };
+            (item, i.selected)
+        })
+        .unzip();
+    if items.is_empty() {
+        return Ok(None);
+    }
+    let req = NewProposal {
+        conversation_id: p.conversation_id,
+        tool_call_id: None,
+        kind: p.kind,
+        destination_id: p.destination.map(|d| d.id),
+        format: p.format,
+        dedupe: None,
+        summary: p.summary,
+        items,
+    };
+    let carry = Carry {
+        parent_id: parent_id.to_string(),
+        ticks,
+    };
+    Ok(build(db, env, req, Some(carry))?.ok())
+}
+
+// Err(dropped) when the gate refused every path.
+fn build(
+    db: &Db,
+    env: &PolicyEnv,
+    req: NewProposal,
+    carry: Option<Carry>,
+) -> anyhow::Result<Result<Proposal, Vec<DroppedItem>>> {
     if req.items.is_empty() {
         anyhow::bail!("a proposal needs at least one path");
     }
@@ -202,8 +281,8 @@ pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result
     }
 
     let mut dropped: Vec<DroppedItem> = Vec::new();
-    let mut accepted: Vec<(String, &NewItem)> = Vec::new();
-    for item in &req.items {
+    let mut accepted: Vec<(String, usize)> = Vec::new();
+    for (i, item) in req.items.iter().enumerate() {
         let path = match policy::resolve(env, &item.path) {
             Ok(p) => p,
             Err(reason) => {
@@ -232,7 +311,7 @@ pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result
         if accepted.iter().any(|(p, _)| p.eq_ignore_ascii_case(&path)) {
             continue;
         }
-        accepted.push((path, item));
+        accepted.push((path, i));
     }
     let nested: Vec<(usize, String)> = accepted
         .iter()
@@ -253,17 +332,21 @@ pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result
     }
 
     let mut rows = Vec::new();
-    for (path, item) in accepted {
+    for (path, i) in accepted {
+        let item = &req.items[i];
         let ex = policy::examine(&conn, env, &path, req.kind.action())?;
+        let note = memory::note_covering_with(&conn, &path, &env.profile)?.map(|m| m.text);
         rows.push(Row {
             verdict: item.verdict.map(|v| v.capped(ex.cap)),
             reason: item.reason.clone(),
+            tick: carry.as_ref().and_then(|c| c.ticks.get(i).copied()),
             path,
             ex,
+            note,
         });
     }
     if rows.is_empty() {
-        return Err(nothing_left(&dropped));
+        return Ok(Err(dropped));
     }
 
     let id = uuid::Uuid::now_v7().to_string();
@@ -282,8 +365,8 @@ pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result
     };
     let tx = conn.transaction()?;
     tx.execute(
-        "INSERT INTO proposal(id, conversation_id, tool_call_id, kind, params_json, status, total_alloc, created_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7)",
+        "INSERT INTO proposal(id, conversation_id, tool_call_id, kind, params_json, status, total_alloc, created_ms, parent_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8)",
         params![
             id,
             req.conversation_id,
@@ -291,16 +374,21 @@ pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result
             req.kind.as_str(),
             serde_json::to_string(&params)?,
             total,
-            created
+            created,
+            carry.as_ref().map(|c| c.parent_id.as_str()),
         ],
     )?;
     for (seq, r) in rows.iter().enumerate() {
         let state = r.ex.state.as_ref();
         let blocked = r.ex.block.is_some();
+        let selected = match r.tick {
+            Some(tick) => tick && !blocked,
+            None => default_tick(blocked, r.verdict, is_small(r.ex.alloc, total)),
+        };
         tx.execute(
             "INSERT INTO proposal_item(proposal_id, seq, path, node_id, kind, alloc, logical, mtime, file_id,
-                                       verdict, cap, reason, block_reason, selected, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                                       verdict, cap, reason, block_reason, selected, status, memory_note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 id,
                 seq as i64,
@@ -319,13 +407,15 @@ pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result
                 r.ex.cap.map(Verdict::as_str),
                 r.reason,
                 r.ex.block,
-                !blocked && r.verdict != Some(Verdict::Keep),
+                selected,
                 if blocked { "blocked" } else { "pending" },
+                r.note,
             ],
         )?;
     }
     tx.commit()?;
-    load(&conn, &id)?.ok_or_else(|| anyhow::anyhow!("proposal vanished"))
+    let p = load(&conn, &id)?.ok_or_else(|| anyhow::anyhow!("proposal vanished"))?;
+    Ok(Ok(p))
 }
 
 pub fn get(db: &Db, id: &str) -> anyhow::Result<Option<Proposal>> {
@@ -370,11 +460,14 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         i64,
         i64,
         Option<String>,
+        Option<String>,
+        Option<String>,
     );
     let head: Option<Head> = conn
         .query_row(
-            "SELECT conversation_id, tool_call_id, kind, params_json, status, total_alloc, created_ms, job_id
-             FROM proposal WHERE id = ?1",
+            "SELECT conversation_id, tool_call_id, kind, params_json, status, total_alloc, created_ms, job_id, parent_id,
+                    (SELECT f.id FROM proposal f WHERE f.parent_id = p.id ORDER BY f.created_ms DESC, f.id DESC LIMIT 1)
+             FROM proposal p WHERE p.id = ?1",
             [id],
             |r| {
                 Ok((
@@ -386,6 +479,8 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
                     r.get(5)?,
                     r.get(6)?,
                     r.get(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
                 ))
             },
         )
@@ -399,6 +494,8 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         total_alloc,
         created_ms,
         job_id,
+        parent_id,
+        follow_up_id,
     )) = head
     else {
         return Ok(None);
@@ -416,18 +513,19 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         None => None,
     };
     let mut st = conn.prepare_cached(
-        "SELECT id, path, kind, alloc, verdict, cap, reason, block_reason, selected, status, detail
+        "SELECT id, path, kind, alloc, verdict, cap, reason, block_reason, selected, status, detail, memory_note
          FROM proposal_item WHERE proposal_id = ?1 ORDER BY seq",
     )?;
     let items = st
         .query_map([id], |r| {
             let verdict: Option<String> = r.get(4)?;
             let cap: Option<String> = r.get(5)?;
+            let alloc: i64 = r.get(3)?;
             Ok(ProposalItem {
                 id: r.get(0)?,
                 path: r.get(1)?,
                 kind: ItemKind::from_db(r.get(2)?).as_str().to_string(),
-                alloc: r.get(3)?,
+                alloc,
                 verdict: verdict.as_deref().and_then(Verdict::parse),
                 cap: cap.as_deref().and_then(Verdict::parse),
                 reason: r.get(6)?,
@@ -435,6 +533,8 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
                 selected: r.get(8)?,
                 status: r.get(9)?,
                 detail: r.get(10)?,
+                small: is_small(alloc, total_alloc),
+                memory_note: r.get(11)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -453,6 +553,8 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         tool_call_id,
         items,
         dropped: params.dropped,
+        parent_id,
+        follow_up_id,
     }))
 }
 
