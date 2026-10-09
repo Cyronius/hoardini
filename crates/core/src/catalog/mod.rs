@@ -59,6 +59,29 @@ pub enum Category {
     UserData,
 }
 
+// What one deletable item is when the review reaches a folder this entry matches (REVIEW-UNITS).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnitKind {
+    #[default]
+    #[serde(rename = "self")]
+    Whole,
+    Children,
+    Contents,
+    Container,
+}
+
+impl UnitKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnitKind::Whole => "self",
+            UnitKind::Children => "children",
+            UnitKind::Contents => "contents",
+            UnitKind::Container => "container",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Entry {
     pub id: String,
@@ -74,7 +97,19 @@ pub struct Entry {
     pub shared_blobs: bool,
     #[serde(default)]
     pub safe_unit: Option<String>,
+    #[serde(default)]
+    pub unit: UnitKind,
+    #[serde(default)]
+    pub unit_depth: Option<u8>,
+    #[serde(default)]
+    pub min_age_hours: Option<u32>,
     pub notes: String,
+}
+
+impl Entry {
+    pub fn verdict(&self) -> Verdict {
+        self.verdict_hint.capped(self.cap)
+    }
 }
 
 #[derive(Deserialize)]
@@ -225,6 +260,7 @@ struct Compiled {
     entry: usize,
     matcher: GlobMatcher,
     literal_len: usize,
+    literal: Option<String>,
 }
 
 pub struct Catalog {
@@ -274,10 +310,13 @@ impl Catalog {
                     .backslash_escape(false)
                     .build()
                     .map_err(|err| anyhow::anyhow!("catalog {} pattern {pat}: {err}", e.id))?;
+                let literal =
+                    (!norm.contains(['*', '?', '[', ']', '{', '}'])).then(|| norm.clone());
                 compiled.push(Compiled {
                     entry: i,
                     matcher: glob.compile_matcher(),
                     literal_len: norm.chars().filter(|c| !matches!(c, '*' | '?')).count(),
+                    literal,
                 });
             }
         }
@@ -319,6 +358,31 @@ impl Catalog {
             }
         }
         best.map(|(_, _, inv)| &self.entries[usize::MAX - inv])
+    }
+
+    // Only entries whose pattern names the path itself; ties as in `lookup`.
+    pub fn lookup_exact(&self, abs_path: &str) -> Option<&Entry> {
+        let path = normalize_path(abs_path);
+        self.compiled
+            .iter()
+            .filter(|c| c.matcher.is_match(&path))
+            .max_by_key(|c| (c.literal_len, usize::MAX - c.entry))
+            .map(|c| &self.entries[c.entry])
+    }
+
+    // Wildcard-free patterns strictly inside `dir`, so a walk that stops at a kept folder can still reach them.
+    pub fn literal_paths_under(&self, dir: &str) -> Vec<(String, &Entry)> {
+        let dir = normalize_path(dir);
+        let prefix = format!("{}/", dir.trim_end_matches('/'));
+        self.compiled
+            .iter()
+            .filter_map(|c| {
+                let lit = c.literal.as_ref()?;
+                let head = lit.get(..prefix.len())?;
+                (lit.len() > prefix.len() && head.eq_ignore_ascii_case(&prefix))
+                    .then(|| (lit.replace('/', "\\"), &self.entries[c.entry]))
+            })
+            .collect()
     }
 
     pub fn lookup_match(&self, abs_path: &str) -> Option<CatalogMatch> {

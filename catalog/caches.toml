@@ -47,6 +47,7 @@ patterns = ['~\.conda\envs', '~\miniconda3\envs', '~\anaconda3\envs', '~\minifor
 regenerable = true
 verdict_hint = "redownload"
 safe_unit = "one environment folder (`conda env remove`)"
+unit = "children"
 notes = "Conda environments. Recreatable from an environment.yml if one exists; otherwise the package list is lost."
 
 [[entry]]
@@ -58,6 +59,7 @@ patterns = ['~\.venvs']
 regenerable = true
 verdict_hint = "redownload"
 safe_unit = "one venv folder"
+unit = "children"
 notes = "Python virtual environments kept in one place. Recreatable with pip/uv from a requirements file; may include large wheels such as torch and CUDA builds."
 
 [[entry]]
@@ -162,6 +164,7 @@ patterns = ['~\.rustup\toolchains', '~\.rustup\downloads', '~\.rustup\tmp']
 regenerable = true
 verdict_hint = "redownload"
 safe_unit = "one toolchain folder (`rustup toolchain uninstall`)"
+unit = "children"
 notes = "Installed Rust toolchains. Remove old ones with rustup; re-install with `rustup toolchain install`."
 
 [[entry]]
@@ -172,6 +175,7 @@ category = "dev-tool"
 patterns = ['~\.cargo']
 regenerable = false
 verdict_hint = "review"
+unit = "container"
 notes = "CARGO_HOME: installed binaries (bin\\), config and credentials. The registry/git subfolders are caches; the rest is not."
 
 [[entry]]
@@ -236,6 +240,7 @@ patterns = ['%ProgramData%\Package Cache', '%LOCALAPPDATA%\Package Cache']
 regenerable = false
 verdict_hint = "review"
 cap = "review"
+unit = "children"
 notes = "Cached MSI/EXE installers that setup bundles (Visual Studio, SQL Server, .NET, VC++ runtimes) use for repair and uninstall. Deleting entries can make uninstall or repair fail asking for the original media."
 
 [[entry]]
@@ -307,6 +312,7 @@ patterns = ['%ProgramFiles%\Unity\Hub\Editor']
 regenerable = true
 verdict_hint = "redownload"
 safe_unit = "one editor version folder"
+unit = "children"
 notes = "Installed Unity Editor versions. Uninstall via Unity Hub; reinstall from there."
 
 [[entry]]
@@ -337,6 +343,7 @@ category = "app-data"
 patterns = ['%APPDATA%\Code\User\workspaceStorage']
 regenerable = false
 verdict_hint = "review"
+unit = "children"
 notes = "Per-workspace state (extension data, chat history, unsaved-editor backups). Folders for projects that no longer exist are orphaned and safe to remove."
 
 [[entry]]
@@ -348,6 +355,7 @@ patterns = ['~\.vscode\extensions', '~\.vscode-shared']
 regenerable = true
 verdict_hint = "redownload"
 safe_unit = "one extension folder"
+unit = "children"
 notes = "Installed VS Code extensions; re-installable from the marketplace. Old versions of the same extension pile up."
 
 [[entry]]
@@ -428,6 +436,7 @@ category = "cache"
 patterns = ['%LOCALAPPDATA%\Microsoft\Windows\INetCache', '%LOCALAPPDATA%\Temporary Internet Files']
 regenerable = true
 verdict_hint = "safe"
+unit = "contents"
 notes = "Legacy WinINet/IE/Edge-legacy cache used by some apps. Rebuilt on demand."
 
 [[entry]]
@@ -438,6 +447,7 @@ category = "cache"
 patterns = ['%LOCALAPPDATA%\Microsoft\Windows\Explorer', '%LOCALAPPDATA%\IconCache.db']
 regenerable = true
 verdict_hint = "safe"
+unit = "contents"
 notes = "thumbcache_*.db and iconcache_*.db. Explorer rebuilds them; thumbnails reappear slowly the first time."
 
 [[entry]]
@@ -448,6 +458,7 @@ category = "cache"
 patterns = ['%LOCALAPPDATA%\Packages\*\TempState', '%LOCALAPPDATA%\Packages\*\AC\Temp', '%LOCALAPPDATA%\Packages\*\AC\INetCache']
 regenerable = true
 verdict_hint = "safe"
+unit = "contents"
 notes = "Temporary and network cache folders of packaged (MSIX/UWP) apps."
 
 [[entry]]
@@ -468,6 +479,7 @@ category = "app-data"
 patterns = ['%LOCALAPPDATA%\Docker', '%ProgramData%\DockerDesktop', '~\.docker']
 regenerable = false
 verdict_hint = "review"
+unit = "container"
 notes = "Docker Desktop settings, logs, and (under wsl\\) the virtual disks holding images and volumes. See the .vhdx entry for the large file."
 
 [[entry]]
@@ -499,6 +511,7 @@ patterns = ['~\.android\avd']
 regenerable = false
 verdict_hint = "review"
 safe_unit = "one .avd folder"
+unit = "children"
 notes = "Android Virtual Device disk images. Recreatable from Device Manager but any data inside the emulator is lost."
 
 [[entry]]
@@ -559,6 +572,8 @@ category = "temp"
 patterns = ['%TEMP%', '%LOCALAPPDATA%\Temp']
 regenerable = true
 verdict_hint = "safe"
+unit = "contents"
+min_age_hours = 24
 notes = "Per-user scratch space. Files held open by running programs cannot be deleted and should be skipped; anything older than a few days is almost always leftover installer/extract output."
 
 [[entry]]
@@ -569,6 +584,8 @@ category = "temp"
 patterns = ['%SystemRoot%\Temp']
 regenerable = true
 verdict_hint = "safe"
+unit = "contents"
+min_age_hours = 24
 notes = "System-wide scratch space; deleting needs admin for some files. Same rules as the user temp folder."
 
 [[entry]]
@@ -579,6 +596,7 @@ category = "crash-dumps"
 patterns = ['%LOCALAPPDATA%\CrashDumps', '%LOCALAPPDATA%\Microsoft\Windows\WER', '%ProgramData%\Microsoft\Windows\WER', '%SystemRoot%\Minidump', '%SystemRoot%\MEMORY.DMP', '%SystemRoot%\LiveKernelReports']
 regenerable = true
 verdict_hint = "safe"
+unit = "contents"
 notes = "Process and kernel crash dumps and WER reports. Only useful for debugging a past crash; MEMORY.DMP can be many GB."
 
 [[entry]]
@@ -589,4 +607,45 @@ category = "logs"
 patterns = ['%SystemRoot%\Logs\CBS', '%SystemRoot%\Logs\DISM', '%SystemRoot%\Panther']
 regenerable = true
 verdict_hint = "safe"
+unit = "contents"
 notes = "Servicing and setup logs. Only needed for troubleshooting updates or upgrades."
+
+[[entry]]
+id = "adobe-media-cache"
+name = "Adobe media cache"
+app = "Adobe Creative Cloud"
+category = "cache"
+patterns = ['%APPDATA%\Adobe\Common\Media Cache Files', '%APPDATA%\Adobe\Common\Media Cache', '%APPDATA%\Adobe\Common\Peak Files']
+regenerable = true
+verdict_hint = "safe"
+notes = "Conformed audio, peak and index files that Premiere Pro, After Effects, Audition and Media Encoder build from imported media. Rebuilt when a project opens again; close the Adobe apps first. Each app's Media Cache preferences can also clean it."
+
+[[entry]]
+id = "spotify-cache"
+name = "Spotify cache"
+app = "Spotify"
+category = "cache"
+patterns = ['%LOCALAPPDATA%\Spotify\Storage', '%LOCALAPPDATA%\Spotify\Data', '%LOCALAPPDATA%\Packages\SpotifyAB.SpotifyMusic_*\LocalCache\Spotify\Data']
+regenerable = true
+verdict_hint = "redownload"
+notes = "Streaming cache and songs downloaded for offline play (encrypted). Spotify fetches what it needs again; offline playlists have to be downloaded again. Spotify's Settings > Storage can also clear it."
+
+[[entry]]
+id = "discord-cache"
+name = "Discord cache"
+app = "Discord"
+category = "cache"
+patterns = ['%APPDATA%\discord\Cache', '%APPDATA%\discord\Code Cache', '%APPDATA%\discord\GPUCache', '%APPDATA%\discordptb\Cache', '%APPDATA%\discordcanary\Cache', '%LOCALAPPDATA%\Discord\packages']
+regenerable = true
+verdict_hint = "safe"
+notes = "Discord's media and code caches, and old update packages under %LOCALAPPDATA%\\Discord\\packages. Rebuilt or downloaded again when needed; close Discord first."
+
+[[entry]]
+id = "winget-cache"
+name = "WinGet download cache"
+app = "WinGet"
+category = "installer-cache"
+patterns = ['%TEMP%\WinGet']
+regenerable = true
+verdict_hint = "safe"
+notes = "Installers winget downloaded before running them, one folder per package. winget usually removes them after a successful install; leftovers are safe to delete when no install is running."

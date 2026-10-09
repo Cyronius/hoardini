@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use hoardini_core::catalog::{Catalog, Category, Env};
+use hoardini_core::catalog::{Catalog, Category, Env, UnitKind};
 use hoardini_core::evidence::{Family, identify};
 use hoardini_core::policy::Verdict;
 
@@ -107,6 +107,137 @@ fn catalog_seed_covers_the_machine_locations() {
     ] {
         assert_eq!(cat.lookup(path).map(|e| e.id.as_str()), Some(id), "{path}");
     }
+}
+
+// Traces: EVID-CATALOG
+#[test]
+fn catalog_covers_the_review_first_gaps() {
+    let cat = Catalog::with_env(&env()).unwrap();
+    for (path, id) in [
+        (
+            r"C:\Users\tester\.flm\models\Qwen3.8-27B-NPU2",
+            "flm-models",
+        ),
+        (r"C:\Users\tester\.flm\logs", "flm-home"),
+        (r"C:\Users\tester\.hipfire\cache", "hipfire-home"),
+        (r"C:\NVIDIA\DisplayDriver\581.15", "gpu-driver-unpack"),
+        (r"C:\AMD\Chipset_Software", "gpu-driver-unpack"),
+        (r"C:\Intel\GFX", "intel-driver-unpack"),
+        (
+            r"C:\Users\tester\AppData\Roaming\Apple Computer\MobileSync\Backup\00008110-001A",
+            "iphone-backup",
+        ),
+        (
+            r"C:\Users\tester\Apple\MobileSync\Backup\x",
+            "iphone-backup",
+        ),
+        (
+            r"C:\Users\tester\AppData\Roaming\Adobe\Common\Media Cache Files\a.cfa",
+            "adobe-media-cache",
+        ),
+        (
+            r"C:\Users\tester\AppData\Local\Spotify\Storage\ab",
+            "spotify-cache",
+        ),
+        (
+            r"C:\Users\tester\AppData\Roaming\discord\Cache\Cache_Data",
+            "discord-cache",
+        ),
+        (
+            r"C:\Users\tester\AppData\Roaming\discord\Code Cache",
+            "discord-cache",
+        ),
+        (
+            r"C:\Users\tester\AppData\Local\Temp\WinGet\Git.Git.2.47",
+            "winget-cache",
+        ),
+    ] {
+        assert_eq!(cat.lookup(path).map(|e| e.id.as_str()), Some(id), "{path}");
+    }
+    let backup = cat.get("iphone-backup").unwrap();
+    assert_eq!(
+        (backup.verdict(), backup.unit),
+        (Verdict::Review, UnitKind::Children)
+    );
+}
+
+// Traces: EVID-CATALOG
+#[test]
+fn catalog_entries_say_what_one_deletable_unit_is() {
+    let cat = Catalog::with_env(&env()).unwrap();
+    let unit = |id: &str| {
+        let e = cat.get(id).unwrap();
+        (e.unit, e.unit_depth, e.min_age_hours)
+    };
+    assert_eq!(unit("lmstudio-models"), (UnitKind::Children, Some(2), None));
+    for id in [
+        "hf-hub-cache",
+        "steam-common",
+        "downloads",
+        "flm-models",
+        "models-root",
+    ] {
+        assert_eq!(unit(id), (UnitKind::Children, None, None), "{id}");
+    }
+    assert_eq!(unit("temp-user"), (UnitKind::Contents, None, Some(24)));
+    assert_eq!(unit("temp-system"), (UnitKind::Contents, None, Some(24)));
+    assert_eq!(unit("crash-dumps"), (UnitKind::Contents, None, None));
+    assert_eq!(unit("wu-download"), (UnitKind::Contents, None, None));
+    for id in [
+        "appdata-local",
+        "lmstudio-home",
+        "windows-dir",
+        "user-documents",
+    ] {
+        assert_eq!(unit(id).0, UnitKind::Container, "{id}");
+    }
+    assert_eq!(unit("node-modules"), (UnitKind::Whole, None, None));
+    for e in cat.entries() {
+        assert!(
+            e.unit_depth.is_none() || e.unit == UnitKind::Children,
+            "{}",
+            e.id
+        );
+        assert!(
+            e.min_age_hours.is_none() || e.unit == UnitKind::Contents,
+            "{}",
+            e.id
+        );
+    }
+}
+
+// Traces: EVID-CATALOG
+#[test]
+fn exact_lookup_and_literal_paths_inside_a_folder() {
+    let cat = Catalog::with_env(&env()).unwrap();
+    let temp = r"C:\Users\tester\AppData\Local\Temp";
+    assert_eq!(cat.lookup_exact(temp).unwrap().id, "temp-user");
+    let inside = format!(r"{temp}\setup-123");
+    assert!(cat.lookup_exact(&inside).is_none());
+    assert_eq!(cat.lookup(&inside).unwrap().id, "temp-user");
+    assert_eq!(
+        cat.lookup_exact(r"C:\code\proj\target").unwrap().id,
+        "rust-target"
+    );
+
+    let lits = cat.literal_paths_under(r"C:\Windows");
+    let ids: Vec<(&str, &str)> = lits
+        .iter()
+        .map(|(p, e)| (p.as_str(), e.id.as_str()))
+        .collect();
+    assert!(
+        ids.contains(&(r"C:\Windows\Temp", "temp-system")),
+        "{ids:?}"
+    );
+    assert!(
+        ids.contains(&(r"C:\Windows\SoftwareDistribution\Download", "wu-download")),
+        "{ids:?}"
+    );
+    assert!(
+        lits.iter()
+            .all(|(p, _)| !p.contains('*') && p.to_lowercase().starts_with(r"c:\windows\"))
+    );
+    assert!(!ids.iter().any(|(p, _)| *p == r"C:\Windows"));
 }
 
 struct Gguf {

@@ -42,6 +42,7 @@ regenerable = false
 verdict_hint = "review"
 cap = "review"
 safe_unit = "one VM folder"
+unit = "children"
 notes = "Virtual machine definitions and disks."
 
 [[entry]]
@@ -53,6 +54,7 @@ patterns = ['**\steamapps\common']
 regenerable = true
 verdict_hint = "redownload"
 safe_unit = "one game folder (uninstall via Steam so the manifest is removed)"
+unit = "children"
 notes = "Game installs under steamapps\\common, one folder per game. Re-downloadable through Steam; local save games usually live elsewhere (Documents, AppData, Steam cloud). Deleting a folder by hand leaves a stale appmanifest, so prefer Steam uninstall."
 
 [[entry]]
@@ -73,6 +75,7 @@ category = "game-library"
 patterns = ['**\steamapps', '%ProgramFiles(x86)%\Steam', '**\SteamLibrary']
 regenerable = true
 verdict_hint = "redownload"
+unit = "container"
 notes = "Steam client and game libraries. userdata\\ under the Steam folder holds local configs and some saves."
 
 [[entry]]
@@ -84,6 +87,7 @@ patterns = ['%ProgramFiles%\Epic Games', '%ProgramData%\Epic', '?:\Epic Games']
 regenerable = true
 verdict_hint = "redownload"
 safe_unit = "one game folder"
+unit = "children"
 notes = "Epic-installed games and launcher data. Re-downloadable; uninstall via the launcher."
 
 [[entry]]
@@ -95,4 +99,5 @@ patterns = ['?:\XboxGames', '?:\GOG Games', '%ProgramFiles%\Ubisoft', '%ProgramF
 regenerable = true
 verdict_hint = "redownload"
 safe_unit = "one game folder"
+unit = "children"
 notes = "Games installed via Xbox, GOG, Ubisoft Connect, EA, Battle.net. Re-downloadable; uninstall via the launcher."

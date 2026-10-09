@@ -6,6 +6,7 @@ category = "windows-leftover"
 patterns = ['%SystemRoot%\SoftwareDistribution\Download']
 regenerable = true
 verdict_hint = "safe"
+unit = "contents"
 notes = "Downloaded update payloads. Safe to clear once updates are installed (stop the wuauserv service first); Windows re-downloads anything still pending."
 
 [[entry]]
@@ -17,6 +18,7 @@ patterns = ['%SystemRoot%\SoftwareDistribution', '%ProgramData%\USOShared', '%Pr
 regenerable = true
 verdict_hint = "review"
 cap = "review"
+unit = "container"
 notes = "Update history database and state. Resetting it is a troubleshooting step but loses update history; leave it unless updates are broken."
 
 [[entry]]
@@ -27,6 +29,7 @@ category = "windows-leftover"
 patterns = ['%SystemRoot%\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache', '%SystemRoot%\SoftwareDistribution\DeliveryOptimization']
 regenerable = true
 verdict_hint = "safe"
+unit = "contents"
 notes = "Update files cached to share with other PCs. Windows re-downloads on demand; requires admin to delete."
 
 [[entry]]
@@ -113,6 +116,7 @@ patterns = ['%SystemRoot%']
 regenerable = false
 verdict_hint = "keep"
 cap = "keep"
+unit = "container"
 notes = "Operating system files. Nothing here is a cleanup target except the specific caches listed in more specific catalog entries."
 
 [[entry]]
@@ -188,6 +192,7 @@ category = "system"
 patterns = ['%ProgramFiles%', '%ProgramFiles(x86)%']
 regenerable = false
 verdict_hint = "review"
+unit = "container"
 notes = "Installed applications. Uninstall through Settings > Apps so registry entries and shared components are removed; deleting folders leaves broken entries."
 
 [[entry]]
@@ -198,6 +203,7 @@ category = "app-data"
 patterns = ['%ProgramData%']
 regenerable = false
 verdict_hint = "review"
+unit = "container"
 notes = "Machine-wide application data and caches. Contents depend on the owning app; check which program owns the folder first."
 
 [[entry]]
@@ -218,6 +224,7 @@ category = "app-data"
 patterns = ['%LOCALAPPDATA%\Microsoft']
 regenerable = false
 verdict_hint = "review"
+unit = "container"
 notes = "Per-user data for Windows and Microsoft apps (Office, Edge, OneDrive, Teams, Windows). Only specific known caches inside are safe."
 
 [[entry]]
@@ -228,6 +235,7 @@ category = "app-data"
 patterns = ['%LOCALAPPDATA%']
 regenerable = false
 verdict_hint = "review"
+unit = "container"
 notes = "Per-user, non-roaming app data. Folder name usually identifies the app; contents are mixed caches and user data, so check the owner before deleting."
 
 [[entry]]
@@ -238,6 +246,7 @@ category = "app-data"
 patterns = ['%APPDATA%']
 regenerable = false
 verdict_hint = "review"
+unit = "container"
 notes = "Per-user app settings and data (roams with the profile). Typically holds configuration and user content rather than caches."
 
 [[entry]]
@@ -268,6 +277,7 @@ category = "downloads"
 patterns = ['~\Downloads']
 regenerable = false
 verdict_hint = "review"
+unit = "children"
 notes = "Everything the user downloaded. Mix of re-downloadable installers and unique personal files; judge per file by type and age."
 
 [[entry]]
@@ -279,6 +289,7 @@ patterns = ['~\OneDrive', '~\OneDrive - *']
 regenerable = false
 verdict_hint = "review"
 cap = "review"
+unit = "container"
 notes = "Synced with the cloud. Cloud-only placeholders use no disk space. Deleting a file here deletes it from OneDrive on every device (recoverable from the OneDrive recycle bin for a limited time); use Free up space to evict local copies instead."
 
 [[entry]]
@@ -290,6 +301,7 @@ patterns = ['~\Dropbox', '~\Dropbox (*)']
 regenerable = false
 verdict_hint = "review"
 cap = "review"
+unit = "container"
 notes = "Synced with the cloud. Deleting files here deletes them from Dropbox everywhere (recoverable for a limited time); use Smart Sync online-only to free local space."
 
 [[entry]]
@@ -311,6 +323,7 @@ category = "app-data"
 patterns = ['~\.claude']
 regenerable = false
 verdict_hint = "review"
+unit = "container"
 notes = "Claude Code settings, memory, skills and conversation transcripts (projects\\). Transcripts can be large and are only useful for resuming sessions; settings and skills are not regenerable."
 
 [[entry]]
@@ -322,4 +335,38 @@ patterns = ['~\Documents', '~\Desktop', '~\Pictures', '~\Videos', '~\Music']
 regenerable = false
 verdict_hint = "review"
 cap = "review"
+unit = "container"
 notes = "Personal files. Not regenerable; nothing should be suggested for deletion without the user naming it."
+
+[[entry]]
+id = "gpu-driver-unpack"
+name = "GPU driver unpack folders"
+app = "NVIDIA / AMD driver installers"
+category = "installer-cache"
+patterns = ['%SystemDrive%\NVIDIA', '%SystemDrive%\AMD']
+regenerable = true
+verdict_hint = "safe"
+notes = "Files the NVIDIA and AMD driver installers extract before installing (C:\\NVIDIA\\DisplayDriver\\<version>, C:\\AMD\\<package>). Not used once the driver is installed; the next driver download brings its own copy."
+
+[[entry]]
+id = "intel-driver-unpack"
+name = "Intel driver folder"
+app = "Intel driver installers"
+category = "installer-cache"
+patterns = ['%SystemDrive%\Intel']
+regenerable = true
+verdict_hint = "review"
+notes = "Intel driver installers extract here, but some Intel tools also keep logs and settings in this folder (Logs, GFX). Check what is inside before removing it."
+
+[[entry]]
+id = "iphone-backup"
+name = "iPhone and iPad backups"
+app = "iTunes / Apple Devices"
+category = "user-data"
+patterns = ['%APPDATA%\Apple Computer\MobileSync\Backup', '~\Apple\MobileSync\Backup']
+regenerable = false
+verdict_hint = "review"
+cap = "review"
+safe_unit = "one device backup folder (delete it in iTunes or Apple Devices)"
+unit = "children"
+notes = "Full local backups of iPhones and iPads, one folder per device (named by its id). The only copy unless the device or iCloud still holds the same data; old backups of devices you no longer have are the usual leftovers."

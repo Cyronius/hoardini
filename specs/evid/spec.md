@@ -13,6 +13,15 @@ ties go to the longer literal pattern), supplying `app`, `category`, `regenerabl
 named X" (`**\X`); matching ignores case. Shared-blob stores shall name their safe unit and carry a `review` cap; hiberfil.sys
 and pagefile.sys shall carry a `keep` cap.
 
+Each entry also says what one deletable item is when the review reaches the folder it names (REVIEW-UNITS), in `unit`:
+`self` (the default; the folder is one item), `children` (each child is one item, or each grandchild with
+`unit_depth = 2`: model stores, the HF hub's `models--*`, Steam `common`, Downloads), `contents` (one item for everything
+inside, the folder kept: temp, WER, crash dumps, logs, the update caches; `min_age_hours` limits it to children not
+modified for that long, 24 h for the two temp folders), or `container` (never an item; the review goes inside: AppData,
+ProgramData, Program Files, the Windows folder, app homes such as `~\.lmstudio`, personal folders, sync roots).
+`Catalog::lookup_exact(path)` returns only an entry whose pattern names the path itself, and
+`Catalog::literal_paths_under(dir)` lists the wildcard-free patterns strictly inside a folder.
+
 **Acceptance criteria:**
 - `~\.lmstudio\models\TheBloke\x\x.Q4_K_M.gguf` matches app `LM Studio`, category `model-store`, hint `redownload`, notes mention "whole model folder".
 - `~\.cache\huggingface\hub\models--a--b\blobs\0123` matches `hf-hub-blobs` with `shared_blobs`, cap `review`, safe unit "a whole models--org--name folder"; a snapshot path under the same repo matches the shallower `hf-hub-cache`.
@@ -20,6 +29,9 @@ and pagefile.sys shall carry a `keep` cap.
 - `C:\code\app\node_modules\react\index.js` matches `node-modules`, regenerable.
 - A path with no entry (`D:\photos\2024\a.jpg`) matches nothing.
 - The seed list resolves: Ollama blobs, Triton, MIOpen, NuGet, cargo registry, `.venvs`, llama.cpp build, Rust `target`, `$WINDOWS.~BT`, `SoftwareDistribution\Download`, `Windows\Installer`, `ESD`, Docker `.vhdx`, Steam libraries, Downloads installers, `C:\models`, `unsloth_compiled_cache`.
+- The review-first gaps resolve: `~\.flm\models\<model>` (`flm-models`) and the rest of `~\.flm` (`flm-home`), `~\.hipfire`, `C:\NVIDIA` and `C:\AMD` (`gpu-driver-unpack`), `C:\Intel` (`intel-driver-unpack`, `review`), iPhone backups under `%APPDATA%\Apple Computer\MobileSync\Backup` and `~\Apple\MobileSync\Backup` (`review`, one item per device), Adobe's `Media Cache Files`, Spotify `Storage`, Discord `Cache` and `Code Cache`, and `%TEMP%\WinGet`.
+- `lmstudio-models` is `children` with `unit_depth = 2`; `hf-hub-cache`, `steam-common`, `downloads`, `flm-models` and `models-root` are `children`; `temp-user` and `temp-system` are `contents` with 24 h; `crash-dumps` and `wu-download` are `contents`; `appdata-local`, `lmstudio-home`, `windows-dir` and `user-documents` are `container`; `node-modules` is `self`. No entry sets `unit_depth` without `children` or `min_age_hours` without `contents`.
+- `lookup_exact` gives `temp-user` for `%TEMP%` and nothing for `%TEMP%\setup-123` (which `lookup` still files under `temp-user`); `literal_paths_under(C:\Windows)` includes `C:\Windows\Temp` (`temp-system`) and `C:\Windows\SoftwareDistribution\Download` (`wu-download`), holds no wildcard, and not `C:\Windows` itself.
 
 ### EVID-GGUF: GGUF header identity
 **Applies to:** hoardini
