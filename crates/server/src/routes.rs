@@ -503,14 +503,19 @@ async fn destination_test(State(s): State<AppState>, Path(id): Path<String>) -> 
     .await
 }
 
-async fn history_points(State(s): State<AppState>) -> ApiResult {
+#[derive(Deserialize)]
+struct HistoryQuery {
+    since_ms: Option<i64>,
+    until_ms: Option<i64>,
+}
+
+async fn history_points(State(s): State<AppState>, Query(q): Query<HistoryQuery>) -> ApiResult {
     blocking(move || {
         let conn = s.db.conn()?;
         let Some(st) = index::index_status(&conn, None)? else {
             return Ok(Json(json!([])));
         };
-        let mut scans = history::scans(&conn, st.volume_id)?;
-        scans.reverse();
+        let scans = history::scans_between(&conn, st.volume_id, q.since_ms, q.until_ms)?;
         let pts: Vec<Value> = scans
             .iter()
             .map(|c| {

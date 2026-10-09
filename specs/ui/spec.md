@@ -78,3 +78,20 @@ The header mascot is a sumo wrestler whose body girth tracks the used fraction (
 4. Post `{"fill":0.6}`; confirm he slims back down, and that 90% looks visibly chubbier than 60%.
 5. Post `{"running_runs":1}`; confirm he alternately lifts and stomps left then right, with dust at each stomp. Post `{"running_runs":0}` to stop.
 6. Enable reduced motion in the OS or browser; confirm no looping animation.
+
+### UI-CHANGES-CHART: The changes card draws free space over time
+**Applies to:** hoardini
+**Verification:** manual
+
+The `changes` tool card shall show the free-space chart above its usual content when the call's range holds at least
+3 refreshes, and only the numbers otherwise. The points come from `GET /api/history` limited to the `range_ms` line
+in the tool result, so the chart ends at the call's own latest refresh and a reload or scrolled-back card shows the
+same data. The `range_ms` line is not shown in the card's result text.
+
+**Verification (manual):**
+1. With an index holding at least 3 refreshes, ask "How has my free space changed over time?". The `changes` card shows
+   a "Free space over time" chart above the collapsed tool row; hovering a dot shows its date and free space.
+2. Reload the page: the same chart is drawn from the stored tool result.
+3. Run another refresh, then scroll back to that card: it still ends at the refresh the call saw.
+4. With only 2 refreshes in the index, ask again: the card shows no chart, only the numbers.
+

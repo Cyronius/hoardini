@@ -41,6 +41,11 @@ latest summary), and `removed` (only in the earlier one), for dirs and files, so
 whose change one child entry explains (≥ 90%) is dropped in favour of the child, and a new or removed dir under a new
 or removed parent is dropped in favour of the parent. Files are never dropped.
 
+The `changes` agent tool result shall also carry, when the range holds at least two scans with a known free
+space, one free-space line (`history::free_summary`) giving the refresh count, start, end, and lowest free space with
+their dates, and the net change; it never carries the raw points. The result ends with a machine-readable line
+`range_ms: <earlier finished_ms>..<latest finished_ms>` that the chat card uses to fetch the chart's points.
+
 **Acceptance criteria:**
 - After adding a 2 GiB file to `models`, deleting the 500 MiB dir `C:\old`, deleting a 600 MiB file and shrinking a
   424 MiB file to 300 MiB in `cache`, adding the 1 GiB dir `C:\new\sub`, and growing a log by 0.5 MiB:
@@ -50,6 +55,9 @@ or removed parent is dropped in favour of the parent. Files are never dropped.
   - The 0.5 MiB growth is not reported; the free delta is −2 GiB.
 - `since` as the first scan's id gives the same result; `30d` with no older scan falls back to the oldest.
 - `limit = 1` keeps one `removed` entry and reports the rest as omitted.
+- Scans finished on days 10, 20, 30, and 40 with 100, 80, 60, and 90 GiB free: the summary over all four reads
+  `Free space over 4 refreshes: start 100 GB (1970-01-11), end 90.0 GB (1970-02-10), low 60.0 GB (1970-01-31), net -10.0 GB.`;
+  over days 20 to 30 only, start 80, end and low 60, net -20.0 GB; a range holding one scan gives no summary.
 
 ### HIST-HOTSPOT: Hotspot ranking
 **Applies to:** hoardini
