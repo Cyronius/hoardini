@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { routes, streamStatus } from "./api/client";
 import { ChatSession } from "./components/Chat";
 import { Header } from "./components/Header";
+import { Stage } from "./components/mascot/Stage";
 import { Drawer } from "./drawer/Drawer";
 import { useStore } from "./store";
 import { applyTheme, resolveTheme } from "./theme";
@@ -49,6 +50,7 @@ export function App() {
       <Header />
       <ChatSession key={nonce} threadId={threadId} seed={seed} />
       <Drawer />
+      <Stage />
     </div>
   );
 }
