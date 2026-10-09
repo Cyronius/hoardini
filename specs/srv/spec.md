@@ -51,7 +51,7 @@ The server shall run at most one indexer child at a time. `POST /api/index/refre
 - On a database with no completed refresh and `index_speed` `lean`, `POST` spawns `fast`.
 
 **Verification (manual, shutdown):**
-1. `hoardini --db %TEMP%\h-kill.db serve --port 7044 --token dev` (it indexes C: in background mode at launch).
+1. `hoardini --db %TEMP%\h-kill.db serve --port 7044 --token dev` (it indexes C: at launch, in fast mode because it is the first scan).
 2. Press Ctrl+C; in Task Manager confirm no `hoardini.exe index` child remains.
 3. Start it again; while the refresh runs, end the server process outright (Task Manager → End task on the `serve` process, or `taskkill /F /PID <pid>`). Within a second the `hoardini.exe index` child is gone too. (2026-10-08: child gone 2 s after a hard kill.)
 4. Delete `%TEMP%\h-kill.db*`.
@@ -94,6 +94,7 @@ With the window minimized and no job or chat run in progress, the app shall have
 4. Process Explorer → `hoardini-app.exe` → Threads: over 60 s, the `tokio-runtime-worker` threads show no context-switch delta. The log (`%HOARDINI_DATA_DIR%\logs\hoardini.log.*`) has no `index refresh done` line from the minimized period.
 5. The `msedgewebview2.exe` processes under the app drop in private working set within a minute of minimizing (record before and after).
 6. Restore and click into the window: the page reconnects at once, and because the index is now older than 3 minutes the log shows one `kind="journal"` refresh within a few seconds.
+(2026-10-09, partial: debug build, meta `indexed_volumes` on a 30-file folder, `journal_every_s = 20`, minimized for 45 s rather than 10 minutes. No refresh ran while minimized and one journal refresh ran 1 s after restore; no child processes. WebView2 working set 403 MB visible, 62 MB after 45 s minimized, 149 MB after restore; private 228 → 190 → 201 MB. Over raw CDP (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=…`, not Playwright, whose focus emulation keeps the page visible), `document.hidden` is true while minimized and the status stream's connection closes. Step 4's context-switch check was not run.)
 
 ### SRV-SETTINGS: Settings round trip
 **Applies to:** hoardini-server

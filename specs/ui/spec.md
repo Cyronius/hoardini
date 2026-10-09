@@ -94,6 +94,7 @@ The Settings tab shall have no Save button. A toggle or switch saves when it cha
 6. Stop the server and flip the switch: an inline error appears under it and no tick.
 7. AI tab → add or edit a provider: no "Redact paths" toggle.
 8. In DevTools → Network, switch to another window and back, then minimize the browser and restore it: `/api/presence` is posted with `looking: false` on blur and `true` on focus, and the `/api/status/stream` request ends while the page is hidden and a new one starts when it is shown, without the header's "offline" badge.
+(2026-10-09, partial: headless Chromium against `hoardini serve --port 7231 --ui-dir ui/dist` with scratch data. Steps 2 and 3 pass; Rescan now in Lean started a `background` refresh. Step 7 was checked in code only, since no provider form was opened. Step 8 passed with a simulated `visibilitychange`: the stream ended and reopened with no badge, and presence posted `false` then `true`. Steps 5 and 6 were not run; SRV-ONE-REFRESH covers the takeover server-side.)
 
 ### UI-FIRST-RUN: First-run AI setup
 **Applies to:** hoardini-ui, hoardini-server
