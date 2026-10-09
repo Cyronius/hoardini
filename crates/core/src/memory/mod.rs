@@ -423,7 +423,7 @@ pub fn protect_covering_with(
     Ok(found)
 }
 
-// The note a proposal item shows; only the note shown counts as used.
+// Unlike recall_path, only the note a card shows counts as used.
 pub fn note_covering_with(
     conn: &Connection,
     abs_path: &str,

@@ -207,7 +207,6 @@ struct Carry {
     ticks: Vec<bool>,
 }
 
-// Every item the parent's job did not finish, re-examined; None when nothing is left.
 pub(crate) fn create_follow_up(
     db: &Db,
     env: &PolicyEnv,
