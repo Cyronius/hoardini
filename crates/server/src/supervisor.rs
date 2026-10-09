@@ -26,6 +26,13 @@ struct State {
     quiet_since: Option<Instant>,
     // A user refresh asked for during a quiet run; it starts when that run ends.
     queued: Option<&'static str>,
+    // The volume whose child runs now, and the volumes this pass has already taken.
+    current: Option<String>,
+    done: Vec<String>,
+    // A pass started for newly added drives covers only those.
+    only: Option<Vec<String>>,
+    // Removed while their child may run; that child is killed before their rows are deleted.
+    dropping: Vec<String>,
 }
 
 impl State {
@@ -53,6 +60,8 @@ pub struct Supervisor {
     timer: Mutex<Option<tokio::task::JoinHandle<()>>>,
     journal_on: AtomicBool,
     presence: Mutex<Presence>,
+    // Overlapping PUT /api/volumes calls would each judge the other's drives added or removed.
+    pub volume_edits: tokio::sync::Mutex<()>,
     // Children join this job so a hard-killed server cannot orphan an indexer.
     job: Option<hoardini_win::KillOnCloseJob>,
     me: Weak<Supervisor>,
@@ -61,7 +70,18 @@ pub struct Supervisor {
 enum ChildEnd {
     Finished,
     SwitchedToFast,
+    Dropped,
     NeedsFull(String),
+}
+
+enum Next {
+    Volume(String),
+    Again(&'static str),
+    Finished,
+}
+
+fn same(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
 }
 
 fn norm_mode(mode: &str) -> Option<&'static str> {
@@ -108,19 +128,6 @@ impl Drop for Watcher {
     }
 }
 
-pub fn indexed_volumes(db: &Db) -> Vec<String> {
-    let from_meta = db
-        .conn()
-        .ok()
-        .and_then(|c| get_meta(&c, "indexed_volumes").ok().flatten())
-        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
-        .filter(|v| !v.is_empty());
-    from_meta.unwrap_or_else(|| {
-        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
-        vec![format!("{}\\", drive.trim_end_matches('\\'))]
-    })
-}
-
 impl Supervisor {
     pub fn new(
         db: Db,
@@ -147,6 +154,7 @@ impl Supervisor {
             timer: Mutex::new(None),
             journal_on: AtomicBool::new(false),
             presence: Mutex::new(Presence::default()),
+            volume_edits: tokio::sync::Mutex::new(()),
             job,
             me: me.clone(),
         })
@@ -385,51 +393,162 @@ impl Supervisor {
         }
     }
 
+    // Picking the next volume and ending the pass share one lock, so a drive added meanwhile is never missed.
+    fn next_step(&self) -> Next {
+        let Ok(mut st) = self.state.lock() else {
+            return Next::Finished;
+        };
+        let watched = self
+            .db
+            .conn()
+            .map(|c| index::watched(&c))
+            .unwrap_or_default();
+        let pick = watched.into_iter().find(|w| {
+            !st.done.iter().any(|d| same(d, w))
+                && st
+                    .only
+                    .as_ref()
+                    .is_none_or(|o| o.iter().any(|x| same(x, w)))
+        });
+        if let Some(v) = pick {
+            st.done.push(v.clone());
+            st.current = Some(v.clone());
+            return Next::Volume(v);
+        }
+        st.current = None;
+        match st.queued.take() {
+            Some(m) => {
+                st.progress = None;
+                st.done.clear();
+                st.only = None;
+                Next::Again(m)
+            }
+            None => {
+                *st = State::default();
+                Next::Finished
+            }
+        }
+    }
+
+    fn dropping(&self, volume: &str) -> bool {
+        self.state
+            .lock()
+            .is_ok_and(|st| st.dropping.iter().any(|d| same(d, volume)))
+    }
+
+    fn child_mode(&self, volume: &str, mode: &'static str) -> &'static str {
+        let first = self
+            .db
+            .conn()
+            .is_ok_and(|c| index::never_indexed(&c, volume));
+        let m = if first { "fast" } else { mode };
+        if let Ok(mut st) = self.state.lock()
+            && st.queued.is_none()
+        {
+            st.mode = Some(m);
+        }
+        m
+    }
+
     async fn run(self: Arc<Self>, first_mode: &'static str, first_kind: &'static str) {
         let (mut mode, mut kind) = (first_mode, first_kind);
         loop {
-            for volume in indexed_volumes(&self.db) {
-                let mut k = kind;
-                loop {
-                    if self.want_fast.swap(false, Ordering::SeqCst) {
-                        mode = "fast";
-                    }
-                    match self.run_child(&volume, mode, k).await {
-                        Ok(ChildEnd::SwitchedToFast) => continue,
-                        Ok(ChildEnd::NeedsFull(reason)) if k != "full" => {
-                            tracing::info!(
-                                volume,
-                                reason,
-                                "journal refresh not possible; running a full refresh"
-                            );
-                            k = "full";
-                            continue;
-                        }
-                        Ok(_) => {}
-                        Err(e) => tracing::warn!(volume, error = %e, "indexer child failed"),
-                    }
+            let volume = match self.next_step() {
+                Next::Volume(v) => v,
+                Next::Again(m) => {
+                    (mode, kind) = (m, "auto");
+                    self.bump();
+                    continue;
+                }
+                Next::Finished => break,
+            };
+            // An unplugged drive keeps its index until it is back.
+            if !index::connected(&volume) {
+                tracing::info!(volume, "volume not connected; skipped");
+                continue;
+            }
+            let mut k = kind;
+            loop {
+                if self.dropping(&volume) {
                     break;
                 }
-            }
-            let next = match self.state.lock() {
-                Ok(mut st) => match st.queued.take() {
-                    Some(m) => {
-                        st.progress = None;
-                        Some(m)
+                if self.want_fast.swap(false, Ordering::SeqCst) {
+                    mode = "fast";
+                }
+                let m = self.child_mode(&volume, mode);
+                match self.run_child(&volume, m, k).await {
+                    Ok(ChildEnd::SwitchedToFast) => continue,
+                    Ok(ChildEnd::NeedsFull(reason)) if k != "full" => {
+                        tracing::info!(
+                            volume,
+                            reason,
+                            "journal refresh not possible; running a full refresh"
+                        );
+                        k = "full";
+                        continue;
                     }
-                    None => {
-                        *st = State::default();
-                        None
-                    }
-                },
-                Err(_) => None,
-            };
-            self.bump();
-            match next {
-                Some(m) => (mode, kind) = (m, "auto"),
-                None => break,
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(volume, error = %e, "indexer child failed"),
+                }
+                break;
             }
         }
+        self.bump();
+    }
+
+    // Starts the first scan of newly watched roots, or folds them into the pass already running.
+    pub fn volumes_added(&self, roots: &[String]) -> anyhow::Result<()> {
+        if roots.is_empty() {
+            return Ok(());
+        }
+        let Ok(mut st) = self.state.lock() else {
+            anyhow::bail!("indexer state unavailable");
+        };
+        st.dropping.retain(|d| !roots.iter().any(|r| same(r, d)));
+        if st.refreshing {
+            st.done.retain(|d| !roots.iter().any(|r| same(r, d)));
+            if let Some(only) = st.only.as_mut() {
+                only.extend(roots.iter().cloned());
+            }
+            st.quiet_since = None;
+            drop(st);
+            self.bump();
+            return Ok(());
+        }
+        *st = State {
+            refreshing: true,
+            mode: Some("fast"),
+            only: Some(roots.to_vec()),
+            ..State::default()
+        };
+        drop(st);
+        self.spawn_run("fast", "auto")?;
+        self.bump();
+        Ok(())
+    }
+
+    // Returns once no child runs on these roots; the caller then deletes their rows.
+    pub async fn release(&self, roots: &[String]) -> bool {
+        let busy = || {
+            self.state.lock().is_ok_and(|st| {
+                st.current
+                    .as_ref()
+                    .is_some_and(|c| roots.iter().any(|r| same(r, c)))
+            })
+        };
+        if let Ok(mut st) = self.state.lock() {
+            st.dropping.extend(roots.iter().cloned());
+        }
+        self.switch.notify_one();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while busy() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let released = !busy();
+        if let Ok(mut st) = self.state.lock() {
+            st.dropping.retain(|d| !roots.iter().any(|r| same(r, d)));
+        }
+        released
     }
 
     async fn run_child(&self, volume: &str, mode: &str, kind: &str) -> anyhow::Result<ChildEnd> {
@@ -472,6 +591,10 @@ impl Supervisor {
                     Ok(None) | Err(_) => break,
                 },
                 _ = self.switch.notified() => {
+                    if self.dropping(volume) {
+                        let _ = child.kill().await;
+                        return Ok(ChildEnd::Dropped);
+                    }
                     if self.want_fast.load(Ordering::SeqCst) && mode != "fast" {
                         let _ = child.kill().await;
                         return Ok(ChildEnd::SwitchedToFast);

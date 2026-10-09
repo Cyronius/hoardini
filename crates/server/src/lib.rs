@@ -28,6 +28,7 @@ mod status;
 mod stream;
 mod supervisor;
 mod ui;
+mod volumes;
 
 pub use providers::config_by_id;
 pub use routes::route_list;
@@ -223,6 +224,7 @@ pub async fn start_with_launcher(
     launcher: Option<Arc<dyn builtin::Launcher>>,
 ) -> anyhow::Result<ServerHandle> {
     let db = Db::open(&opts.db_path)?;
+    let db_for_forget = db.clone();
     let data_root = opts
         .db_path
         .parent()
@@ -303,6 +305,15 @@ pub async fn start_with_launcher(
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state.clone());
 
+    let forget_db = db_for_forget.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = forget_db
+            .conn()
+            .and_then(|c| hoardini_core::index::finish_forgetting(&c))
+        {
+            tracing::warn!(error = %e, "deleting a removed drive's index did not finish");
+        }
+    });
     // --no-refresh also keeps the periodic journal refresh off: the index is left alone.
     if opts.refresh_on_start {
         if let Err(e) = supervisor.start_refresh(supervisor.auto_mode()) {

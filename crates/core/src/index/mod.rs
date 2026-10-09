@@ -7,6 +7,7 @@ mod patch;
 mod prof;
 mod query;
 mod verify;
+mod volumes;
 mod walk;
 mod writer;
 
@@ -20,10 +21,14 @@ pub use lister::{DirLister, WinLister};
 pub use patch::{patch_removed, patch_rescan};
 pub use query::{
     DirItem, FileItem, IndexStatus, NodeInfo, NodeKind, Ranked, TopFilesQuery, children,
-    humanize_age, index_status, node_by_path, node_id_by_path, path_of, summary_for_prompt,
-    top_dirs, top_files,
+    compact_summary_for_prompt, humanize_age, index_status, node_by_path, node_id_by_path, path_of,
+    summary_for_prompt, top_dirs, top_files,
 };
 pub use verify::{SnapRow, snapshot, verify_totals};
+pub use volumes::{
+    StoredVolume, VolumeChange, connected, finish_forgetting, forget, never_indexed, plan_change,
+    prompt_summary, selected, store_change, stored_volume, system_root, watched,
+};
 pub use walk::{Event, Mode, Progress, RefreshOptions, RefreshOutcome, refresh};
 
 pub(crate) use query::PathCache;

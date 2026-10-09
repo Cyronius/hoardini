@@ -10,8 +10,21 @@ export type Job = {
   finished_ms: number | null;
 };
 
+export type VolumeView = {
+  root: string;
+  label: string;
+  fs: string;
+  total_bytes: number;
+  free_bytes: number;
+  watched: boolean;
+  selected: boolean;
+  connected: boolean;
+  has_journal: boolean;
+};
+export type VolumeChoice = { watched: string[]; selected: string };
+
 export type Status = {
-  volumes: { root: string; total_bytes: number; free_bytes: number }[];
+  volumes: VolumeView[];
   index: {
     state: "idle" | "refreshing";
     mode: "background" | "fast" | null;

@@ -30,7 +30,7 @@ pub use registry::{installed_programs, last_access_setting, user_assist};
 pub use rm::processes_using;
 pub use sysdir::{system_directory, system_tool};
 pub use usn::{path_by_file_id, usn_query, usn_read};
-pub use volume::{fixed_volumes, volume_info, volume_root_of};
+pub use volume::{fixed_volumes, is_subst, volume_info, volume_root_of};
 
 pub const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
 pub const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;

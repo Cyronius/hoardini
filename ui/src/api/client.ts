@@ -71,6 +71,8 @@ export const routes = {
   refresh: () => api<{ started: boolean }>("/api/index/refresh", { method: "POST" }),
   presence: (looking: boolean) => api<{ ok: true }>("/api/presence", { body: { looking } }),
   summary: () => api<T.IndexSummary>("/api/index/summary"),
+  volumes: () => api<T.VolumeView[]>("/api/volumes"),
+  putVolumes: (c: T.VolumeChoice) => put<T.VolumeView[]>("/api/volumes", c),
   cancelRun: (runId: string) => api<{ ok: true }>(`/api/agent/runs/${enc(runId)}/cancel`, { method: "POST", body: {} }),
 
   thread: () => api<T.ThreadDetail>("/api/thread"),

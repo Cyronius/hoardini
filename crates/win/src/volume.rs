@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 
 use windows::Win32::Storage::FileSystem::{
     GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDriveStringsW, GetVolumeInformationW,
-    GetVolumePathNameW,
+    GetVolumePathNameW, QueryDosDeviceW,
 };
 use windows::core::PCWSTR;
 
 use crate::VolumeInfo;
-use crate::util::{from_wide, werr, wide};
+use crate::util::{from_wide, werr, wide, wide_str};
 
 const DRIVE_FIXED: u32 = 3;
 
@@ -78,4 +78,15 @@ pub fn fixed_volumes() -> io::Result<Vec<PathBuf>> {
         }
     }
     Ok(out)
+}
+
+// A `subst` drive is a folder on another volume; its DOS device maps to `\??\<folder>`.
+pub fn is_subst(root: &Path) -> bool {
+    let s = root.as_os_str().to_string_lossy();
+    let Ok(w) = wide_str(s.trim_end_matches(['\\', '/'])) else {
+        return false;
+    };
+    let mut buf = vec![0u16; 1024];
+    let n = unsafe { QueryDosDeviceW(PCWSTR(w.as_ptr()), Some(&mut buf)) };
+    n > 0 && from_wide(&buf).starts_with(r"\??\")
 }

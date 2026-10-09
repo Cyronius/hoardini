@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use axum::Json;
 use axum::extract::State;
 use hoardini_core::actions::Job;
@@ -7,7 +5,6 @@ use hoardini_core::paths::redact;
 use serde_json::{Value, json};
 
 use crate::state::{ApiResult, AppState};
-use crate::supervisor::indexed_volumes;
 
 // Paths shown to the UI use `~` for the profile, like proposals do.
 pub fn display_job(mut job: Job) -> Job {
@@ -17,17 +14,10 @@ pub fn display_job(mut job: Job) -> Job {
 }
 
 fn build_sync(s: &AppState) -> Value {
-    let mut volumes: Vec<Value> = Vec::new();
-    for root in indexed_volumes(&s.db) {
-        let Ok(v) = hoardini_win::volume_info(Path::new(&root)) else {
-            continue;
-        };
-        if !volumes.iter().any(|x| x["root"] == v.root.as_str()) {
-            volumes.push(
-                json!({"root": v.root, "total_bytes": v.total_bytes, "free_bytes": v.free_bytes}),
-            );
-        }
-    }
+    let volumes =
+        s.db.conn()
+            .map(|c| crate::volumes::watched_entries(&c))
+            .unwrap_or_default();
     let active =
         s.db.conn()
             .ok()

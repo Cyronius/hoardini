@@ -6,7 +6,7 @@ import { useStore } from "../../store";
 import { SumoSvg } from "../Mascot";
 import { ACT_MS, FIN_ACT, WORK_ACT, girthLevel, moveFor, reducedMotion, type Act, type Move, type OneShot } from "./acts";
 import { cueHeader, holdGirth, releaseGirth, useMascotStage } from "./cue";
-import { girthFor, systemVolume, usedFraction } from "./girth";
+import { girthFor, selectedVolume, usedFraction } from "./girth";
 
 const CLIMB_MS = 1000;
 const HURRY_MS = 380;
@@ -221,7 +221,7 @@ class Director {
     const p = st.proposals[j.proposal_id!];
     const mv = moveFor(j.kind || p?.kind || "");
     if (!mv) return;
-    holdGirth(systemVolume(st.status?.volumes));
+    holdGirth(selectedVolume(st.status?.volumes));
     if (mv === "throw") void this.aimUp(j.id, j.proposal_id!);
     const card = p && this.canTrip() ? cardEl(p.id) : null;
     const scroller = card && scrollerOf(card);
@@ -244,7 +244,7 @@ class Director {
     this.tripLog.push(Date.now());
     const seq = ++this.seq;
     this.trip = { seq, jobId: j.id, proposalId: p.id, move: mv, phase: "down", outcome: null, fast: false, layout, scroller };
-    const g = girthLevel(girthFor(usedFraction(useMascotStage.getState().hold ?? systemVolume(useStore.getState().status?.volumes)) ?? 0.5));
+    const g = girthLevel(girthFor(usedFraction(useMascotStage.getState().hold ?? selectedVolume(useStore.getState().status?.volumes)) ?? 0.5));
     useStore.getState().setMascotAway(true);
     this.setView(() => ({ seq, phase: "down", act: "climb", move: mv, parcel: parcelFor(p, j), layout, sag: g > 0.45 ? (g - 0.45) * 7 : 0, prop: null }));
     this.listen();
@@ -614,7 +614,7 @@ function CloudArt() {
 }
 
 export function Stage() {
-  const live = useStore((s) => systemVolume(s.status?.volumes));
+  const live = useStore((s) => selectedVolume(s.status?.volumes));
   const hold = useMascotStage((s) => s.hold);
   const [view, setView] = useState<View | null>(null);
   const sumo = useRef<HTMLDivElement>(null);

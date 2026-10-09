@@ -9,11 +9,18 @@ const now = () => Date.now();
 const uuid = () => crypto.randomUUID();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Every fixed drive; status.volumes is the watched subset (GET/PUT /api/volumes).
+const drives: T.VolumeView[] = [
+  { root: "C:\\", label: "Windows", fs: "NTFS", total_bytes: 1906 * GB, free_bytes: 62 * GB, watched: true, selected: true, connected: true, has_journal: true },
+  { root: "D:\\", label: "Data", fs: "NTFS", total_bytes: 931 * GB, free_bytes: 410 * GB, watched: true, selected: false, connected: true, has_journal: true },
+  { root: "E:\\", label: "Camera", fs: "exFAT", total_bytes: 238 * GB, free_bytes: 21 * GB, watched: false, selected: false, connected: true, has_journal: false },
+  { root: "F:\\", label: "Old backup", fs: "NTFS", total_bytes: 3726 * GB, free_bytes: 1210 * GB, watched: true, selected: false, connected: false, has_journal: true },
+];
+const watchedDrives = () => drives.filter((d) => d.watched);
+const selectedDrive = () => drives.find((d) => d.selected) ?? drives[0]!;
+
 const status: T.Status = {
-  volumes: [
-    { root: "C:\\", total_bytes: 1906 * GB, free_bytes: 62 * GB },
-    { root: "D:\\", total_bytes: 931 * GB, free_bytes: 410 * GB },
-  ],
+  volumes: watchedDrives(),
   index: {
     state: "refreshing",
     mode: "background",
@@ -28,7 +35,7 @@ const status: T.Status = {
 };
 
 const setFill = (f: number) => {
-  const c = status.volumes[0]!;
+  const c = selectedDrive();
   c.free_bytes = Math.round(c.total_bytes * (1 - Math.min(1, Math.max(0, f))));
 };
 if (process.env.MOCK_FILL) setFill(Number(process.env.MOCK_FILL));
@@ -213,7 +220,7 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
     job.finished_ms = now();
     p.status = "done";
     status.vanished_total_bytes += total;
-    status.volumes[0]!.free_bytes += total;
+    selectedDrive().free_bytes += total;
     emitJob(job);
     dirty = true;
   })();
@@ -518,6 +525,30 @@ async function route(req: Request): Promise<Response> {
       if (b.api_key) sp.has_key = true;
       if (b.base_url !== undefined) sp.base_url = b.base_url;
       return json({ ok: true });
+    }
+    case "volumes": {
+      if (method === "PUT") {
+        const b = await body<Partial<T.VolumeChoice>>();
+        const rootOf = (r: string) => {
+          const u = r.trim().toUpperCase().replace(/\//g, "\\");
+          return /^[A-Z]:$/.test(u) ? `${u}\\` : u;
+        };
+        const watched = [...new Set((b.watched ?? []).map(rootOf))];
+        const selected = rootOf(b.selected ?? "");
+        if (!watched.length) return err("at least one drive must stay watched");
+        if (!watched.includes(selected)) return err(`${selected} is not among the watched drives`);
+        const unknown = watched.find((r) => !drives.some((d) => d.root === r));
+        if (unknown) return err(`${unknown} is not a drive path like D:\\`);
+        const added = watched.filter((r) => !drives.find((d) => d.root === r)!.watched);
+        const gone = added.find((r) => !drives.find((d) => d.root === r)!.connected);
+        if (gone) return err(`${gone} is not connected`);
+        await sleep(added.length || watched.length < watchedDrives().length ? 600 : 150);
+        for (const d of drives) Object.assign(d, { watched: watched.includes(d.root), selected: d.root === selected });
+        status.volumes = watchedDrives();
+        if (added.length && status.index.state === "idle") startRefresh("fast");
+        dirty = true;
+      }
+      return json(drives);
     }
     case "history":
       return json(history);

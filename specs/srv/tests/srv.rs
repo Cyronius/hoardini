@@ -1108,3 +1108,260 @@ async fn history_filters_by_range() {
     assert_eq!(mid[0]["free_bytes"], 40);
     let _ = f.h.shutdown.send(());
 }
+
+// Logs "<volume> <mode> <kind>" per spawn and "end <volume>" when a child runs `seconds` to its end.
+fn volume_fake_indexer(dir: &Path, seconds: u32) -> PathBuf {
+    let log = dir.join("volumes.txt");
+    let script = dir.join("volume-indexer.cmd");
+    let body = format!(
+        "@echo off\r\necho %5 %7 %9>>\"{log}\"\r\nping -n {n} 127.0.0.1 >nul\r\necho end %5>>\"{log}\"\r\nexit /b 0\r\n",
+        log = log.display(),
+        n = seconds + 1
+    );
+    std::fs::write(&script, body).unwrap();
+    script
+}
+
+// cmd sees a root that ends in a backslash quoted, with the backslash doubled.
+fn spawned(log: &Path) -> Vec<String> {
+    lines(log)
+        .iter()
+        .map(|l| l.replace('"', "").replace(r"\\", r"\"))
+        .collect()
+}
+
+// A scratch folder stands in for a drive; its index is a fake one under the same root.
+fn fake_drive(db_path: &Path, folder: &Path) -> String {
+    let root = hoardini_core::index::normalize_path(&folder.to_string_lossy());
+    let db = hoardini_core::store::Db::open(db_path).unwrap();
+    let fs = hoardini_core::index::FakeFs::new(&root);
+    fs.set_volume(500 << 30, 120 << 30);
+    fs.file(&format!(r"{root}\video\big.mkv"), 2 << 30);
+    let out = hoardini_core::index::refresh(
+        &db.conn().unwrap(),
+        &fs,
+        &root,
+        &hoardini_core::index::RefreshOptions::default(),
+    )
+    .unwrap();
+    assert!(out.completed);
+    root
+}
+
+fn rows_of(db_path: &Path, root: &str) -> (i64, i64, i64) {
+    let db = hoardini_core::store::Db::open(db_path).unwrap();
+    let conn = db.conn().unwrap();
+    let one = |sql: &str| -> i64 { conn.query_row(sql, [root], |r| r.get(0)).unwrap() };
+    (
+        one("SELECT COUNT(*) FROM volume WHERE root = ?1"),
+        one("SELECT COUNT(*) FROM node WHERE volume_id IN (SELECT id FROM volume WHERE root = ?1)"),
+        one("SELECT COUNT(*) FROM scan WHERE volume_id IN (SELECT id FROM volume WHERE root = ?1)"),
+    )
+}
+
+fn by_root<'a>(list: &'a Value, root: &str) -> Option<&'a Value> {
+    list.as_array().unwrap().iter().find(|v| {
+        v["root"]
+            .as_str()
+            .is_some_and(|r| r.eq_ignore_ascii_case(root))
+    })
+}
+
+async fn wait_idle(f: &Fixture, secs: u64) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    while index_state(f).await.0 != "idle" && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+// Traces: INDEX-VOLUMES
+#[tokio::test(flavor = "multi_thread")]
+async fn adding_a_drive_selects_it_and_starts_its_first_scan_fast() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = volume_fake_indexer(dir.path(), 0);
+    let drive = tempfile::tempdir().unwrap();
+    let a = hoardini_core::index::normalize_path(&drive.path().to_string_lossy());
+    let sys = hoardini_core::index::system_root();
+    let fdir = tempfile::tempdir().unwrap();
+    seed_index(&fdir.path().join("h.db"), Duration::ZERO);
+    let f = Fixture::in_dir(fdir, None, Some(exe), false).await;
+
+    let (st, list) = f.call("GET", "/api/volumes", None).await;
+    assert_eq!(st, 200);
+    for fixed in hoardini_win::fixed_volumes().unwrap() {
+        let root = hoardini_core::index::normalize_path(&fixed.to_string_lossy());
+        if hoardini_win::is_subst(&fixed) {
+            assert!(by_root(&list, &root).is_none(), "a subst drive is a folder");
+            continue;
+        }
+        let v = by_root(&list, &root).unwrap_or_else(|| panic!("{root} missing: {list}"));
+        assert_eq!(v["connected"], true);
+        assert!(v["total_bytes"].as_u64().unwrap() > 0);
+        assert_eq!(v["watched"], root == sys);
+        assert_eq!(v["selected"], root == sys);
+        assert_eq!(v["has_journal"], v["fs"] == "NTFS" || v["fs"] == "ReFS");
+    }
+
+    let body = json!({"watched": [sys, a.replace('\\', "/")], "selected": a});
+    let (st, list) = f.call("PUT", "/api/volumes", Some(body)).await;
+    assert_eq!(st, 200, "{list}");
+    let added = by_root(&list, &a).unwrap();
+    assert_eq!(
+        (&added["watched"], &added["selected"]),
+        (&json!(true), &json!(true))
+    );
+    assert_eq!(by_root(&list, &sys).unwrap()["selected"], false);
+
+    let log = dir.path().join("volumes.txt");
+    wait_for(&log, |l| l.iter().any(|x| x.starts_with("end ")), 5).await;
+    wait_idle(&f, 5).await;
+    assert_eq!(
+        spawned(&log),
+        [format!("{a} fast auto"), format!("end {a}")],
+        "only the added drive is scanned, fast"
+    );
+    let (_, status) = f.call("GET", "/api/status", None).await;
+    let vols = &status["volumes"];
+    assert_eq!(vols.as_array().unwrap().len(), 2);
+    assert_eq!(by_root(vols, &a).unwrap()["selected"], true);
+    assert_eq!(by_root(vols, &sys).unwrap()["selected"], false);
+
+    let missing = drive.path().join("not-here").to_string_lossy().into_owned();
+    for bad in [
+        json!({"watched": [], "selected": sys}),
+        json!({"watched": [a], "selected": sys}),
+        json!({"watched": [sys, a, missing], "selected": a}),
+        json!({"watched": ["relative"], "selected": "relative"}),
+    ] {
+        let (st, _) = f.call("PUT", "/api/volumes", Some(bad.clone())).await;
+        assert_eq!(st, 400, "{bad}");
+    }
+    let (_, list) = f.call("GET", "/api/volumes", None).await;
+    assert_eq!(
+        by_root(&list, &a).unwrap()["selected"],
+        true,
+        "a refused PUT stores nothing"
+    );
+    assert_eq!(by_root(&list, &sys).unwrap()["watched"], true);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: INDEX-VOLUMES
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_a_drive_stops_its_refresh_and_deletes_its_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = volume_fake_indexer(dir.path(), 10);
+    let drive = tempfile::tempdir().unwrap();
+    let sys = hoardini_core::index::system_root();
+    let fdir = tempfile::tempdir().unwrap();
+    let db_path = fdir.path().join("h.db");
+    seed_index(&db_path, Duration::ZERO);
+    let a = fake_drive(&db_path, drive.path());
+    let db = hoardini_core::store::Db::open(&db_path).unwrap();
+    hoardini_core::store::set_meta(
+        &db.conn().unwrap(),
+        "indexed_volumes",
+        &serde_json::to_string(&[&a, &sys]).unwrap(),
+    )
+    .unwrap();
+    assert!(rows_of(&db_path, &a).1 > 0);
+    let c_before = rows_of(&db_path, r"C:\");
+    let f = Fixture::in_dir(fdir, None, Some(exe), false).await;
+
+    let (_, r) = f.call("POST", "/api/index/refresh", None).await;
+    assert_eq!(r["started"], true);
+    let log = dir.path().join("volumes.txt");
+    wait_for(&log, |l| !l.is_empty(), 5).await;
+    let l = spawned(&log);
+    assert_eq!(l, [format!("{a} background auto")]);
+
+    let t0 = std::time::Instant::now();
+    let body = json!({"watched": [sys], "selected": sys});
+    let (st, list) = f.call("PUT", "/api/volumes", Some(body)).await;
+    assert_eq!(st, 200, "{list}");
+    assert!(
+        t0.elapsed() < Duration::from_secs(8),
+        "the running child was stopped"
+    );
+    assert!(
+        by_root(&list, &a).is_none(),
+        "an unwatched folder is not listed"
+    );
+    assert_eq!(rows_of(&db_path, &a), (0, 0, 0));
+    assert_eq!(rows_of(&db_path, r"C:\"), c_before);
+
+    wait_for(&log, |l| l.len() >= 2, 5).await;
+    let l = spawned(&log);
+    assert_eq!(
+        l[1],
+        format!("{sys} background auto"),
+        "the pass moves on: {l:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !spawned(&log).contains(&format!("end {a}")),
+        "the removed drive's child never finished"
+    );
+    let ok: String = db
+        .conn()
+        .unwrap()
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(ok, "ok");
+
+    let none = json!({"watched": [], "selected": sys});
+    let (st, _) = f.call("PUT", "/api/volumes", Some(none)).await;
+    assert_eq!(st, 400, "the last watched drive stays");
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: INDEX-VOLUMES
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unplugged_drive_is_skipped_and_keeps_its_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = volume_fake_indexer(dir.path(), 0);
+    let drive = tempfile::tempdir().unwrap();
+    let sys = hoardini_core::index::system_root();
+    let fdir = tempfile::tempdir().unwrap();
+    let db_path = fdir.path().join("h.db");
+    seed_index(&db_path, Duration::ZERO);
+    let a = fake_drive(&db_path, drive.path());
+    let db = hoardini_core::store::Db::open(&db_path).unwrap();
+    let conn = db.conn().unwrap();
+    hoardini_core::store::set_meta(
+        &conn,
+        "indexed_volumes",
+        &serde_json::to_string(&[&sys, &a]).unwrap(),
+    )
+    .unwrap();
+    hoardini_core::store::set_meta(&conn, "selected_volume", &a).unwrap();
+    drop(drive);
+    let before = rows_of(&db_path, &a);
+    let f = Fixture::in_dir(fdir, None, Some(exe), false).await;
+
+    let (_, r) = f.call("POST", "/api/index/refresh", None).await;
+    assert_eq!(r["started"], true);
+    let log = dir.path().join("volumes.txt");
+    wait_for(&log, |l| l.iter().any(|x| x.starts_with("end ")), 5).await;
+    wait_idle(&f, 5).await;
+    assert_eq!(
+        spawned(&log),
+        [format!("{sys} background auto"), format!("end {sys}")]
+    );
+    assert_eq!(rows_of(&db_path, &a), before, "its index is kept");
+
+    let (_, list) = f.call("GET", "/api/volumes", None).await;
+    let v = by_root(&list, &a).unwrap();
+    assert_eq!(
+        (&v["watched"], &v["selected"], &v["connected"]),
+        (&json!(true), &json!(true), &json!(false))
+    );
+    assert_eq!(v["total_bytes"], 500u64 << 30, "last known size");
+    let (_, status) = f.call("GET", "/api/status", None).await;
+    let s = by_root(&status["volumes"], &a).unwrap();
+    assert_eq!(
+        (&s["selected"], &s["connected"]),
+        (&json!(true), &json!(false))
+    );
+    let _ = f.h.shutdown.send(());
+}
