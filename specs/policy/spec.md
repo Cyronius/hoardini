@@ -148,9 +148,9 @@ the path (POLICY-PROTECT). The server redacts the note like the other item text.
 **Applies to:** hoardini
 **Verification:** test
 
-A location row (MEM-LOCATION) whose verdict is `keep` shall block any action its `actions` do not list on a path at,
-under, or containing the location: delete and dedupe always (no keep row lists them), archive and compress unless listed
-(your photos allow `archive`, a Keep answer allows `archive` and `compress`, OS files allow none). The item is stored
+A location row (MEM-LOCATION) whose verdict is `keep` shall block, on a path at, under, or containing the location,
+delete and dedupe always, and archive and compress unless its `actions` list them (your photos allow `archive`, a Keep
+answer allows `archive` and `compress`, OS files allow none). The item is stored
 `blocked` with a reason naming the location and quoting the row's text, and the same check skips an approved item at
 execution when the row appeared after the proposal. A location whose verdict is not `keep` blocks nothing. The check is
 `memory::location::keep_block(conn, env, path, action)`, called from `policy::examine` and `policy::revalidate`.

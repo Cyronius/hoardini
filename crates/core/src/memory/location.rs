@@ -549,7 +549,11 @@ pub fn keep_block(
         let Some(d) = &m.detail else {
             continue;
         };
-        if d.verdict != Some(Verdict::Keep) || d.actions.contains(&action) {
+        let blocked = match action {
+            Action::Delete | Action::Dedupe => true,
+            Action::Archive | Action::Compress => !d.actions.contains(&action),
+        };
+        if d.verdict != Some(Verdict::Keep) || !blocked {
             continue;
         }
         let loc = expanded(env, &m.key);
