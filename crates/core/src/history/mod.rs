@@ -112,7 +112,6 @@ pub fn scans(conn: &Connection, volume_id: i64) -> Result<Vec<ScanInfo>> {
         .collect::<rusqlite::Result<_>>()?)
 }
 
-/// Scans finished within the inclusive range, oldest first.
 pub fn scans_between(
     conn: &Connection,
     volume_id: i64,
@@ -151,7 +150,7 @@ impl FreeSummary {
     }
 }
 
-/// Start, end and lowest free space over scans (oldest first); None with fewer than two readings.
+// One reading has no trend, so callers drop the free-space line.
 pub fn free_summary(scans: &[ScanInfo]) -> Option<FreeSummary> {
     let pts: Vec<(i64, u64)> = scans
         .iter()
