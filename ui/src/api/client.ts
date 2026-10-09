@@ -84,9 +84,12 @@ export const routes = {
   cancelJob: (id: string) => api<{ ok: true }>(`/api/jobs/${enc(id)}/cancel`, { body: {} }),
 
   memories: (q?: string) => api<T.Memory[]>(`/api/memory${q ? `?q=${enc(q)}` : ""}`),
-  addMemory: (m: Required<T.MemoryInput>) => api<T.Memory>("/api/memory", { body: m }),
+  addMemory: (m: Required<Omit<T.MemoryInput, "pinned">>) => api<T.Memory>("/api/memory", { body: m }),
   updateMemory: (id: number, m: T.MemoryInput) => put<T.Memory>(`/api/memory/${id}`, m),
   deleteMemory: (id: number) => del(`/api/memory/${id}`),
+  restoreMemory: (id: number) => api<T.Memory>(`/api/memory/${id}/restore`, { body: {} }),
+  memoryLimit: () => api<{ limit: number }>("/api/memory/limit"),
+  setMemoryLimit: (limit: number) => put<{ limit: number }>("/api/memory/limit", { limit }),
 
   providers: () => api<T.ProviderView[]>("/api/providers"),
   presets: () => api<T.Preset[]>("/api/providers/presets"),

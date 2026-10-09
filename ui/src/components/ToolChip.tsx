@@ -15,6 +15,7 @@ export function ToolChip({ id, name, args, result }: { id: string; name: string;
   const times = useStore((s) => s.toolTimes[id]);
   const noted = useStore((s) => s.noted[id]);
   const [undone, setUndone] = useState(false);
+  const [pinned, setPinned] = useState<boolean | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const done = result !== "";
   const elapsed = times?.end ? humanElapsed(times.end - times.start) : null;
@@ -29,13 +30,35 @@ export function ToolChip({ id, name, args, result }: { id: string; name: string;
     }
   };
 
+  const isPinned = pinned ?? noted?.pinned ?? false;
+  const togglePin = async () => {
+    if (!noted) return;
+    try {
+      await routes.updateMemory(noted.memoryId, { pinned: !isPinned });
+      setPinned(!isPinned);
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   if (name === "remember" && noted) {
     return (
       <div className="my-1 flex items-center gap-2 rounded-full border border-line-soft bg-ink-850 py-0.5 pl-2.5 pr-1 text-[length:var(--fs-sm)]">
-        <span className="font-bold text-brass">{undone ? "forgotten" : "noted"}</span>
+        <span className="font-bold text-brass">{undone ? "forgotten" : isPinned ? "noted · pinned" : "noted"}</span>
         <span className={`min-w-0 flex-1 truncate ${undone ? "text-faint line-through" : "text-muted"}`} title={noted.text}>
           {noted.text}
         </span>
+        {!undone && (
+          <button
+            className="rounded-full px-2 py-0.5 font-bold text-brass hover:bg-ink-800"
+            onClick={() => void togglePin()}
+            aria-pressed={isPinned}
+            title={isPinned ? "Unpin: let this note fall off when memory is full" : "Pin: keep this note even when memory is full"}
+          >
+            {isPinned ? "Unpin" : "Pin"}
+          </button>
+        )}
         {!undone && (
           <button className="rounded-full px-2 py-0.5 font-bold text-brass hover:bg-ink-800" onClick={() => void undo()} title="Undo: forget this note" aria-label="Undo remember">
             Undo

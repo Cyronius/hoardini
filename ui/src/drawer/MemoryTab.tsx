@@ -7,12 +7,72 @@ import { IconButton } from "../components/IconButton";
 import { btnDanger, btnPrimary, btnSecondary, ErrorLine, errMsg, field, Field } from "./ui";
 
 const SCOPES: Memory["scope"][] = ["path", "glob", "global"];
+const MIN_LIMIT = 10;
 const KINDS: Memory["kind"][] = ["fact", "preference", "protect", "verdict"];
 
 type Draft = { id?: number; scope: Memory["scope"]; key: string; kind: Memory["kind"]; text: string };
 
 function urlOf(source: string): string | null {
   return /https?:\/\/\S+/.exec(source)?.[0] ?? null;
+}
+
+function PinIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg width={16} height={16} viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 17v5M9 3h6l-1 7 3 3v2H7v-2l3-3Z" />
+    </svg>
+  );
+}
+
+function LimitControl({ onChanged }: { onChanged: () => void }) {
+  const [value, setValue] = useState("");
+  const [saved, setSaved] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    routes
+      .memoryLimit()
+      .then((r) => {
+        setSaved(r.limit);
+        setValue(String(r.limit));
+      })
+      .catch((e) => setError(errMsg(e)));
+  }, []);
+  const commit = async () => {
+    const n = Math.max(MIN_LIMIT, Math.floor(Number(value)));
+    if (!Number.isFinite(n) || n === saved) {
+      setValue(String(saved ?? ""));
+      return;
+    }
+    try {
+      const r = await routes.setMemoryLimit(n);
+      setSaved(r.limit);
+      setValue(String(r.limit));
+      setError(null);
+      onChanged();
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
+  return (
+    <div>
+      <label className="flex items-center gap-2 text-[length:var(--fs-sm)] text-muted">
+        Remember up to
+        <input
+          className={`${field} w-20`}
+          type="number"
+          min={MIN_LIMIT}
+          value={value}
+          aria-label="Remember up to this many notes"
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => void commit()}
+          onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+        />
+        notes
+      </label>
+      <div className="mt-0.5 text-[length:var(--fs-xs)] text-faint">When full, the notes used least recently are greyed out below. Pinned and protect notes never count.</div>
+      <ErrorLine error={error} />
+    </div>
+  );
 }
 
 function MemoryEditor({ draft, onChange, onSave, onCancel }: { draft: Draft; onChange: (d: Draft) => void; onSave: () => void; onCancel: () => void }) {
@@ -82,6 +142,22 @@ export function MemoryTab() {
       setError(errMsg(e));
     }
   };
+  const togglePin = async (m: Memory) => {
+    try {
+      await routes.updateMemory(m.id, { pinned: !m.pinned });
+      load();
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
+  const restore = async (id: number) => {
+    try {
+      await routes.restoreMemory(id);
+      load();
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
   const remove = async (id: number) => {
     try {
       await routes.deleteMemory(id);
@@ -100,6 +176,7 @@ export function MemoryTab() {
           <PlusIcon />
         </IconButton>
       </div>
+      <LimitControl onChanged={load} />
       <ErrorLine error={error} />
       {draft && draft.id == null && <MemoryEditor draft={draft} onChange={setDraft} onSave={() => void save()} onCancel={() => setDraft(null)} />}
       {rows == null && <div className="text-muted pulse-soft">Loading...</div>}
@@ -114,8 +191,9 @@ export function MemoryTab() {
             );
           }
           const url = urlOf(m.source);
+          const forgotten = m.forgotten_ms != null;
           return (
-            <li key={m.id} className="rounded-xl border border-line-soft bg-ink-850 p-2.5">
+            <li key={m.id} className={`rounded-xl border border-line-soft bg-ink-850 p-2.5 ${forgotten ? "opacity-50" : ""}`}>
               <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5 text-[length:var(--fs-xs)]">
@@ -139,10 +217,20 @@ export function MemoryTab() {
                     ) : (
                       <>from {m.source}</>
                     )}
-                    {" · "}updated {humanAge(Date.now() - m.updated_ms)}
+                    {" · "}
+                    {forgotten ? `forgotten ${humanAge(Date.now() - (m.forgotten_ms ?? 0))}` : `last used ${humanAge(Date.now() - (m.last_used_ms ?? m.updated_ms))}`}
                   </div>
                 </div>
-                {confirmId === m.id ? (
+                {forgotten && confirmId !== m.id ? (
+                  <div className="flex shrink-0 gap-1">
+                    <button className={btnSecondary} onClick={() => void restore(m.id)}>
+                      Restore
+                    </button>
+                    <IconButton size="sm" title="Delete note" aria-label="Delete note" className="text-faint hover:text-err" onClick={() => setConfirmId(m.id)}>
+                      <TrashIcon />
+                    </IconButton>
+                  </div>
+                ) : confirmId === m.id ? (
                   <div className="flex shrink-0 gap-1">
                     <button className={btnDanger} onClick={() => void remove(m.id)}>
                       Delete
@@ -153,6 +241,16 @@ export function MemoryTab() {
                   </div>
                 ) : (
                   <div className="flex shrink-0">
+                    <IconButton
+                      size="sm"
+                      title={m.kind === "protect" ? "Protect notes are never forgotten" : m.pinned ? "Pinned: never forgotten. Click to unpin" : "Pin: never forget this note"}
+                      aria-label={m.pinned ? "Unpin note" : "Pin note"}
+                      aria-pressed={m.pinned}
+                      className={m.pinned ? "text-brass" : "text-faint hover:text-paper"}
+                      onClick={() => void togglePin(m)}
+                    >
+                      <PinIcon filled={m.pinned} />
+                    </IconButton>
                     <IconButton size="sm" title="Edit note" aria-label="Edit note" className="text-faint hover:text-paper" onClick={() => setDraft({ id: m.id, scope: m.scope, key: m.key, kind: m.kind, text: m.text })}>
                       <EditIcon />
                     </IconButton>
