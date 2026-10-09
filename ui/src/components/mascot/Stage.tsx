@@ -4,15 +4,18 @@ import type { Job, Proposal } from "../../api/types";
 import { fileName, humanBytes } from "../../format";
 import { useStore } from "../../store";
 import { SumoSvg } from "../Mascot";
-import { ACT_MS, FIN_ACT, WORK_ACT, girthLevel, moveFor, reducedMotion, type Act, type Move, type OneShot } from "./acts";
+import { ACT_MS, FIN_ACT, FIN_BASE_MS, WORK_ACT, girthLevel, moveFor, reducedMotion, type Act, type Move, type OneShot } from "./acts";
 import { cueHeader, holdGirth, releaseGirth, useMascotStage } from "./cue";
 import { girthFor, selectedVolume, usedFraction } from "./girth";
 
-const CLIMB_MS = 1000;
+const CLIMB_MS = 1600;
+const BACK_MS = 1400;
+const WORK_MIN_MS = 2000;
+const LOST_MS = 900;
 const HURRY_MS = 380;
 const LONG_MS = 30_000;
 const REPEAT_WINDOW_MS = 10 * 60_000;
-const REPEAT_MAX = 3;
+const REPEAT_MAX = 5;
 const PW = 60;
 const PH = 34;
 const LW = 20;
@@ -62,6 +65,9 @@ interface Trip {
   phase: Phase;
   outcome: Outcome | null;
   fast: boolean;
+  startedAt: number;
+  workAt: number;
+  lostAt?: number;
   layout: Layout;
   scroller: Element | null;
 }
@@ -83,18 +89,34 @@ function scrollerOf(el: Element): Element | null {
   return null;
 }
 
-// Null when the card's top edge, where he stands, is not comfortably on screen.
+const inView = (y: number, view: { top: number; bottom: number }) => y >= view.top + 8 && y <= Math.min(view.bottom, innerHeight) - 40;
+
+// He stands on the action footer where the user just clicked; a collapsed parent hands him to its follow-up card.
+function groundCandidates(card: HTMLElement): { el: HTMLElement; y: number }[] {
+  const out: { el: HTMLElement; y: number }[] = [];
+  const collapsed = card.dataset.collapsed != null;
+  const follow = card.dataset.followUp ? cardEl(card.dataset.followUp) : null;
+  if (collapsed && follow) out.push({ el: follow, y: follow.getBoundingClientRect().top });
+  const foot = card.querySelector<HTMLElement>("[data-proposal-foot]");
+  if (foot && !collapsed) out.push({ el: card, y: foot.getBoundingClientRect().top });
+  out.push({ el: card, y: card.getBoundingClientRect().top });
+  return out;
+}
+
+// Null when neither the footer nor the card's top edge is comfortably on screen.
 function layoutFor(card: HTMLElement, move: Move, scroller: Element | null): Layout | null {
   const homeEl = document.querySelector<HTMLElement>("[data-mascot-home]");
   if (!homeEl) return null;
-  const c = card.getBoundingClientRect();
   const h = homeEl.getBoundingClientRect();
   const view = scroller?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
-  if (h.width === 0 || c.width < h.width + PW * 2 + 40 || c.top < view.top + 8 || c.top > Math.min(view.bottom, innerHeight) - 40) return null;
+  const at = groundCandidates(card).find((g) => inView(g.y, view));
+  if (!at || h.width === 0) return null;
+  const c = at.el.getBoundingClientRect();
+  if (c.width < h.width + PW * 2 + 40) return null;
   const S = h.width;
   const twin = move === "clap";
   const sx = c.left + 8 + (twin ? PW + 6 : 0);
-  const ground = c.top + 1;
+  const ground = at.y + 1;
   const sy = ground - S * FOOT;
   const py = ground - PH;
   const parcels = twin ? [{ x: c.left + 8, y: py }, { x: sx + S + 4, y: py }] : [{ x: sx + S + 2, y: py }];
@@ -147,7 +169,7 @@ function actFor(t: Trip): Act {
 
 class Director {
   trip: Trip | null = null;
-  private headerJobs = new Map<string, Move>();
+  private headerJobs = new Map<string, { move: Move; at: number }>();
   private tripLog: number[] = [];
   private known = new Map<string, Job["status"]>();
   private afterHome: (() => void)[] = [];
@@ -155,6 +177,8 @@ class Director {
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private frame = 0;
   private listening = false;
+  // Cards collapse and follow-ups appear mid-trip without any scroll event.
+  private poll: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private setView: (fn: (v: View | null) => View | null) => void,
@@ -227,7 +251,7 @@ class Director {
     const scroller = card && scrollerOf(card);
     const layout = card && layoutFor(card, mv, scroller ?? null);
     if (p && layout) return this.beginTrip(j, p, mv, layout, scroller ?? null);
-    this.headerJobs.set(j.id, mv);
+    this.headerJobs.set(j.id, { move: mv, at: Date.now() });
     this.syncHeaderWork();
   }
 
@@ -237,13 +261,14 @@ class Director {
     const dests = p?.destination ? await routes.destinations().catch(() => []) : [];
     if (dests.find((d) => d.id === p?.destination?.id)?.kind !== "rclone") return;
     if (this.trip?.jobId === jobId && this.trip.phase !== "finish") this.trip.move = "throw-up";
-    if (this.headerJobs.has(jobId)) this.headerJobs.set(jobId, "throw-up");
+    const h = this.headerJobs.get(jobId);
+    if (h) h.move = "throw-up";
   }
 
   private beginTrip(j: Job, p: Proposal, mv: Move, layout: Layout, scroller: Element | null) {
     this.tripLog.push(Date.now());
     const seq = ++this.seq;
-    this.trip = { seq, jobId: j.id, proposalId: p.id, move: mv, phase: "down", outcome: null, fast: false, layout, scroller };
+    this.trip = { seq, jobId: j.id, proposalId: p.id, move: mv, phase: "down", outcome: null, fast: false, startedAt: Date.now(), workAt: 0, layout, scroller };
     const g = girthLevel(girthFor(usedFraction(useMascotStage.getState().hold ?? selectedVolume(useStore.getState().status?.volumes)) ?? 0.5));
     useStore.getState().setMascotAway(true);
     this.setView(() => ({ seq, phase: "down", act: "climb", move: mv, parcel: parcelFor(p, j), layout, sag: g > 0.45 ? (g - 0.45) * 7 : 0, prop: null }));
@@ -254,16 +279,31 @@ class Director {
     const t = this.trip;
     if (t?.jobId === jobId && !this.headerJobs.has(jobId)) {
       t.outcome = outcome;
-      if (t.phase === "work") this.go("finish");
+      if (t.phase === "work") this.finishWhenReady(t);
       return;
     }
-    const mv = this.headerJobs.get(jobId);
-    if (!mv) return;
-    this.headerJobs.delete(jobId);
-    this.syncHeaderWork();
-    const play = () => this.headerFinish(mv, outcome);
-    if (useStore.getState().mascotAway) this.afterHome.push(play);
-    else play();
+    const h = this.headerJobs.get(jobId);
+    if (!h) return;
+    const play = () => {
+      this.headerJobs.delete(jobId);
+      this.syncHeaderWork();
+      const fin = () => this.headerFinish(h.move, outcome);
+      if (useStore.getState().mascotAway) this.afterHome.push(fin);
+      else fin();
+    };
+    const wait = h.at + WORK_MIN_MS - Date.now();
+    if (wait <= 0) return play();
+    const timer = setTimeout(() => {
+      this.timers.delete(timer);
+      play();
+    }, wait);
+    this.timers.add(timer);
+  }
+
+  private finishWhenReady(t: Trip) {
+    const wait = t.workAt + WORK_MIN_MS - Date.now();
+    if (wait <= 0) this.go("finish");
+    else this.later(wait, () => this.go("finish"), "work");
   }
 
   private headerFinish(mv: Move, outcome: Outcome) {
@@ -294,7 +334,7 @@ class Director {
     const t = this.trip;
     if (!t || t.phase === "up" || t.phase === "gone") return;
     if (!t.outcome) {
-      this.headerJobs.set(t.jobId, t.move);
+      this.headerJobs.set(t.jobId, { move: t.move, at: t.startedAt });
       this.syncHeaderWork();
     }
     t.fast = true;
@@ -310,9 +350,13 @@ class Director {
       const card = cardEl(t.proposalId);
       const layout = card && layoutFor(card, t.move, t.scroller);
       if (!layout) {
-        if (t.phase !== "up") this.hurry();
+        t.lostAt ??= Date.now();
+        if (t.phase !== "up" && Date.now() - t.lostAt > LOST_MS) this.hurry();
         return;
       }
+      t.lostAt = undefined;
+      const o = t.layout;
+      if (o.ground === layout.ground && o.sx === layout.sx && o.home.x === layout.home.x && o.home.y === layout.home.y) return;
       t.layout = layout;
       this.setView((v) => (v?.seq === t.seq ? { ...v, layout } : v));
     });
@@ -324,6 +368,7 @@ class Director {
     window.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
     window.addEventListener("resize", this.onScroll, { passive: true });
     window.addEventListener("pointerdown", this.hurry, { capture: true, passive: true });
+    this.poll = setInterval(this.onScroll, 250);
   }
 
   private unlisten() {
@@ -331,6 +376,7 @@ class Director {
     this.listening = false;
     cancelAnimationFrame(this.frame);
     this.frame = 0;
+    clearInterval(this.poll);
     window.removeEventListener("scroll", this.onScroll, { capture: true });
     window.removeEventListener("resize", this.onScroll);
     window.removeEventListener("pointerdown", this.hurry, { capture: true });
@@ -368,10 +414,12 @@ class Director {
             { duration: 420, delay: CLIMB_MS - 320 + i * 70, easing: "ease-out", fill: "backwards" },
           ),
         );
-        this.later(CLIMB_MS, () => this.go(t.outcome ? "finish" : "work"), "down");
+        this.later(CLIMB_MS, () => this.go("work"), "down");
         return;
       }
       case "work": {
+        t.workAt = Date.now();
+        if (t.outcome) this.finishWhenReady(t);
         if (t.move === "flop") {
           const o = this.seat(L);
           move(sumo, [{ transform: `translate(${o.x / 2}px, ${o.y - 18}px)`, offset: 0.5 }, { transform: `translate(${o.x}px, ${o.y}px)` }], { duration: 420, easing: "ease-in-out" });
@@ -379,7 +427,7 @@ class Director {
         this.later(
           LONG_MS,
           () => {
-            this.headerJobs.set(t.jobId, t.move);
+            this.headerJobs.set(t.jobId, { move: t.move, at: t.startedAt });
             this.syncHeaderWork();
             this.go("up");
           },
@@ -399,7 +447,7 @@ class Director {
       }
       case "up": {
         if (t.outcome) releaseGirth();
-        const ms = t.fast ? HURRY_MS : CLIMB_MS;
+        const ms = t.fast ? HURRY_MS : BACK_MS;
         move(sumo, [{ transform: `translate(0px, ${L.home.y}px)`, offset: 0.82 }, { transform: `translate(${L.home.x}px, ${L.home.y}px)` }], { duration: ms, easing: "linear" });
         if (!(t.outcome === "done" && (t.move === "push" || t.move === "throw" || t.move === "throw-up"))) this.parcelsHome(0);
         this.els.prop.current?.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 350, delay: 250, fill: "forwards" });
@@ -432,16 +480,17 @@ class Director {
     const sumo = this.els.sumo.current;
     const [a, b] = this.els.parcels.current ?? [];
     const P = L.parcels[0]!;
+    const k = ACT_MS[FIN_ACT[t.move]] / FIN_BASE_MS[t.move];
     switch (t.move) {
       case "push": {
         const dx = innerWidth + 40 - P.x;
         move(sumo, [{ transform: "translateX(-6px)", offset: 0.22 }, { transform: "translateX(26px)", offset: 0.42 }, { transform: "translateX(20px)", offset: 0.55 }, { transform: "none" }], {
-          duration: 1100,
+          duration: 1100 * k,
           easing: "ease-in-out",
         });
         move(a, [{ transform: `translate(${dx * 0.45}px, -48px) rotate(420deg)`, offset: 0.45 }, { transform: `translate(${dx}px, -6px) rotate(960deg)` }], {
-          duration: 760,
-          delay: 460,
+          duration: 760 * k,
+          delay: 460 * k,
           easing: "cubic-bezier(0.25, 0.1, 0.6, 1)",
         });
         return;
@@ -457,9 +506,9 @@ class Director {
             { transform: `translate(${o.x * 0.4}px, -16px)`, offset: 0.84 },
             { transform: "none" },
           ],
-          { duration: 1300, easing: "ease-in-out" },
+          { duration: 1300 * k, easing: "ease-in-out" },
         );
-        move(a, [{ transform: `translateY(${PH * 0.35}px) scale(1.45, 0.3)` }], { duration: 110, delay: 715, easing: "ease-out" });
+        move(a, [{ transform: `translateY(${PH * 0.35}px) scale(1.45, 0.3)` }], { duration: 110 * k, delay: 715 * k, easing: "ease-out" });
         return;
       }
       case "throw":
@@ -478,14 +527,14 @@ class Director {
             { transform: `translate(${dest.x}px, ${dest.y + (up ? 0 : 16)}px) rotate(360deg) scale(${up ? 0.3 : 0.5})`, opacity: 0, offset: 0.88 },
             { transform: `translate(${dest.x}px, ${dest.y + (up ? 0 : 16)}px) scale(0.3)`, opacity: 0 },
           ],
-          { duration: 1300, easing: "linear" },
+          { duration: 1300 * k, easing: "linear" },
         );
         if (up) {
-          this.els.prop.current?.animate([{ transform: "none" }, { transform: "scale(1.18)" }, { transform: "none" }], { duration: 380, delay: 1000, easing: "ease-out" });
+          this.els.prop.current?.animate([{ transform: "none" }, { transform: "scale(1.18)" }, { transform: "none" }], { duration: 380 * k, delay: 1000 * k, easing: "ease-out" });
         } else {
           for (const f of this.els.flaps.current ?? []) {
             const from = getComputedStyle(f!).transform;
-            f?.animate([{ transform: from }, { transform: "rotate(0deg)" }], { duration: 220, delay: 1080, fill: "forwards", easing: "cubic-bezier(0.3, 1.5, 0.6, 1)" });
+            f?.animate([{ transform: from }, { transform: "rotate(0deg)" }], { duration: 220 * k, delay: 1080 * k, fill: "forwards", easing: "cubic-bezier(0.3, 1.5, 0.6, 1)" });
           }
         }
         return;
@@ -502,7 +551,7 @@ class Director {
             { transform: `translate(${mx - pa.x}px, 0px) scale(0.8)`, opacity: 0, offset: 0.4 },
             { transform: `translate(${mx - pa.x}px, 0px) scale(0.8)`, opacity: 0 },
           ],
-          { duration: 1100, easing: "ease-in" },
+          { duration: 1100 * k, easing: "ease-in" },
         );
         move(
           b,
@@ -513,7 +562,7 @@ class Director {
             { transform: `translate(${mx - pb.x}px, ${-L.S * 0.95}px) scale(0.85)`, offset: 0.62 },
             { transform: `translate(${mx - pb.x}px, ${-L.S * 0.9}px) scale(0.85)` },
           ],
-          { duration: 1100, easing: "ease-in" },
+          { duration: 1100 * k, easing: "ease-in" },
         );
         this.els.flash.current?.animate(
           [
@@ -521,7 +570,7 @@ class Director {
             { transform: "scale(0.3)", opacity: 1, offset: 0.05 },
             { transform: "scale(1.8)", opacity: 0 },
           ],
-          { duration: 420, delay: 360, fill: "both", easing: "ease-out" },
+          { duration: 420 * k, delay: 360 * k, fill: "both", easing: "ease-out" },
         );
         return;
       }

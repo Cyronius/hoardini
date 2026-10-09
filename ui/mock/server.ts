@@ -149,12 +149,14 @@ function threadDetail() {
 }
 
 function makeProposal(kind: T.ProposalKind): T.Proposal {
-  const mk = (id: number, path: string, alloc: number, p: Partial<T.ProposalItem>): T.ProposalItem => ({ id, path, kind: "file", alloc, verdict: "redownload", cap: null, reason: null, block_reason: null, selected: true, status: "pending", detail: null, ...p });
+  const mk = (id: number, path: string, alloc: number, p: Partial<T.ProposalItem>): T.ProposalItem => ({ id, path, kind: "file", alloc, verdict: "redownload", cap: null, reason: null, block_reason: null, selected: true, status: "pending", detail: null, small: false, memory_note: null, ...p });
   const items: T.ProposalItem[] = [
     mk(1, "C:\\Users\\josha\\.lmstudio\\models\\llama-3.3-70b-Q4_K_M.gguf", 42.5 * GB, { reason: "Public model on Hugging Face; last opened 74 days ago." }),
     mk(2, "C:\\Users\\josha\\.lmstudio\\models\\mistral-small-24b-Q6_K.gguf", 9.9 * GB, { verdict: "review", cap: "review", reason: "Model said safe, but it was opened 12 days ago." }),
     mk(3, "C:\\Users\\josha\\.lmstudio\\models\\qwen3.8-27b-Q8_0.gguf", 27.1 * GB, { verdict: "keep", selected: false, reason: "You said to keep this one (Sep 12)." }),
     mk(4, "C:\\Users\\josha\\.lmstudio\\models\\gemma-4-12b-Q8_0.gguf", 12.4 * GB, { verdict: "redownload", selected: false, block_reason: "Open in LM Studio.exe (pid 8124)", status: "blocked" }),
+    mk(5, "C:\\Users\\josha\\.lmstudio\\models\\tiny-test.gguf", 3 * MB, { selected: false, small: true, reason: "Scratch test model.", memory_note: "C:\\Users\\josha\\.lmstudio is disposable" }),
+    ...Array.from({ length: 10 }, (_, n) => mk(6 + n, `C:\\Users\\josha\\.lmstudio\\cache\\blob-${n}.bin`, (180 - n * 12) * MB, { reason: "Cache blob; rebuilt on demand." })),
   ];
   const p: T.Proposal = {
     id: uuid(),
@@ -167,6 +169,8 @@ function makeProposal(kind: T.ProposalKind): T.Proposal {
     format: null,
     summary: kind === "archive" ? "Copy two models to NAS, verify, then delete the originals." : "Two models you have not opened in weeks.",
     items,
+    parent_id: null,
+    follow_up_id: null,
   };
   proposals.set(p.id, p);
   return p;
@@ -175,6 +179,15 @@ function makeProposal(kind: T.ProposalKind): T.Proposal {
 // Set through POST /api/mock {"next_job": ...}; shapes the next approval for checking the mascot's moves.
 type NextJob = { kind?: T.ProposalKind; outcome?: "failed" | "cancelled"; ms?: number; cloud?: boolean };
 let nextJob: NextJob | null = null;
+
+function followUp(p: T.Proposal): void {
+  const items = p.items.filter((i) => i.status !== "done").map((i) => ({ ...i, status: i.block_reason ? ("blocked" as const) : ("pending" as const), detail: null }));
+  if (!items.length) return;
+  const f: T.Proposal = { ...p, id: uuid(), status: "pending", job_id: null, created_ms: now(), items, total_alloc: items.filter((i) => i.selected).reduce((a, i) => a + i.alloc, 0), parent_id: p.id, follow_up_id: null };
+  proposals.set(f.id, f);
+  thread.proposals[f.id] = f;
+  p.follow_up_id = f.id;
+}
 
 function runJob(p: T.Proposal, itemIds: number[]): T.Job {
   const plan = nextJob;
@@ -211,6 +224,8 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
     if (plan?.outcome) {
       Object.assign(job, { status: plan.outcome, error: plan.outcome === "failed" ? "Access is denied" : null, finished_ms: now() });
       p.status = "failed";
+      if (plan.outcome === "failed") for (const it of chosen) it.status = "failed";
+      if (p.kind !== "dedupe") followUp(p);
       emitJob(job);
       dirty = true;
       return;
@@ -219,6 +234,7 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
     job.freed_bytes = total;
     job.finished_ms = now();
     p.status = "done";
+    if (p.kind !== "dedupe") followUp(p);
     status.vanished_total_bytes += total;
     selectedDrive().free_bytes += total;
     emitJob(job);

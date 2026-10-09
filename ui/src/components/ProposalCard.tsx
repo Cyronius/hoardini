@@ -121,6 +121,7 @@ function ItemRow({
               {fileName(item.path)}
             </span>
             <span className="ml-auto shrink-0 tabular-nums text-muted">{humanBytes(item.alloc)}</span>
+            {item.small && <span className="shrink-0 rounded-full border border-line px-2 py-px text-[length:var(--fs-xs)] text-faint">small</span>}
             {verdict && (
               <span className={`shrink-0 rounded-full border px-2 py-px text-[length:var(--fs-xs)] font-bold ${VERDICT_STYLE[verdict]}`}>
                 {VERDICT_LABEL[verdict]}
@@ -131,6 +132,7 @@ function ItemRow({
             {item.path}
           </span>
           {item.reason && <span className="block text-[length:var(--fs-xs)] text-muted">{item.reason}</span>}
+          {item.memory_note && <span className="block text-[length:var(--fs-xs)] text-faint">Noted: {item.memory_note}</span>}
           {/* `reason` is the model's; the cap comes from policy code, so they are never joined into one sentence. */}
           {item.cap && !blocked && <span className="block text-[length:var(--fs-xs)] text-brass">Capped to "{VERDICT_LABEL[item.cap]}" by a safety rule</span>}
           {item.block_reason && <span className="block text-[length:var(--fs-xs)] font-semibold text-err">Blocked: {item.block_reason}</span>}
@@ -177,7 +179,30 @@ function outcomeLine(p: Proposal, job: Job | undefined): { text: string; tone: s
   }
 }
 
+const VERB: Record<Proposal["kind"], string> = { delete: "Deleted", archive: "Archived", compress: "Compressed", dedupe: "Deduplicated" };
+const ENDED: Proposal["status"][] = ["declined", "done", "partial", "failed"];
+
+function collapsedLine(p: Proposal, job: Job | undefined): string {
+  const n = (k: number) => `${k} item${k === 1 ? "" : "s"}`;
+  if (p.status === "declined") return `Declined · ${n(p.items.length)}`;
+  const done = p.items.filter((i) => i.status === "done");
+  const freed = job ? job.freed_bytes : done.reduce((a, i) => a + i.alloc, 0);
+  if (p.status === "failed" && done.length === 0) return `${VERB[p.kind]} nothing · failed${job?.error ? `: ${job.error}` : ""}`;
+  const count = p.status === "partial" ? `${done.length} of ${p.items.length} items` : n(done.length);
+  return `${VERB[p.kind]} ${count} · ${p.kind === "compress" ? "saved" : "freed"} ${humanBytes(freed)}`;
+}
+
 export function ProposalCard({ proposalId }: { proposalId: string }) {
+  const proposal = useStore((s) => s.proposals[proposalId]);
+  return (
+    <>
+      <ProposalBody proposalId={proposalId} />
+      {proposal?.follow_up_id && <ProposalCard key={proposal.follow_up_id} proposalId={proposal.follow_up_id} />}
+    </>
+  );
+}
+
+function ProposalBody({ proposalId }: { proposalId: string }) {
   const proposal = useStore((s) => s.proposals[proposalId]);
   const job = useStore((s) => (proposal?.job_id ? s.jobs[proposal.job_id] : undefined));
   const loadProposal = useStore((s) => s.loadProposal);
@@ -185,6 +210,7 @@ export function ProposalCard({ proposalId }: { proposalId: string }) {
   const [picked, setPicked] = useState<Set<number> | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     if (!proposal) void loadProposal(proposalId);
@@ -218,7 +244,7 @@ export function ProposalCard({ proposalId }: { proposalId: string }) {
       const res = await routes.approve(proposalId, [...selected]);
       putProposal({ ...proposal, status: "approved", job_id: res.job_id });
       void loadProposal(proposalId);
-      settle(proposalId, res);
+      if (!proposal.parent_id) settle(proposalId, res);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -231,7 +257,7 @@ export function ProposalCard({ proposalId }: { proposalId: string }) {
     try {
       const res = await routes.decline(proposalId);
       putProposal({ ...proposal, status: "declined" });
-      settle(proposalId, res);
+      if (!proposal.parent_id) settle(proposalId, res);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -251,15 +277,38 @@ export function ProposalCard({ proposalId }: { proposalId: string }) {
   const outcome = outcomeLine(proposal, job);
   const compressNote = proposal.kind === "compress" ? compressNoteFor(proposal.format) : null;
   const dedupe = proposal.kind === "dedupe" ? proposal.dedupe : null;
+  const ended = ENDED.includes(proposal.status) || (!!job && ["done", "failed", "cancelled"].includes(job.status));
   const permanentDelete = proposal.kind === "delete" || dedupe?.mode === "delete";
 
+  const marks = { "data-proposal-id": proposalId, "data-status": proposal.status, "data-follow-up": proposal.follow_up_id ?? undefined };
+  if (ended && !open) {
+    return (
+      <button
+        type="button"
+        {...marks}
+        data-collapsed=""
+        className="my-2 flex w-full items-baseline gap-2 rounded-xl border border-line bg-ink-850 px-3 py-1.5 text-left text-[length:var(--fs-sm)] text-muted hover:text-paper"
+        onClick={() => setOpen(true)}
+      >
+        <span className="min-w-0 flex-1 truncate">{collapsedLine(proposal, job)}</span>
+        <span className="shrink-0 text-faint">details ▸</span>
+      </button>
+    );
+  }
+
   return (
-    <div className="fade-up my-2 rounded-2xl border border-brass/40 bg-ink-850 p-3 shadow-sm" data-proposal-id={proposalId} data-status={proposal.status}>
+    <div className="fade-up my-2 rounded-2xl border border-brass/40 bg-ink-850 p-3 shadow-sm" {...marks}>
       <div className="flex items-baseline gap-2">
         <span className="font-[family-name:var(--font-display)] text-[length:var(--fs-md)] font-bold">
           {heading} · {proposal.kind === "compress" ? "up to" : "free"} {humanBytes(pending ? total : proposal.total_alloc)}
         </span>
-        <span className="ml-auto text-[length:var(--fs-xs)] text-faint">{proposal.status}</span>
+        {ended ? (
+          <button type="button" className="ml-auto text-[length:var(--fs-xs)] text-faint hover:text-paper" onClick={() => setOpen(false)}>
+            hide ▴
+          </button>
+        ) : (
+          <span className="ml-auto text-[length:var(--fs-xs)] text-faint">{proposal.status}</span>
+        )}
       </div>
       {proposal.summary && <p className="mt-1 text-[length:var(--fs-sm)] text-muted">{proposal.summary}</p>}
       {dedupe && (
@@ -276,6 +325,7 @@ export function ProposalCard({ proposalId }: { proposalId: string }) {
         ))}
       </ul>
 
+      <div data-proposal-foot="">
       {pending && (
         <>
           <div className="mt-2 text-[length:var(--fs-sm)] text-muted tabular-nums">
@@ -315,6 +365,7 @@ export function ProposalCard({ proposalId }: { proposalId: string }) {
       {running && (job ? <JobProgress job={job} /> : <div className="mt-2 text-[length:var(--fs-sm)] text-muted pulse-soft">Working...</div>)}
       {outcome && <div className={`mt-2 text-[length:var(--fs-sm)] font-semibold ${outcome.tone}`}>{outcome.text}</div>}
       {error && <div className="mt-2 text-[length:var(--fs-sm)] text-err">{error}</div>}
+      </div>
     </div>
   );
 }
