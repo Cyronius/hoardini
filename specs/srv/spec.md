@@ -120,6 +120,35 @@ inclusive; with neither, every point is returned. With no indexed volume the res
   3000, with their `free_bytes`; `since_ms=3000` starts at 3000; `until_ms=1000` ends at 1000.
 - No parameters returns every point in ascending order; an empty database returns `[]`.
 
+### SRV-INDEX-CHILDREN: One folder level for the inline tree
+**Applies to:** hoardini-server
+**Verification:** test
+
+`GET /api/index/children?path=<folder>&limit=<n>` (default 50, at most 1000) shall return `{path, size, files, children, small, more}` for an indexed folder. `children` are its direct children from the index, biggest first (ties by name), each `{path, name, kind ("dir" | "file" | "link"), size, files, mtime_ms, denied, has_children}`; `has_children` is true for a folder with any child row or folded small files. `small` is `{count, bytes}` of the files folded into this folder by the row threshold (INDEX-SMALL-FOLD), and `more` is `{count, bytes}` of the children past the limit. `path` may start with `~`, matches the index without regard to case, and every returned path shows the profile as `~`. A missing or non-absolute path is 400, a file is 400, and a path not in the index is 404.
+
+**Acceptance criteria:**
+- `C:\data` holding `models\` (300 + 100 MiB), `big.iso` (200 MiB), `cache\` (50 MiB), an empty folder, and two small files (4 KiB and 8 KiB allocated): `limit=2` returns `models` (`dir`, 400 MiB, 2 files, `has_children`) then `big.iso` (`file`, 1 file, no children), `small` `{count: 2, bytes: 12288}`, `more` `{count: 2, bytes: 50 MiB}`, `size` 650 MiB + 12288 and `files` 6.
+- `path=c:\DATA` with no limit lists `models`, `big.iso`, `cache`, `empty` in that order; `empty` has no children and `more` is zero.
+- `path=C:\data\big.iso` is 400, `C:\nope` is 404, and no `path` is 400.
+
+Test: `specs/srv/tests/srv.rs`.
+
+### SRV-REVEAL: Show in Explorer
+**Applies to:** hoardini-server
+**Verification:** test
+
+`POST /api/reveal {path}` shall run `explorer.exe /select,"<path>"` (the path quoted after the comma) and answer `{ok: true}` without waiting for Explorer. `path` may start with `~`. It starts nothing and refuses: a missing or empty path, a path that is not an absolute drive path, contains `"`, or has a `.` or `..` component (400); a path that is not a watched drive (INDEX-VOLUMES) or under one (403); a path that does not exist (404). The refusals are tested; opening Explorer is checked by hand.
+
+**Acceptance criteria:**
+- With `indexed_volumes` set to one scratch folder: `{}`, `{path: ""}` and `{path: "relative\x.txt"}` are 400; an existing file in another folder is 403; `<root>\..\<other>\x.txt` is 400; `<root>\missing.txt` is 404; every refusal is a JSON `error`.
+
+**Verification (manual, Explorer):**
+1. Start `hoardini serve --port 72xx --token dev --no-refresh` with `HOARDINI_DATA_DIR` and `--db` in a scratch folder, and watch a scratch folder holding `a b\c.txt` (`PUT /api/volumes`).
+2. `POST /api/reveal?token=dev` with `{"path": "<folder>\\a b\\c.txt"}`: Explorer opens `a b` with `c.txt` selected, and the answer is `{"ok":true}`.
+3. The same for `<folder>\\a b`: Explorer opens the scratch folder with `a b` selected.
+
+Test: `specs/srv/tests/srv.rs`.
+
 ### SRV-THREAD: One conversation and its window
 **Applies to:** hoardini-server
 **Verification:** test

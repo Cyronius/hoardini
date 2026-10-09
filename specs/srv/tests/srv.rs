@@ -1530,3 +1530,122 @@ async fn blank_timeout_steps_and_context_mean_the_defaults() {
     assert_eq!(list[0]["max_tool_steps"], 20);
     assert_eq!(list[0]["context_window"], 32768);
 }
+
+// Traces: SRV-INDEX-CHILDREN
+#[tokio::test(flavor = "multi_thread")]
+async fn index_children_lists_a_folder_biggest_first_with_its_small_files_and_the_rest() {
+    use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
+    use hoardini_core::store::Db;
+
+    const MIB: u64 = 1 << 20;
+    let f = Fixture::new().await;
+    let db = Db::open(f.dir.path().join("h.db")).unwrap();
+    let fs = FakeFs::new(r"C:\");
+    fs.file_alloc(r"C:\data\models\a.gguf", 300 * MIB, 300 * MIB);
+    fs.file_alloc(r"C:\data\models\b.gguf", 100 * MIB, 100 * MIB);
+    fs.file_alloc(r"C:\data\big.iso", 200 * MIB, 200 * MIB);
+    fs.file_alloc(r"C:\data\cache\c.bin", 50 * MIB, 50 * MIB);
+    fs.dir(r"C:\data\empty");
+    fs.file_alloc(r"C:\data\note.txt", 4096, 1000);
+    fs.file_alloc(r"C:\data\todo.txt", 8192, 5000);
+    let out = refresh(
+        &db.conn().unwrap(),
+        &fs,
+        fs.root(),
+        &RefreshOptions::default(),
+    )
+    .unwrap();
+    assert!(out.completed);
+
+    let (st, v) = f
+        .call("GET", "/api/index/children?path=C%3A%5Cdata&limit=2", None)
+        .await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["path"], r"C:\data");
+    assert_eq!(v["size"], 650 * MIB + 12288);
+    assert_eq!(v["files"], 6);
+    let kids = v["children"].as_array().unwrap();
+    assert_eq!(kids.len(), 2);
+    let models = &kids[0];
+    assert_eq!(models["path"], r"C:\data\models");
+    assert_eq!(models["name"], "models");
+    assert_eq!(models["kind"], "dir");
+    assert_eq!(models["size"], 400 * MIB);
+    assert_eq!(models["files"], 2);
+    assert_eq!(models["denied"], false);
+    assert_eq!(models["has_children"], true);
+    assert!(models.get("mtime_ms").is_some());
+    assert_eq!(kids[1]["path"], r"C:\data\big.iso");
+    assert_eq!(kids[1]["kind"], "file");
+    assert_eq!(kids[1]["files"], 1);
+    assert_eq!(kids[1]["has_children"], false);
+    assert_eq!(v["small"], json!({"count": 2, "bytes": 12288}));
+    assert_eq!(v["more"], json!({"count": 2, "bytes": 50 * MIB}));
+
+    let (_, all) = f
+        .call("GET", "/api/index/children?path=c%3A%5CDATA", None)
+        .await;
+    let names: Vec<&str> = all["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["models", "big.iso", "cache", "empty"]);
+    assert_eq!(all["children"][3]["has_children"], false);
+    assert_eq!(all["more"], json!({"count": 0, "bytes": 0}));
+
+    let (st, _) = f
+        .call(
+            "GET",
+            "/api/index/children?path=C%3A%5Cdata%5Cbig.iso",
+            None,
+        )
+        .await;
+    assert_eq!(st, 400, "a file has no children");
+    let (st, _) = f
+        .call("GET", "/api/index/children?path=C%3A%5Cnope", None)
+        .await;
+    assert_eq!(st, 404);
+    let (st, _) = f.call("GET", "/api/index/children", None).await;
+    assert_eq!(st, 400);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-REVEAL
+#[tokio::test(flavor = "multi_thread")]
+async fn reveal_refuses_paths_off_the_watched_drives_and_paths_that_do_not_exist() {
+    let f = Fixture::new().await;
+    let watched = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("x.txt"), b"x").unwrap();
+    let root = hoardini_core::index::normalize_path(&watched.path().to_string_lossy());
+    let other = hoardini_core::index::normalize_path(&outside.path().to_string_lossy());
+    {
+        let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+        hoardini_core::store::set_meta(
+            &db.conn().unwrap(),
+            "indexed_volumes",
+            &serde_json::to_string(&[&root]).unwrap(),
+        )
+        .unwrap();
+    }
+    let other_name = other.rsplit('\\').next().unwrap();
+    let cases = [
+        (json!({}), 400),
+        (json!({"path": ""}), 400),
+        (json!({"path": r"relative\x.txt"}), 400),
+        (json!({"path": format!(r"{other}\x.txt")}), 403),
+        (
+            json!({"path": format!(r"{root}\..\{other_name}\x.txt")}),
+            400,
+        ),
+        (json!({"path": format!(r"{root}\missing.txt")}), 404),
+    ];
+    for (body, want) in cases {
+        let (st, v) = f.call("POST", "/api/reveal", Some(body.clone())).await;
+        assert_eq!(st, want, "{body}: {v}");
+        assert!(v["error"].is_string(), "{v}");
+    }
+    let _ = f.h.shutdown.send(());
+}

@@ -27,6 +27,7 @@ mod state;
 mod status;
 mod stream;
 mod supervisor;
+mod tree;
 mod ui;
 mod volumes;
 

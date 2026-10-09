@@ -204,6 +204,50 @@ pub fn children(conn: &Connection, node_id: i64) -> Result<Vec<NodeInfo>> {
     Ok(out)
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ChildRow {
+    pub path: String,
+    pub name: String,
+    pub kind: NodeKind,
+    pub size: u64,
+    pub files: u64,
+    pub mtime_ms: Option<i64>,
+    pub denied: bool,
+    pub has_children: bool,
+}
+
+// One page of a folder's children, biggest first; the rest is counted into `more`.
+pub fn child_rows(conn: &Connection, node_id: i64, limit: usize) -> Result<Ranked<ChildRow>> {
+    let limit = limit.max(1);
+    let mut has_rows =
+        conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM node WHERE parent_id = ?1)")?;
+    let mut out = Ranked {
+        items: Vec::new(),
+        more_count: 0,
+        more_bytes: 0,
+    };
+    for n in children(conn, node_id)? {
+        if out.items.len() >= limit {
+            out.more_count += 1;
+            out.more_bytes += n.size;
+            continue;
+        }
+        let has_children = n.kind == NodeKind::Dir
+            && (n.small_count > 0 || has_rows.query_row([n.id], |r| r.get::<_, bool>(0))?);
+        out.items.push(ChildRow {
+            path: n.path,
+            name: n.name,
+            kind: n.kind,
+            size: n.size,
+            files: n.files,
+            mtime_ms: n.mtime_ms,
+            denied: n.denied,
+            has_children,
+        });
+    }
+    Ok(out)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ExtShare {
     pub ext: String,

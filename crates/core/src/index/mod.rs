@@ -20,9 +20,9 @@ pub use journal::{
 pub use lister::{DirLister, WinLister};
 pub use patch::{patch_removed, patch_rescan};
 pub use query::{
-    DirItem, ExtMix, ExtShare, FileItem, IndexStatus, NodeInfo, NodeKind, Ranked, TopFilesQuery,
-    children, compact_summary_for_prompt, ext_mix, humanize_age, index_status, node_by_path,
-    node_id_by_path, path_of, summary_for_prompt, top_dirs, top_files,
+    ChildRow, DirItem, ExtMix, ExtShare, FileItem, IndexStatus, NodeInfo, NodeKind, Ranked,
+    TopFilesQuery, child_rows, children, compact_summary_for_prompt, ext_mix, humanize_age,
+    index_status, node_by_path, node_id_by_path, path_of, summary_for_prompt, top_dirs, top_files,
 };
 pub use verify::{SnapRow, snapshot, verify_totals};
 pub use volumes::{
@@ -146,7 +146,7 @@ pub(crate) fn split_parent(p: &str) -> Option<(String, &str)> {
     Some((parent, name))
 }
 
-pub(crate) fn is_ancestor_path(a: &str, b: &str) -> bool {
+pub fn is_ancestor_path(a: &str, b: &str) -> bool {
     if b.len() <= a.len() || !b.is_char_boundary(a.len()) || !b[..a.len()].eq_ignore_ascii_case(a) {
         return false;
     }
