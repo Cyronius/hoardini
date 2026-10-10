@@ -32,13 +32,14 @@ The provider's `api_key` and any `secret://` header value shall be resolved thro
 **Applies to:** hoardini
 **Verification:** test
 
-Every request, for every provider, shall send each occurrence of the user's profile path (system prompt, index summary, user text, tool results, tool-call arguments, in plain, JSON-escaped or forward-slash spelling) as `~`. There is no setting: the provider profile has no `redact_paths` flag, and a stored profile that still carries one (either value) loads and is redacted anyway. Tool arguments that use `~` shall expand back to the profile path before a tool runs. Tool results shown in the UI always use `~`.
+Every request, for every provider, shall send each occurrence of the user's profile path (system prompt, index summary, user text, tool results, tool-call arguments, in plain, JSON-escaped or forward-slash spelling) as `~`. There is no setting: the provider profile has no `redact_paths` flag, and a stored profile that still carries one (either value) loads and is redacted anyway. Tool arguments that use `~` shall expand back to the profile path before a tool runs. Tool results shown in the UI always use `~`, and so does proposal JSON from the server (`GET /api/proposals/{id}` and the thread's `proposals`): the summary; each item's path, detail, reason, block reason, memory note and copy note; an operation's disk path and parts; and each dropped path and reason.
 
 **Acceptance criteria:**
 - With the profile injected as `C:\Users\zq_owner` and an index rooted there, no request body of a run that calls `top_files(under = "~\.lmstudio")` contains `zq_owner` in any case.
 - The user message `What is in C:\Users\zq_owner\.lmstudio?` is sent as `What is in ~\.lmstudio?`.
 - The `top_files` result sent back lists `~\.lmstudio\models\big.gguf`, and the system prompt's index summary uses `~\...`.
 - No AG-UI event of that run contains `zq_owner`.
+- A delete card for a file under the profile with a stored archive answer whose copy is also under the profile, plus a folder and a file inside it (dropped as covered), shows `copy_note` `archived copy at ~\...`, the dropped path and reason with `~\`, and no profile path anywhere in its JSON (`specs/srv/tests/srv.rs`).
 - A profile deserialized from stored JSON with `redact_paths: false` runs the same script and still sends `~\.lmstudio\models\big.gguf`, with no `zq_owner` in any request.
 
 ### AGENT-PROPOSE-ONLINE-ONLY: A tool for making synced files online-only

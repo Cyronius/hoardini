@@ -254,9 +254,19 @@ pub(crate) fn display_proposal(mut p: Proposal) -> Value {
         it.reason = it.reason.as_deref().map(redact);
         it.block_reason = it.block_reason.as_deref().map(redact);
         it.memory_note = it.memory_note.as_deref().map(redact);
-        if let Some(SystemOp::CompactVhdx { path }) = it.op.as_mut().map(|o| &mut o.op) {
-            *path = redact(path);
+        it.copy_note = it.copy_note.as_deref().map(redact);
+        if let Some(op) = it.op.as_mut() {
+            if let SystemOp::CompactVhdx { path } = &mut op.op {
+                *path = redact(path);
+            }
+            for part in &mut op.parts {
+                part.path = redact(&part.path);
+            }
         }
+    }
+    for d in &mut p.dropped {
+        d.path = redact(&d.path);
+        d.reason = redact(&d.reason);
     }
     for l in &mut p.learned {
         l.text = redact(&l.text);
