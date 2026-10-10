@@ -17,7 +17,7 @@ export function readyBytes(ps: (Proposal | undefined)[]): number {
   let n = 0;
   for (const p of ps) {
     if (p?.status !== "pending") continue;
-    for (const i of p.items) if (i.selected && i.status === "pending" && !i.block_reason) n += i.alloc;
+    for (const i of p.items) if (i.selected && i.status === "pending" && !i.block_reason) n += i.saves ?? i.alloc;
   }
   return n;
 }

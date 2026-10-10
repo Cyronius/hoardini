@@ -261,7 +261,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
               key={l.memory_id}
               text={l.text}
               url={l.url}
-              onUndo={() => routes.deleteMemory(l.memory_id)}
+              onUndo={() => routes.undoWebLearned(l)}
               onConfirm={() => routes.confirmMemory(l.memory_id)}
               confirmed={l.confirmed}
             />

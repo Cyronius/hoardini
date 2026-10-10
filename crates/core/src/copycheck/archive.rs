@@ -3,7 +3,10 @@ use std::path::Path;
 use rusqlite::OptionalExtension;
 use serde_json::json;
 
-use super::{Confidence, CopyCheck, CopyResult, Cx, Find, Found, Subject, with_note};
+use super::{
+    Confidence, CopyCheck, CopyResult, Cx, Find, Found, Subject, fingerprint, same_contents,
+    with_fingerprint, with_note,
+};
 
 pub struct ArchiveCheck;
 
@@ -13,7 +16,6 @@ impl ArchiveCheck {
 
 // File systems store mtimes coarser than milliseconds; a restored file keeps its original mtime.
 const MTIME_SLACK_MS: i64 = 2_000;
-const WALK_CAP: usize = 50_000;
 
 struct Entry {
     id: i64,
@@ -71,31 +73,6 @@ fn is_remote(uri: &str) -> bool {
     uri.starts_with(crate::destinations::rclone::URI_PREFIX)
 }
 
-fn tree_stats(dir: &Path) -> (u64, i64) {
-    let (mut bytes, mut newest, mut seen) = (0u64, 0i64, 0usize);
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(entries) = hoardini_win::list_dir(&d) else {
-            continue;
-        };
-        for e in entries {
-            seen += 1;
-            if seen > WALK_CAP {
-                return (bytes, newest);
-            }
-            newest = newest.max(e.mtime_ms);
-            if e.is_dir() {
-                if !e.is_reparse() {
-                    stack.push(d.join(&e.name));
-                }
-            } else if !e.is_link() {
-                bytes += e.logical;
-            }
-        }
-    }
-    (bytes, newest)
-}
-
 impl CopyCheck for ArchiveCheck {
     fn name(&self) -> &'static str {
         Self::NAME
@@ -109,10 +86,11 @@ impl CopyCheck for ArchiveCheck {
         entry_for(cx, path).is_some_and(|e| e.original.eq_ignore_ascii_case(path))
     }
 
-    fn still_valid(&self, _cx: &Cx<'_>, _s: &Subject, r: &CopyResult) -> bool {
+    fn still_valid(&self, _cx: &Cx<'_>, s: &Subject, r: &CopyResult) -> bool {
         r.locator
             .as_deref()
             .is_none_or(|l| is_remote(l) || Path::new(l).exists())
+            && same_contents(s, r)
     }
 
     fn find(&self, cx: &Cx<'_>, s: &Subject) -> anyhow::Result<Find> {
@@ -173,15 +151,15 @@ impl CopyCheck for ArchiveCheck {
             ));
         }
         let (size, newest) = if s.dir {
-            let (b, n) = tree_stats(Path::new(&s.path));
-            (b, Some(n))
+            let fp = fingerprint(Path::new(&s.path));
+            (fp.bytes, Some(fp.newest_ms))
         } else {
             (s.size, s.mtime)
         };
         let copy_size = if is_remote(&f.locator) {
             None
         } else if s.dir {
-            Some(tree_stats(Path::new(&f.locator)).0)
+            Some(fingerprint(Path::new(&f.locator)).bytes)
         } else {
             std::fs::metadata(&f.locator).ok().map(|m| m.len())
         };
@@ -205,11 +183,9 @@ impl CopyCheck for ArchiveCheck {
             ),
         };
         let locator = (conf != Confidence::None).then_some(f.locator);
-        Ok(CopyResult::new(
-            Self::NAME,
-            locator,
-            conf,
-            with_note(f.detail, note),
+        Ok(with_fingerprint(
+            CopyResult::new(Self::NAME, locator, conf, with_note(f.detail, note)),
+            s,
         ))
     }
 }

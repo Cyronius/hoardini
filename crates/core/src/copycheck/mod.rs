@@ -296,6 +296,70 @@ impl Subject {
     }
 }
 
+const FINGERPRINT_CAP: usize = 50_000;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fingerprint {
+    pub files: u64,
+    pub bytes: u64,
+    pub newest_ms: i64,
+}
+
+// A rewrite inside a folder moves none of the folder's own id, mtime or indexed size, but moves this.
+pub fn fingerprint(dir: &Path) -> Fingerprint {
+    let mut fp = Fingerprint::default();
+    let mut seen = 0usize;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = hoardini_win::list_dir(&d) else {
+            continue;
+        };
+        for e in entries {
+            seen += 1;
+            if seen > FINGERPRINT_CAP {
+                return fp;
+            }
+            fp.newest_ms = fp.newest_ms.max(e.mtime_ms);
+            if e.is_dir() {
+                if !e.is_reparse() {
+                    stack.push(d.join(&e.name));
+                }
+            } else {
+                fp.files += 1;
+                if !e.is_link() {
+                    fp.bytes += e.logical;
+                }
+            }
+        }
+    }
+    fp
+}
+
+pub(crate) fn with_fingerprint(mut r: CopyResult, s: &Subject) -> CopyResult {
+    if s.dir {
+        if !r.detail.is_object() {
+            r.detail = json!({});
+        }
+        r.detail["fingerprint"] = json!(fingerprint(Path::new(&s.path)));
+    }
+    r
+}
+
+// A folder's found copy holds only while its contents are the ones it was found for.
+pub(crate) fn same_contents(s: &Subject, r: &CopyResult) -> bool {
+    if !s.dir {
+        return true;
+    }
+    match r
+        .detail
+        .get("fingerprint")
+        .and_then(|v| serde_json::from_value::<Fingerprint>(v.clone()).ok())
+    {
+        Some(f) => fingerprint(Path::new(&s.path)) == f,
+        None => r.confidence == Confidence::None,
+    }
+}
+
 pub fn volume_id_of(conn: &Connection, path: &str) -> i64 {
     let Ok(mut st) = conn.prepare_cached("SELECT id, root FROM volume") else {
         return 0;
@@ -323,6 +387,7 @@ pub struct Found {
     pub detail: Value,
 }
 
+#[derive(Clone)]
 pub struct CheckEnv {
     pub profile: String,
     pub cloud: Arc<dyn Cloud>,
@@ -332,6 +397,8 @@ pub struct CheckEnv {
     pub consent: OnlineConsent,
     pub catalog: Option<Arc<crate::catalog::Catalog>>,
     pub ollama_models: Option<String>,
+    // The server's env: `run_volume` reads consent again before each candidate, so turning a service off stops it at once.
+    pub live_consent: bool,
 }
 
 impl CheckEnv {
@@ -347,6 +414,7 @@ impl CheckEnv {
             ollama_models: std::env::var("OLLAMA_MODELS")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            live_consent: true,
         }
     }
 
@@ -361,6 +429,7 @@ impl CheckEnv {
             consent: OnlineConsent::default(),
             catalog: None,
             ollama_models: None,
+            live_consent: false,
         }
     }
 
@@ -541,7 +610,7 @@ fn settled(cx: &Cx<'_>, s: &Subject, r: &CopyResult) -> bool {
     match r.pending() {
         None => true,
         Some("hash") => hash::current(cx.conn, s).is_none(),
-        Some("files") => hub::files_still_pending(cx, s),
+        Some("files") => hub::files_still_pending(cx, s, r),
         Some(_) => false,
     }
 }
@@ -551,6 +620,7 @@ pub struct Outcome {
     pub results: Vec<CopyResult>,
     pub waiting: Vec<Service>,
     pub needs_hash: bool,
+    pub hash_files: Vec<String>,
 }
 
 pub fn check_subject(cx: &Cx<'_>, reg: &Registry, s: &Subject) -> Outcome {
@@ -577,6 +647,7 @@ pub fn check_subject(cx: &Cx<'_>, reg: &Registry, s: &Subject) -> Outcome {
             && c.still_valid(cx, &s, r)
         {
             out.needs_hash |= r.pending() == Some("hash");
+            out.hash_files.extend(hub::hash_files(&s, r));
             out.results.push(r.clone());
             continue;
         }
@@ -597,6 +668,7 @@ pub fn check_subject(cx: &Cx<'_>, reg: &Registry, s: &Subject) -> Outcome {
                     tracing::debug!(path = %s.path, error = %e, "copy check not stored");
                 }
                 out.needs_hash |= r.pending() == Some("hash");
+                out.hash_files.extend(hub::hash_files(&s, &r));
                 out.results.push(r);
             }
             Err(e) => {
@@ -745,10 +817,13 @@ pub fn identical_for(
 ) -> Option<CopyResult> {
     let env = CheckEnv::offline(&policy.profile, policy.cloud().clone());
     let s = Subject::load(conn, path)?;
-    let fresh = check_subject(&Cx { conn, env: &env }, &Registry::standard(), &s).results;
-    let online = current(conn, &s)
-        .into_iter()
-        .filter(|r| r.check == HubCheck::NAME || r.check == WingetCheck::NAME);
+    let reg = Registry::standard();
+    let cx = Cx { conn, env: &env };
+    let fresh = check_subject(&cx, &reg, &s).results;
+    let online = current(conn, &s).into_iter().filter(|r| {
+        (r.check == HubCheck::NAME || r.check == WingetCheck::NAME)
+            && reg.get(&r.check).is_some_and(|c| c.still_valid(&cx, &s, r))
+    });
     fresh.into_iter().chain(online).find(|r| {
         r.confidence == Confidence::Identical
             && r.pending().is_none()
@@ -866,6 +941,10 @@ pub struct RunReport {
 // Answers for paths that are gone would otherwise stay in the table for good.
 pub fn prune(conn: &Connection, volume_root: &str) -> anyhow::Result<usize> {
     let root = index::normalize_path(volume_root);
+    // An unplugged drive's paths read as missing too; its answers wait for it to come back.
+    if std::fs::metadata(&root).is_err() {
+        return Ok(0);
+    }
     let mut st = conn.prepare(
         "SELECT DISTINCT c.path FROM copy_check c JOIN volume v ON v.id = c.volume_id          WHERE v.root = ?1 COLLATE NOCASE",
     )?;
@@ -893,9 +972,16 @@ pub fn run_volume(
     go: &dyn Fn() -> bool,
 ) -> anyhow::Result<RunReport> {
     let conn = db.conn()?;
-    let cx = Cx { conn: &conn, env };
+    let mut env = env.clone();
     let pruned = prune(&conn, volume_root)?;
-    let list = candidates(&cx, reg, volume_root)?;
+    let list = candidates(
+        &Cx {
+            conn: &conn,
+            env: &env,
+        },
+        reg,
+        volume_root,
+    )?;
     let mut report = RunReport {
         pruned,
         candidates: list.len(),
@@ -911,17 +997,37 @@ pub fn run_volume(
         let Some(s) = Subject::load(&conn, &c.path) else {
             continue;
         };
-        let o = check_subject(&cx, reg, &s);
+        if env.live_consent {
+            env.consent = consent::load(&conn);
+        }
+        let o = check_subject(
+            &Cx {
+                conn: &conn,
+                env: &env,
+            },
+            reg,
+            &s,
+        );
         report.checked += 1;
         report.online_waiting += usize::from(!o.waiting.is_empty());
         if o.needs_hash && !s.dir && hash::current(&conn, &s).is_none() {
             to_hash.push(s.clone());
         }
-        if o.needs_hash {
+        for p in &o.hash_files {
+            if let Some(f) = Subject::load(&conn, p)
+                && hash::current(&conn, &f).is_none()
+                && !to_hash.iter().any(|t| t.path.eq_ignore_ascii_case(&f.path))
+            {
+                to_hash.push(f);
+            }
+        }
+        if o.needs_hash || !o.hash_files.is_empty() {
             waiting.push(s);
         }
     }
     to_hash.sort_by(|a, b| b.size.cmp(&a.size));
+    // A folder waits on its big files' own answers, so those are asked again first.
+    waiting.sort_by_key(|s| s.dir);
     for s in to_hash {
         match hash::hash_subject(&conn, &s, go) {
             Ok(Some(_)) => {
@@ -940,7 +1046,21 @@ pub fn run_volume(
     }
     // A duplicate's answer needs both hashes, so everything that waited is asked again once all are in.
     for s in waiting {
-        check_subject(&cx, reg, &s);
+        if !go() {
+            report.stopped = true;
+            return Ok(report);
+        }
+        if env.live_consent {
+            env.consent = consent::load(&conn);
+        }
+        check_subject(
+            &Cx {
+                conn: &conn,
+                env: &env,
+            },
+            reg,
+            &s,
+        );
     }
     Ok(report)
 }

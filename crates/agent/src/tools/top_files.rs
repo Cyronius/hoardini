@@ -107,6 +107,9 @@ impl Tool for TopFiles {
                 json!({"path": f.path, "size": f.size, "modified_ms": f.mtime_ms, "accessed_ms": f.atime_ms})
             })
             .collect();
+        let Some(as_of) = as_of_ms(&conn, under.as_deref()) else {
+            return Ok(Outcome::text(out));
+        };
         let data = json!({
             "v": DATA_VERSION,
             "kind": "files",
@@ -116,7 +119,7 @@ impl Tool for TopFiles {
                 "ext": a.ext,
                 "not_used_for_days": a.not_used_for,
             },
-            "as_of_ms": as_of_ms(&conn, under.as_deref()),
+            "as_of_ms": as_of,
             "items": items,
             "more": {"count": r.more_count, "bytes": r.more_bytes},
         });

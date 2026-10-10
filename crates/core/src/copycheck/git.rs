@@ -42,6 +42,7 @@ impl Git<'_> {
     // Read-only commands, and fsmonitor off: a repo's config could otherwise run a program on `status`.
     fn run(&self, args: &[&str]) -> anyhow::Result<(bool, String)> {
         let out = Command::new(self.exe)
+            .arg("--no-optional-locks")
             .arg("-C")
             .arg(self.root)
             .args(["-c", "core.fsmonitor=false", "-c", "core.quotepath=off"])
@@ -90,6 +91,34 @@ pub fn parse_status(out: &str) -> Status {
         }
     }
     s
+}
+
+// With core.ignorecase, `status` says nothing about a path whose letter case differs from its index entry.
+pub fn index_trouble(listed: &str, rel: &str, dir: bool) -> Option<&'static str> {
+    let entries: Vec<(char, &str)> = listed
+        .split('\0')
+        .filter_map(|e| {
+            let (tag, name) = e.split_once(' ')?;
+            Some((tag.chars().next()?, name))
+        })
+        .collect();
+    let prefix = format!("{rel}/");
+    let exact = |n: &str| {
+        if dir {
+            rel == "." || n.starts_with(&prefix)
+        } else {
+            n == rel
+        }
+    };
+    if entries.is_empty() {
+        Some("not tracked by git")
+    } else if entries.iter().any(|(_, n)| !exact(n)) {
+        Some("tracked by git under another letter case")
+    } else if entries.iter().any(|(t, _)| *t != 'H') {
+        Some("git is told to skip changes to it (assume-unchanged or skip-worktree)")
+    } else {
+        None
+    }
 }
 
 // Credentials never leave the URL: `https://user:token@host/x.git` becomes `host/x`.
@@ -145,6 +174,7 @@ impl CopyCheck for GitCheck {
             root: &root,
         };
         let rel = rel(&root, path);
+        let spec = format!(":(literal){rel}");
         let (ok, out) = git.run(&[
             "status",
             "--porcelain=v1",
@@ -152,7 +182,7 @@ impl CopyCheck for GitCheck {
             "--untracked-files=all",
             "--ignored=matching",
             "--",
-            &rel,
+            &spec,
         ])?;
         if !ok {
             anyhow::bail!("git status failed in {}", root.display());
@@ -185,6 +215,14 @@ impl CopyCheck for GitCheck {
                 note,
             )));
         }
+        let icase = format!(":(literal,icase){rel}");
+        let (ok, listed) = git.run(&["ls-files", "-z", "-v", "--", &icase])?;
+        if !ok {
+            anyhow::bail!("git ls-files failed in {}", root.display());
+        }
+        if let Some(note) = index_trouble(&listed, &rel, s.dir) {
+            return Ok(Find::NoCopy(with_note(json!({"root": root_s}), note)));
+        }
         let Some(upstream) =
             git.line(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
         else {
@@ -206,7 +244,7 @@ impl CopyCheck for GitCheck {
                 "@{u}",
                 "HEAD",
                 "--",
-                &rel,
+                &spec,
             ])?;
             if !same {
                 let note = format!("changed in {ahead} commit(s) not pushed to {upstream}");
@@ -261,6 +299,21 @@ mod tests {
             }
         );
         assert_eq!(parse_status(""), Status::default());
+    }
+
+    #[test]
+    fn index_entries_must_match_case_and_carry_no_skip_flag() {
+        assert_eq!(index_trouble("H a/b.bin\0", "a/b.bin", false), None);
+        assert_eq!(
+            index_trouble("H a/b.bin\0", "A/b.bin", false),
+            Some("tracked by git under another letter case")
+        );
+        assert_eq!(index_trouble("H sub/x\0H sub/y\0", "sub", true), None);
+        assert!(index_trouble("H sub/x\0H Sub/y\0", "sub", true).is_some());
+        assert!(index_trouble("h sub/x\0", "sub", true).is_some());
+        assert!(index_trouble("S x\0", "x", false).is_some());
+        assert_eq!(index_trouble("", "x", false), Some("not tracked by git"));
+        assert_eq!(index_trouble("H x\0H y/z\0", ".", true), None);
     }
 
     #[test]

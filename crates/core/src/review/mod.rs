@@ -6,7 +6,7 @@ pub mod units;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-use crate::catalog::{Category, Entry};
+use crate::catalog::{Category, Entry, UnitKind};
 use crate::cloud::SyncRoot;
 use crate::compress::{self, CompressCandidate};
 use crate::destinations::{self, Destination};
@@ -120,6 +120,7 @@ fn target(
     }
 }
 
+// A volume review replaces the drive's folder reviews too, so their untouched cards never hide items from it.
 fn replaceable(
     conn: &Connection,
     volume_id: i64,
@@ -128,7 +129,7 @@ fn replaceable(
     let mut st = conn.prepare(
         "SELECT p.id FROM proposal p JOIN review r ON r.id = p.review_id \
          WHERE p.status = 'pending' AND p.touched = 0 AND r.volume_id = ?1 \
-         AND ((?2 IS NULL AND r.scope_path IS NULL) OR r.scope_path = ?2 COLLATE NOCASE)",
+         AND (?2 IS NULL OR r.scope_path = ?2 COLLATE NOCASE)",
     )?;
     let ids = st
         .query_map(params![volume_id, folder], |r| r.get(0))?
@@ -258,6 +259,15 @@ fn with_cleaned(conn: &Connection, env: &PolicyEnv, p: &mut Pick) -> anyhow::Res
     Ok(())
 }
 
+struct Assigned<'a> {
+    unit: &'a Unit,
+    entry: Option<&'a Entry>,
+    admin: bool,
+    not_build: bool,
+    card: Option<usize>,
+    gone: Vec<Pick>,
+}
+
 pub fn build(
     db: &Db,
     env: &PolicyEnv,
@@ -265,8 +275,9 @@ pub fn build(
     scope: Scope,
     now: i64,
 ) -> anyhow::Result<Review> {
-    let conn = db.conn()?;
+    let mut conn = db.conn()?;
     let (volume_id, volume, folder) = target(&conn, env, &scope)?;
+    drop_orphans(&conn)?;
     if folder.is_none() {
         location::refresh_volume(&conn, env, &volume, now)?;
     }
@@ -276,6 +287,11 @@ pub fn build(
     let replacing = replaceable(&conn, volume_id, folder.as_deref())?;
     let taken = taken(&conn, &replacing, now)?;
     let is_taken = |p: &str| taken.paths.iter().any(|t| overlaps(t, p));
+    // A contents unit's parts are split one by one below, so one taken part leaves the others in.
+    let unit_taken = |u: &Unit| match u.kind {
+        UnitKind::Contents => taken.paths.iter().any(|t| same_or_under(t, &u.path)),
+        _ => is_taken(&u.path),
+    };
     let cx = Cx {
         conn: &conn,
         env,
@@ -295,15 +311,22 @@ pub fn build(
     };
     let catalog = env.catalog();
     let mut chosen: Vec<Vec<Pick>> = CARDS.iter().map(|_| Vec::new()).collect();
-    let mut left = Vec::new();
+    let mut assigned = Vec::new();
     for u in &units {
-        if is_taken(&u.path) {
+        if unit_taken(u) {
             continue;
         }
         let entry = u.catalog_id.as_deref().and_then(|id| catalog.get(id));
         let seen = Seen::new(u, entry, needs_admin(env, u, entry));
         let synced = cx.synced(&u.path);
-        let mut claimed = 0;
+        let mut a = Assigned {
+            unit: u,
+            entry,
+            admin: seen.admin && u.why != Why::Kept,
+            not_build: entry.is_some_and(|e| !cards::is_build_output(&cx, u, e)),
+            card: None,
+            gone: Vec::new(),
+        };
         for (i, c) in CARDS.iter().enumerate() {
             let online = c.kind == ProposalKind::OnlineOnly;
             if synced && !online {
@@ -328,7 +351,8 @@ pub fn build(
             if keep.is_empty() && gone.is_empty() {
                 continue;
             }
-            claimed = claimed_by(u, &gone) + claimed_by(u, &keep);
+            a.card = Some(i);
+            a.gone = gone;
             for p in keep {
                 if !chosen[i]
                     .iter()
@@ -339,27 +363,91 @@ pub fn build(
             }
             break;
         }
-        left.push(areas::Left {
-            unit: u,
-            entry,
-            admin: seen.admin && u.why != Why::Kept,
-            not_build: entry.is_some_and(|e| !cards::is_build_output(&cx, u, e)),
-            claimed: claimed.min(u.size),
-        });
+        assigned.push(a);
     }
+    // A folder holding or inside another card's item would be compressed and then deleted or moved.
+    if let Some(ci) = CARDS.iter().position(|c| c.kind == ProposalKind::Compress) {
+        let others: Vec<String> = chosen
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != ci)
+            .flat_map(|(_, ps)| ps.iter().map(|p| p.path.clone()))
+            .collect();
+        chosen[ci].retain(|p| !others.iter().any(|o| overlaps(o, &p.path)));
+    }
+    let left: Vec<areas::Left> = assigned
+        .iter()
+        .map(|a| areas::Left {
+            unit: a.unit,
+            entry: a.entry,
+            admin: a.admin,
+            not_build: a.not_build,
+            claimed: a
+                .card
+                .map_or(0, |i| {
+                    claimed_by(a.unit, &a.gone) + claimed_by(a.unit, &chosen[i])
+                })
+                .min(a.unit.size),
+        })
+        .collect();
     let areas = areas::collect(&cx, &left, &units, &root, &volume)?;
 
     let id = uuid::Uuid::now_v7().to_string();
-    conn.execute(
-        "INSERT INTO review(id, volume_id, scope_path, scan_id, created_ms, areas_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, volume_id, folder, scan_id, now, serde_json::to_string(&areas)?],
-    )?;
-    let min = if folder.is_some() { 1 } else { CARD_MIN_BYTES };
+    let mut created = Vec::new();
+    let made = make_cards(
+        db,
+        env,
+        &cx,
+        chosen,
+        &Target {
+            review_id: &id,
+            volume: &volume,
+            folder: folder.as_deref(),
+        },
+        &taken.ops,
+        &mut created,
+    );
+    drop(cx);
+    let row = NewRow {
+        id: &id,
+        volume_id,
+        folder: folder.as_deref(),
+        scan_id,
+        now,
+        areas_json: serde_json::to_string(&areas)?,
+    };
+    if let Err(e) = made.and_then(|()| publish(&mut conn, &row, &replacing, &created, now)) {
+        discard(&conn, &created);
+        return Err(e);
+    }
+    get(&conn, &id)?.ok_or_else(|| anyhow::anyhow!("review vanished"))
+}
+
+struct Target<'a> {
+    review_id: &'a str,
+    volume: &'a str,
+    folder: Option<&'a str>,
+}
+
+fn make_cards(
+    db: &Db,
+    env: &PolicyEnv,
+    cx: &Cx,
+    chosen: Vec<Vec<Pick>>,
+    t: &Target,
+    taken_ops: &[String],
+    created: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    let min = if t.folder.is_some() {
+        1
+    } else {
+        CARD_MIN_BYTES
+    };
     for (c, mut picks) in CARDS.iter().zip(chosen) {
         picks.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
         let total: u64 = picks.iter().map(|p| p.size).sum();
         let card = ReviewCard {
-            review_id: id.clone(),
+            review_id: t.review_id.to_string(),
             card: c.id.into(),
             ticked: c.ticked,
         };
@@ -373,10 +461,11 @@ pub fn build(
                     })
                     .collect()
             });
-            let system =
-                (folder.is_none() && system_volume(env, &volume)).then_some(volume.as_str());
-            if let Err(e) = windows_card(db, env, c, parts, system, &taken.ops, &card) {
-                tracing::warn!(card = c.id, error = %e, "review card not created");
+            let system = (t.folder.is_none() && system_volume(env, t.volume)).then_some(t.volume);
+            match windows_card(db, env, c, parts, system, taken_ops, &card) {
+                Ok(Some(p)) => created.push(p),
+                Ok(None) => {}
+                Err(e) => tracing::warn!(card = c.id, error = %e, "review card not created"),
             }
             continue;
         }
@@ -413,7 +502,7 @@ pub fn build(
                 .collect(),
         };
         match proposals::create_review_card(db, env, req, &card) {
-            Ok(Ok(_)) => {}
+            Ok(Ok(p)) => created.push(p.id),
             Ok(Err(dropped)) => {
                 tracing::info!(
                     card = c.id,
@@ -424,13 +513,113 @@ pub fn build(
             Err(e) => tracing::warn!(card = c.id, error = %e, "review card not created"),
         }
     }
-    for p in &replacing {
-        conn.execute(
+    Ok(())
+}
+
+struct NewRow<'a> {
+    id: &'a str,
+    volume_id: i64,
+    folder: Option<&'a str>,
+    scan_id: Option<i64>,
+    now: i64,
+    areas_json: String,
+}
+
+// The review becomes visible here, at once with its cards and the supersede, so nothing reads it half built.
+fn publish(
+    conn: &mut Connection,
+    row: &NewRow,
+    replacing: &[String],
+    created: &[String],
+    now: i64,
+) -> anyhow::Result<()> {
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for p in replacing {
+        tx.execute(
             "UPDATE proposal SET status = 'superseded' WHERE id = ?1 AND status = 'pending' AND touched = 0",
             [p],
         )?;
     }
-    get(&conn, &id)?.ok_or_else(|| anyhow::anyhow!("review vanished"))
+    // A card ticked, decided or made while this one was built keeps its items; the new cards give them up.
+    let live = taken(&tx, created, now)?;
+    for id in created {
+        strip(&tx, id, &live)?;
+    }
+    tx.execute(
+        "INSERT INTO review(id, volume_id, scope_path, scan_id, created_ms, areas_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![row.id, row.volume_id, row.folder, row.scan_id, row.now, row.areas_json],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn strip(conn: &Connection, id: &str, live: &Taken) -> anyhow::Result<()> {
+    let (kind, params): (String, String) = conn.query_row(
+        "SELECT kind, params_json FROM proposal WHERE id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if kind == ProposalKind::SystemCleanup.as_str() {
+        let v: serde_json::Value = serde_json::from_str(&params).unwrap_or_default();
+        let clash = v["ops"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|o| o["op"].as_str())
+            .any(|op| live.ops.iter().any(|t| t == op));
+        if clash {
+            discard(conn, &[id.to_string()]);
+        }
+        return Ok(());
+    }
+    let mut st = conn.prepare("SELECT id, path FROM proposal_item WHERE proposal_id = ?1")?;
+    let items = st
+        .query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let gone: Vec<i64> = items
+        .iter()
+        .filter(|(_, p)| live.paths.iter().any(|t| overlaps(t, p)))
+        .map(|(i, _)| *i)
+        .collect();
+    if gone.is_empty() {
+        return Ok(());
+    }
+    if gone.len() == items.len() {
+        discard(conn, &[id.to_string()]);
+        return Ok(());
+    }
+    for i in gone {
+        conn.execute("DELETE FROM proposal_item WHERE id = ?1", [i])?;
+    }
+    conn.execute(
+        "UPDATE proposal SET total_alloc = (SELECT COALESCE(SUM(alloc), 0) FROM proposal_item \
+         WHERE proposal_id = ?1 AND status != 'blocked') WHERE id = ?1",
+        [id],
+    )?;
+    Ok(())
+}
+
+// Cards of a build that never published belong to no review; they are dropped, not left holding their items.
+fn discard(conn: &Connection, ids: &[String]) {
+    for id in ids {
+        let gone = conn.execute(
+            "DELETE FROM proposal WHERE id = ?1 AND status = 'pending' AND touched = 0",
+            [id],
+        );
+        if gone.is_ok_and(|n| n > 0) {
+            let _ = conn.execute("DELETE FROM proposal_item WHERE proposal_id = ?1", [id]);
+        }
+    }
+}
+
+// A build the process never finished left cards with no review row; they would hold their items for good.
+fn drop_orphans(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE proposal SET status = 'superseded' WHERE review_id IS NOT NULL AND status = 'pending' \
+         AND touched = 0 AND NOT EXISTS (SELECT 1 FROM review r WHERE r.id = proposal.review_id)",
+        [],
+    )?;
+    Ok(())
 }
 
 // The leftovers the walk found, plus what Windows' own tools could free on the system drive.
@@ -442,7 +631,7 @@ fn windows_card(
     system_volume: Option<&str>,
     taken_ops: &[String],
     card: &ReviewCard,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<String>> {
     let mut ops: Vec<syscleanup::CleanupCandidate> = Vec::new();
     ops.extend(leftovers.and_then(syscleanup::leftovers_candidate));
     if let Some(volume) = system_volume {
@@ -453,9 +642,9 @@ fn windows_card(
     }
     ops.retain(|o| !taken_ops.iter().any(|t| t == o.op.name()));
     if ops.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-    proposals::create_system_cleanup_card(
+    let p = proposals::create_system_cleanup_card(
         db,
         NewSystemCleanup {
             conversation_id: Some(CONVERSATION.into()),
@@ -466,7 +655,7 @@ fn windows_card(
         },
         Some(card),
     )?;
-    Ok(())
+    Ok(Some(p.id))
 }
 
 // Estimates the scope's biggest compress candidates; true when that made a folder proposable that the review does not hold.
@@ -478,6 +667,11 @@ pub fn compress_estimates(
 ) -> anyhow::Result<bool> {
     let conn = db.conn()?;
     let before = compress::candidates(&conn, env, review.root(), now)?;
+    let was: Vec<String> = before
+        .iter()
+        .filter(|c| c.proposable())
+        .map(|c| c.path.clone())
+        .collect();
     let held: Vec<String> = proposal_ids(&conn, &review.id)?
         .into_iter()
         .filter_map(|id| proposals::get(db, &id).ok().flatten())
@@ -487,9 +681,20 @@ pub fn compress_estimates(
     if compress::estimate_top(db, &before, compress::ESTIMATE_TOP)? == 0 {
         return Ok(false);
     }
+    // Only a folder this pass made proposable can change the card, and only one the review would not leave out.
+    let replacing = replaceable(&conn, review.volume_id, review.scope_path.as_deref())?;
+    let taken = taken(&conn, &replacing, now)?;
+    let roots = env.cloud().roots();
+    let listed = |list: &[String], p: &str| list.iter().any(|x| x.eq_ignore_ascii_case(p));
     Ok(compress::candidates(&conn, env, review.root(), now)?
         .iter()
-        .any(|c| c.proposable() && !held.iter().any(|h| h.eq_ignore_ascii_case(&c.path))))
+        .any(|c| {
+            c.proposable()
+                && !listed(&was, &c.path)
+                && !listed(&held, &c.path)
+                && !taken.paths.iter().any(|t| overlaps(t, &c.path))
+                && !touches_sync(&roots, &c.path)
+        }))
 }
 
 // Built again only while nobody has touched it and nothing newer replaced it.
@@ -537,13 +742,13 @@ pub fn get(conn: &Connection, id: &str) -> anyhow::Result<Option<Review>> {
     let Some((volume_id, volume, scope_path, scan_id, created_ms, areas_json)) = head else {
         return Ok(None);
     };
-    // A touched card of an earlier review stays live, so it is listed here; so is a live follow-up of a finished one.
+    // Touched cards of earlier reviews (a volume review's include folder reviews') stay live, so they are listed here.
     let mut st = conn.prepare(
         "SELECT p.id, p.card, p.review_id != ?1 FROM proposal p WHERE p.review_id = ?1 AND p.parent_id IS NULL \
          UNION ALL \
          SELECT p.id, p.card, 1 FROM proposal p JOIN review r ON r.id = p.review_id \
          WHERE r.volume_id = ?2 AND r.id != ?1 AND r.created_ms <= ?3 \
-         AND ((?4 IS NULL AND r.scope_path IS NULL) OR r.scope_path = ?4 COLLATE NOCASE) \
+         AND (?4 IS NULL OR r.scope_path = ?4 COLLATE NOCASE) \
          AND p.touched = 1 AND p.status IN ('pending', 'approved', 'running') \
          AND (p.parent_id IS NULL OR NOT EXISTS (SELECT 1 FROM proposal q WHERE q.id = p.parent_id \
               AND q.status IN ('pending', 'approved', 'running'))) \
@@ -646,6 +851,23 @@ pub fn open(
     }
 }
 
+// The open route's background job: a build that ran while this one was queued may have left a fresh review.
+pub fn build_if_stale(
+    db: &Db,
+    env: &PolicyEnv,
+    lister: &dyn DirLister,
+    volume_id: i64,
+    now: i64,
+) -> anyhow::Result<Option<Review>> {
+    let conn = db.conn()?;
+    if let Some(r) = latest(&conn, volume_id, None)?
+        && !needs_rerun(&conn, &r, now)?
+    {
+        return Ok(None);
+    }
+    build(db, env, lister, Scope::Volume(volume_id), now).map(Some)
+}
+
 pub fn rebuild_if_untouched(
     db: &Db,
     env: &PolicyEnv,
@@ -663,11 +885,14 @@ pub fn rebuild_if_untouched(
     build(db, env, lister, Scope::Volume(volume_id), now).map(Some)
 }
 
+// A compress item frees what its estimate saves, not its folder's size.
 pub fn ready_bytes(conn: &Connection, review_id: &str) -> anyhow::Result<i64> {
     let mut total = 0;
     for id in proposal_ids(conn, review_id)? {
         total += conn.query_row(
-            "SELECT COALESCE(SUM(i.alloc), 0) FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id \
+            "SELECT COALESCE(SUM(CASE WHEN p.kind = 'compress' THEN COALESCE(e.saved_bytes, i.alloc) \
+             ELSE i.alloc END), 0) FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id \
+             LEFT JOIN compress_estimate e ON p.kind = 'compress' AND e.path = i.path \
              WHERE p.id = ?1 AND p.status = 'pending' AND i.status = 'pending' AND i.selected = 1",
             [&id],
             |r| r.get::<_, i64>(0),

@@ -85,13 +85,17 @@ impl Tool for TopDirs {
             .iter()
             .map(|d| json!({"path": d.path, "size": d.size, "files": d.files, "denied": d.denied}))
             .collect();
+        // With no refresh yet there is nothing to show, so no card (AGENT-TOOL-DATA).
+        let Some(as_of) = as_of_ms(&conn, under.as_deref()) else {
+            return Ok(Outcome::text(out));
+        };
         let data = json!({
             "v": DATA_VERSION,
             "kind": "folders",
             "under": under,
             "depth": depth,
             "view": view,
-            "as_of_ms": as_of_ms(&conn, under.as_deref()),
+            "as_of_ms": as_of,
             "items": items,
             "more": {"count": r.more_count, "bytes": r.more_bytes},
         });

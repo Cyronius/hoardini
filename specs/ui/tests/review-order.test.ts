@@ -57,6 +57,11 @@ describe("UI-REVIEW-ORDER", () => {
     expect(readyBytes([pending, declined, undefined])).toBe(10 * GB);
   });
 
+  it("counts a compress item by what its estimate saves, not its size", () => {
+    const compress = { ...prop("c", "pending", [item(7.5, true, { saves: Math.round(3.2 * GB) }), item(2, true)]), kind: "compress" as const };
+    expect(readyBytes([compress])).toBe(Math.round(3.2 * GB) + 2 * GB);
+  });
+
   it("follows a card into its follow-ups and stops on a loop", () => {
     const ps = { a: prop("a", "done", [], "b"), b: prop("b", "pending", [], "c"), c: prop("c", "pending", []) };
     expect(chainOf("a", ps).map((p) => p.id)).toEqual(["a", "b", "c"]);

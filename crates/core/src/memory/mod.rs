@@ -339,7 +339,7 @@ pub fn delete(conn: &Connection, id: i64) -> anyhow::Result<bool> {
     Ok(conn.execute("DELETE FROM memory WHERE id = ?1", [id])? > 0)
 }
 
-pub(crate) fn compile_glob(key: &str) -> anyhow::Result<GlobMatcher> {
+pub fn compile_glob(key: &str) -> anyhow::Result<GlobMatcher> {
     Ok(GlobBuilder::new(&key.replace('\\', "/"))
         .case_insensitive(true)
         .literal_separator(true)

@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -779,6 +779,14 @@ fn a_folder_worth_compressing_is_a_compress_card_once_its_estimate_is_in() {
         k.items[0].reason.as_deref(),
         Some("Windows compression would save about 1.2 GB (40% of it); the files stay usable.")
     );
+    assert_eq!(k.items[0].saves, Some(1229 * MIB));
+    assert_eq!(review::ready_bytes(&conn, &r.id).unwrap(), 0, "unticked");
+    proposals::select(&d.db, &k.id, &[k.items[0].id]).unwrap();
+    assert_eq!(
+        review::ready_bytes(&conn, &r.id).unwrap(),
+        (1229 * MIB) as i64,
+        "what compressing saves, not the 3 GiB folder"
+    );
 }
 
 fn sparse(path: &str, len: u64) {
@@ -1059,6 +1067,338 @@ fn the_windows_card_holds_the_leftovers_and_what_only_windows_tools_free() {
             .any(|a| a.path.to_lowercase().ends_with(r"\temp")),
         "what a declined card held stays out of Large areas too"
     );
+}
+
+fn paths(p: &Proposal) -> Vec<String> {
+    p.items.iter().map(|i| i.path.clone()).collect()
+}
+
+// Fires `act` once, while the build lists `code\proj` for its `Cargo.toml`: after the replaced cards were read.
+fn during_build(d: &Disk, act: impl Fn() + Send + Sync + 'static) -> Arc<AtomicBool> {
+    let fired = Arc::new(AtomicBool::new(false));
+    let (proj, f) = (d.path(r"code\proj"), fired.clone());
+    d.fs.on_list(move |p| {
+        if p.eq_ignore_ascii_case(&proj) && !f.swap(true, Ordering::SeqCst) {
+            act();
+        }
+    });
+    fired
+}
+
+fn race_fixture() -> (Disk, i64, String) {
+    let d = Disk::new();
+    let temp = d.folder(r"~\AppData\Local\Temp\old", "x.bin", 2 * GIB);
+    d.folder(r"code\proj\target", "app.exe", 3 * GIB);
+    d.file(r"code\proj\Cargo.toml", 1024);
+    let vid = d.index();
+    (d, vid, temp)
+}
+
+// Traces: REVIEW-SUPERSEDE
+#[test]
+fn a_card_decided_or_ticked_while_a_review_builds_keeps_its_items_out_of_the_new_one() {
+    let (d, vid, _) = race_fixture();
+    let t1 = d.card(&d.review(Scope::Volume(vid), NOW), "temp").unwrap();
+    let (db, id) = (d.db.clone(), t1.id.clone());
+    let fired = during_build(&d, move || {
+        proposals::decline(&db, &id).unwrap();
+    });
+    let second = d.review(Scope::Volume(vid), NOW + HOUR);
+    d.fs.clear_hook();
+    assert!(fired.load(Ordering::SeqCst));
+    assert_eq!(d.status(&t1.id), "declined");
+    assert!(
+        d.card(&second, "temp").is_none(),
+        "declined during the build, so out for 30 days"
+    );
+
+    let (d, vid, temp) = race_fixture();
+    let t3 = d.card(&d.review(Scope::Volume(vid), NOW), "temp").unwrap();
+    let ids: Vec<i64> = t3.items.iter().map(|i| i.id).collect();
+    let (db, id) = (d.db.clone(), t3.id.clone());
+    during_build(&d, move || {
+        proposals::select(&db, &id, &ids).unwrap();
+    });
+    let fourth = d.review(Scope::Volume(vid), NOW + HOUR);
+    d.fs.clear_hook();
+    assert_eq!(d.status(&t3.id), "pending");
+    let holding: Vec<(String, bool)> = fourth
+        .cards
+        .iter()
+        .filter(|c| paths(&proposals::get(&d.db, &c.proposal_id).unwrap().unwrap()).contains(&temp))
+        .map(|c| (c.proposal_id.clone(), c.carried))
+        .collect();
+    assert_eq!(holding, [(t3.id.clone(), true)], "one live card holds it");
+    let conn = d.db.conn().unwrap();
+    assert_eq!(
+        review::ready_bytes(&conn, &fourth.id).unwrap(),
+        (5 * GIB) as i64,
+        "the temp folder counts once, beside the build card"
+    );
+}
+
+// Traces: REVIEW-TRIGGER, REVIEW-SUPERSEDE
+#[test]
+fn a_review_shows_as_latest_only_once_all_its_cards_are_in() {
+    let d = Disk::new();
+    for i in 0..40 {
+        d.folder(
+            &format!(r"~\AppData\Local\Temp\old-{i:02}"),
+            "scratch.bin",
+            600 * MIB,
+        );
+    }
+    d.folder(r"code\proj\target", "app.exe", 3 * GIB);
+    d.file(r"code\proj\Cargo.toml", 1024);
+    d.folder(r"code\web\node_modules", "big.js", 1536 * MIB);
+    let vid = d.index();
+    let first = d.review(Scope::Volume(vid), NOW);
+    let old: Vec<String> = first.cards.iter().map(|c| c.proposal_id.clone()).collect();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let seen: Arc<Mutex<Vec<(String, usize, usize)>>> = Arc::default();
+    let poller = {
+        let (db, stop, seen, old) = (d.db.clone(), stop.clone(), seen.clone(), old.clone());
+        std::thread::spawn(move || {
+            let c = db.conn().unwrap();
+            while !stop.load(Ordering::SeqCst) {
+                if let Ok(Some(r)) = review::latest(&c, vid, None) {
+                    let pending_old = old
+                        .iter()
+                        .filter(|id| {
+                            c.query_row("SELECT status FROM proposal WHERE id = ?1", [id], |r| {
+                                r.get::<_, String>(0)
+                            })
+                            .is_ok_and(|s| s == "pending")
+                        })
+                        .count();
+                    seen.lock()
+                        .unwrap()
+                        .push((r.id, r.cards.len(), pending_old));
+                }
+            }
+        })
+    };
+    let second = d.review(Scope::Volume(vid), NOW + 7 * HOUR);
+    stop.store(true, Ordering::SeqCst);
+    poller.join().unwrap();
+    let seen = seen.lock().unwrap();
+    assert!(!seen.is_empty());
+    for (id, cards, pending_old) in seen.iter() {
+        if *id == second.id {
+            assert_eq!(*cards, second.cards.len(), "seen half built");
+            assert_eq!(*pending_old, 0, "seen beside the cards it replaces");
+        } else {
+            assert_eq!(*id, first.id);
+        }
+    }
+}
+
+// Traces: REVIEW-SUPERSEDE
+#[test]
+fn a_volume_review_replaces_a_folder_reviews_untouched_cards_and_carries_its_touched_ones() {
+    let d = Disk::new();
+    let target = d.folder(r"code\proj\target", "app.exe", 3 * GIB);
+    d.file(r"code\proj\Cargo.toml", 1024);
+    let temp = d.folder(r"~\AppData\Local\Temp\old", "x.bin", 2 * GIB);
+    let vid = d.index();
+    let tf = d
+        .card(&d.review(Scope::Folder(d.path("~")), NOW), "temp")
+        .unwrap();
+    assert_eq!(paths(&tf), std::slice::from_ref(&temp));
+    proposals::select(&d.db, &tf.id, &[]).unwrap();
+    let folder = d.review(Scope::Folder(d.path("code")), NOW);
+    let fb = d.card(&folder, "build").unwrap();
+    let again = d.review(Scope::Volume(vid), NOW + HOUR);
+    assert_eq!(d.status(&fb.id), "superseded");
+    let b = d
+        .card(&again, "build")
+        .expect("the volume review proposes it");
+    assert_eq!(paths(&b), std::slice::from_ref(&target));
+    assert_eq!(d.status(&tf.id), "pending");
+    let listed = again
+        .cards
+        .iter()
+        .find(|c| c.proposal_id == tf.id)
+        .expect("the folder review's touched card is listed");
+    assert!(listed.carried);
+    assert_eq!(
+        again.cards.iter().filter(|c| c.card == "temp").count(),
+        1,
+        "and not proposed again"
+    );
+}
+
+// Traces: REVIEW-BUILD
+#[test]
+fn one_temp_part_in_a_chat_card_leaves_the_other_parts_in_the_temp_card() {
+    let d = Disk::new();
+    let a = d.folder(r"~\AppData\Local\Temp\old-a", "x.bin", 2 * GIB);
+    let b = d.folder(r"~\AppData\Local\Temp\old-b", "y.bin", 2 * GIB);
+    let vid = d.index();
+    d.chat_card(&[&a]);
+    let r = d.review(Scope::Volume(vid), NOW);
+    let t = d.card(&r, "temp").expect("a temp card");
+    assert_eq!(paths(&t), std::slice::from_ref(&b));
+}
+
+// Traces: REVIEW-UNITS, REVIEW-BUILD
+#[test]
+fn a_protected_temp_part_is_a_kept_unit_of_its_own() {
+    use hoardini_core::memory::{Kind as MemKind, NewMemory, remember_with};
+    let d = Disk::new();
+    let a = d.folder(r"~\AppData\Local\Temp\old-a", "x.bin", 2 * GIB);
+    let b = d.folder(r"~\AppData\Local\Temp\old-b", "y.bin", 2 * GIB);
+    let vid = d.index();
+    remember_with(
+        &d.db.conn().unwrap(),
+        NewMemory::new(
+            MemScope::Path,
+            &a,
+            MemKind::Protect,
+            "My session logs",
+            "user",
+        ),
+        NOW,
+        &d.profile,
+    )
+    .unwrap();
+    let units = review::units::resolve(
+        &d.db.conn().unwrap(),
+        &d.env,
+        &d.fs,
+        &d.path(r"~\AppData\Local\Temp"),
+        NOW,
+    )
+    .unwrap();
+    let kept = units
+        .iter()
+        .find(|u| u.path == a)
+        .expect("a unit of its own");
+    assert_eq!(kept.why, review::units::Why::Kept);
+    let temp = units
+        .iter()
+        .find(|u| u.parts.iter().any(|p| p.path == b))
+        .unwrap();
+    assert!(!temp.parts.iter().any(|p| p.path == a));
+    let r = d.review(Scope::Volume(vid), NOW);
+    assert_eq!(
+        paths(&d.card(&r, "temp").unwrap()),
+        std::slice::from_ref(&b)
+    );
+}
+
+fn store_estimate(d: &Disk, corpus: &str) {
+    let conn = d.db.conn().unwrap();
+    let c = compress::candidates(&conn, &d.env, &d.root, NOW).unwrap();
+    let cc = c.iter().find(|c| c.path == corpus).unwrap();
+    conn.execute(
+        "INSERT INTO compress_estimate(path, size, newest_ms, logical, saved_bytes, ratio, estimated_ms) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 0.6, 0)",
+        rusqlite::params![
+            corpus,
+            cc.size as i64,
+            cc.newest_ms,
+            (3 * GIB) as i64,
+            (1229 * MIB) as i64
+        ],
+    )
+    .unwrap();
+}
+
+// Traces: REVIEW-TRIGGER, ACT-COMPRESS-CANDIDATES
+#[test]
+fn estimates_report_no_rebuild_for_a_folder_the_review_leaves_out() {
+    let d = Disk::new();
+    let corpus = compress_fixture(&d);
+    let small = d.path(r"other\small");
+    std::fs::create_dir_all(&small).unwrap();
+    for i in 0..3 {
+        let p = format!(r"{small}\part{i}.txt");
+        std::fs::write(&p, b"x").unwrap();
+        d.fs.file(&p, GIB);
+    }
+    let vid = d.index();
+    store_estimate(&d, &corpus);
+    d.chat_card(&[&corpus]);
+    let r = d.review(Scope::Volume(vid), NOW);
+    assert!(d.card(&r, "compress").is_none(), "a chat card holds it");
+    assert!(
+        !review::compress_estimates(&d.db, &d.env, &r, NOW).unwrap(),
+        "nothing the review could hold became proposable"
+    );
+}
+
+// Traces: REVIEW-BUILD, ACT-COMPRESS-CANDIDATES
+#[test]
+fn a_compress_folder_holding_a_redownload_item_is_left_out() {
+    let d = Disk::new();
+    let corpus = compress_fixture(&d);
+    let part0 = format!(r"{corpus}\part0.txt");
+    std::fs::write(&part0, b"x").unwrap();
+    let vid = d.index();
+    store_copy(
+        &d,
+        &part0,
+        "archive",
+        Confidence::Identical,
+        r"archived copy at D:\arch\part0.txt (verified when archived)",
+    );
+    store_estimate(&d, &corpus);
+    let r = d.review(Scope::Volume(vid), NOW);
+    assert_eq!(
+        paths(&d.card(&r, "redownload").unwrap()),
+        std::slice::from_ref(&part0)
+    );
+    assert!(
+        d.card(&r, "compress").is_none(),
+        "compressing the folder would compress what the other card deletes"
+    );
+}
+
+// Traces: REVIEW-TRIGGER
+#[test]
+fn an_open_queued_behind_an_exclusive_build_builds_nothing_once_that_review_is_fresh() {
+    let d = Disk::new();
+    d.folder(r"~\AppData\Local\Temp\old", "x.bin", 2 * GIB);
+    let vid = d.index();
+    let builds = Builds::new(|| NOW, || {});
+    let (in_ex, started) = std::sync::mpsc::channel::<()>();
+    let (go, gate) = std::sync::mpsc::channel::<()>();
+    let ex = {
+        let (b, db, env) = (builds.clone(), d.db.clone(), d.env.clone());
+        std::thread::spawn(move || {
+            b.exclusive(|now| {
+                in_ex.send(()).unwrap();
+                gate.recv().unwrap();
+                review::build(&db, &env, &WinLister, Scope::Volume(vid), now).unwrap();
+            })
+        })
+    };
+    started.recv().unwrap();
+    let conn = d.db.conn().unwrap();
+    let job = {
+        let (db, env) = (d.db.clone(), d.env.clone());
+        move |now: i64| review::build_if_stale(&db, &env, &WinLister, vid, now).map(|_| ())
+    };
+    assert!(matches!(
+        builds.open(&conn, vid, job).unwrap(),
+        Opened::Building(None)
+    ));
+    go.send(()).unwrap();
+    ex.join().unwrap();
+    builds.wait();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM review", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        n, 1,
+        "the queued build found the exclusive one's review fresh"
+    );
+    assert!(matches!(
+        builds.open(&conn, vid, |_| Ok(())).unwrap(),
+        Opened::Ready(_)
+    ));
 }
 
 // Traces: MEM-LOCATION, REVIEW-UNITS, POLICY-VERDICT-CAP

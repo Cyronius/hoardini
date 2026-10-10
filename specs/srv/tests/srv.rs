@@ -2205,6 +2205,14 @@ async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart
         .call("POST", "/api/review/run", Some(json!({"path": r"C:\nope"})))
         .await;
     assert_eq!(st, 404);
+    let (st, _) = f
+        .call(
+            "POST",
+            "/api/review/run",
+            Some(json!({"path": r"C:\code\covenant-agent\models\m.dat"})),
+        )
+        .await;
+    assert_eq!(st, 400, "a file is no folder to review");
 
     seed_drive(&dbp);
     let (_, stale) = f.call("POST", "/api/review/open", None).await;
@@ -2458,6 +2466,18 @@ async fn the_server_keeps_a_cards_ticks_and_any_change_or_decision_touches_it() 
         .call("PUT", &url, Some(json!({"item_ids": [999_999]})))
         .await;
     assert_eq!(st, 409);
+    let idb = p.items.iter().find(|i| i.id != ida).unwrap().id;
+    db.conn()
+        .unwrap()
+        .execute(
+            "UPDATE proposal_item SET status = 'blocked', block_reason = 'Not found' WHERE id = ?1",
+            [idb],
+        )
+        .unwrap();
+    let (st, v) = f
+        .call("PUT", &url, Some(json!({"item_ids": [ida, idb]})))
+        .await;
+    assert_eq!(st, 409, "a blocked item, whatever its reason says: {v}");
     let (st, _) = f
         .call(
             "PUT",
@@ -2709,6 +2729,29 @@ async fn index_map_tags_each_block_with_what_hoardini_knows() {
 }
 
 // Traces: SRV-INDEX-MAP
+#[test]
+fn a_watched_folders_breadcrumbs_start_at_the_folder_the_index_holds() {
+    use hoardini_core::explore;
+    use hoardini_core::index::{FakeFs, RefreshOptions, node_by_path, refresh};
+    use hoardini_core::policy::PolicyEnv;
+    let dir = tempfile::tempdir().unwrap();
+    let db = hoardini_core::store::Db::open(dir.path().join("h.db")).unwrap();
+    let fs = FakeFs::new(r"C:\x\proj");
+    fs.file(r"C:\x\proj\sub\a.bin", 50 * MIB);
+    fs.file(r"C:\x\proj\sub\deep\b.bin", 30 * MIB);
+    let conn = db.conn().unwrap();
+    assert!(
+        refresh(&conn, &fs, r"C:\x\proj", &RefreshOptions::default())
+            .unwrap()
+            .completed
+    );
+    let deep = node_by_path(&conn, r"C:\x\proj\sub\deep").unwrap().unwrap();
+    let m = explore::map(&conn, &PolicyEnv::system(), &deep, 1000, 1000, 5000).unwrap();
+    let crumbs: Vec<&str> = m.ancestors.iter().map(|c| c.path.as_str()).collect();
+    assert_eq!(crumbs, [r"C:\x\proj", r"C:\x\proj\sub"], "each crumb opens");
+}
+
+// Traces: SRV-INDEX-MAP
 #[tokio::test(flavor = "multi_thread")]
 async fn index_map_stops_at_the_node_cap_and_still_adds_up() {
     use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
@@ -2842,6 +2885,69 @@ async fn explore_focus_is_stored_cleared_and_forgotten_on_restart() {
         .await;
     assert_eq!(st, 400, "{v}");
     assert_eq!(explore::focus(&conn), None);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-LEARNED, AGENT-WEB-LEARN
+#[tokio::test(flavor = "multi_thread")]
+async fn a_web_learned_chips_undo_deletes_only_the_row_it_names() {
+    use hoardini_core::memory::knowledge::{Detail, remember_filetype};
+    let f = Fixture::new().await;
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let text = ".q4nx: NPU model weights (FastFlowLM).";
+    let (ty, _) = remember_filetype(
+        &db.conn().unwrap(),
+        "q4nx",
+        text,
+        "web:https://example.test/flm",
+        Detail {
+            category: "model-weights".into(),
+            ..Detail::default()
+        },
+        1,
+    )
+    .unwrap();
+    let path = format!("/api/learned/web/{}", ty.id);
+    let wrong = f
+        .call(
+            "DELETE",
+            &path,
+            Some(json!({"key": r"**\*.zzq", "text": text})),
+        )
+        .await;
+    assert_eq!(wrong.0, 404, "{}", wrong.1);
+    let (st, _) = f
+        .call("DELETE", &path, Some(json!({"key": ty.key, "text": text})))
+        .await;
+    assert_eq!(st, 200);
+    assert_eq!(
+        f.call("DELETE", &path, Some(json!({"key": ty.key, "text": text})))
+            .await
+            .0,
+        404
+    );
+
+    let (st, note) = f
+        .call(
+            "POST",
+            "/api/memory",
+            Some(json!({"scope": "path", "key": r"C:\tax", "kind": "protect", "text": "Never touch my tax files"})),
+        )
+        .await;
+    assert_eq!(st, 200);
+    assert_eq!(note["id"].as_i64(), Some(ty.id), "the id was reused");
+    assert_eq!(
+        f.call("DELETE", &path, Some(json!({"key": ty.key, "text": text})))
+            .await
+            .0,
+        404,
+        "the chip's Undo never reaches the protect note"
+    );
+    assert!(
+        hoardini_core::memory::get(&db.conn().unwrap(), ty.id)
+            .unwrap()
+            .is_some()
+    );
     let _ = f.h.shutdown.send(());
 }
 

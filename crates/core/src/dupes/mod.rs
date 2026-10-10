@@ -314,7 +314,7 @@ fn persist(
     found: HashMap<(u64, String), Vec<Cand>>,
     unsettled: &HashSet<u64>,
 ) -> Result<Vec<DupGroup>> {
-    let tx = conn.unchecked_transaction()?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
     let now = now_ms();
     let mut kept_paths: HashSet<String> = HashSet::new();
     let mut result = Vec::new();

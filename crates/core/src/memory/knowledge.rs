@@ -175,7 +175,7 @@ pub fn upsert_with(
     Ok((m, true))
 }
 
-// The user vouches for what a row says the folder or type is; a verdict still needs the catalog, a job or the user's answer.
+// A user row is never reassessed, so a classifier's or a job's verdict stays; a web or model verdict never rises.
 pub fn confirm(
     conn: &Connection,
     id: i64,
@@ -188,10 +188,15 @@ pub fn confirm(
     let Some(detail) = m.detail else {
         anyhow::bail!("memory {id} is a note; only location and file-type rows can be confirmed");
     };
-    let detail = Detail {
-        verdict: None,
-        actions: Vec::new(),
-        ..detail
+    let trusted = is_classifier(&m.source) || m.source == "job" || m.source.starts_with("job:");
+    let detail = if trusted {
+        detail
+    } else {
+        Detail {
+            verdict: None,
+            actions: Vec::new(),
+            ..detail
+        }
     };
     let k = Knowledge {
         scope: m.scope,
@@ -202,6 +207,40 @@ pub fn confirm(
         detail,
     };
     upsert_with(conn, k, now, profile).map(|(m, _)| Some(m))
+}
+
+// What a web search's Learned chip names, so its Undo and a reload never act on a row whose id was reused.
+pub fn learned_row(
+    conn: &Connection,
+    id: i64,
+    key: Option<&str>,
+    text: &str,
+    profile: &str,
+) -> anyhow::Result<Option<Memory>> {
+    let Some(m) = get(conn, id)? else {
+        return Ok(None);
+    };
+    let same_key = key.is_none_or(|k| {
+        super::normalize_key_with(m.scope, k, profile).eq_ignore_ascii_case(&m.key)
+    });
+    let same_text = m.text == text || paths::redact_with(&m.text, profile) == text;
+    // A user row at the key is the chip's own row only while it reads as confirmed, not as a later answer.
+    let ours = (m.source.starts_with("web:") && (key.is_some() || same_text))
+        || (m.source == "user" && same_text);
+    Ok((m.detail.is_some() && same_key && ours).then_some(m))
+}
+
+pub fn forget_learned(
+    conn: &Connection,
+    id: i64,
+    key: Option<&str>,
+    text: &str,
+    profile: &str,
+) -> anyhow::Result<bool> {
+    match learned_row(conn, id, key, text, profile)? {
+        Some(m) => super::delete(conn, m.id),
+        None => Ok(false),
+    }
 }
 
 pub(crate) fn set_detail(conn: &Connection, id: i64, detail: &Detail) -> anyhow::Result<()> {

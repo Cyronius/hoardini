@@ -328,7 +328,9 @@ function ProposalBody({ proposalId, title, note }: { proposalId: string; title?:
 
   const pending = proposal.status === "pending";
   const running = proposal.status === "approved" || proposal.status === "running";
-  const total = proposal.items.filter((i) => selected.has(i.id)).reduce((a, i) => a + i.alloc, 0);
+  // A compress item frees what its estimate saves, not its size (REVIEW-BUILD).
+  const worth = (i: ProposalItem) => i.saves ?? i.alloc;
+  const total = proposal.items.filter((i) => selected.has(i.id)).reduce((a, i) => a + worth(i), 0);
   const toggle = (id: number) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
@@ -410,7 +412,8 @@ function ProposalBody({ proposalId, title, note }: { proposalId: string; title?:
   const permanentDelete = proposal.kind === "delete" || dedupe?.mode === "delete" || irreversible.length > 0;
   // "free 0 B" reads like a broken card; with nothing ticked the heading says what could go.
   const nothingPicked = pending && selected.size === 0;
-  const choosable = proposal.items.filter((i) => !i.block_reason && i.status === "pending").reduce((a, i) => a + i.alloc, 0);
+  const choosable = proposal.items.filter((i) => !i.block_reason && i.status === "pending").reduce((a, i) => a + worth(i), 0);
+  const saves = proposal.kind === "compress" && proposal.items.some((i) => i.saves != null);
 
   const marks = { "data-proposal-id": proposalId, "data-status": proposal.status, "data-follow-up": proposal.follow_up_id ?? undefined };
   const learned = ended
@@ -448,8 +451,8 @@ function ProposalBody({ proposalId, title, note }: { proposalId: string; title?:
     <div className="@container fade-up my-2 rounded-2xl border border-brass/40 bg-ink-850 p-3 shadow-sm" {...marks}>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <span className="font-[family-name:var(--font-display)] text-[length:var(--fs-md)] font-bold">
-          {heading} · {proposal.kind === "compress" || nothingPicked ? "up to" : system && unknownSize ? "free at least" : "free"}{" "}
-          {humanBytes(nothingPicked ? choosable : pending ? total : proposal.total_alloc)}
+          {heading} · {saves ? "saves about" : proposal.kind === "compress" || nothingPicked ? "up to" : system && unknownSize ? "free at least" : "free"}{" "}
+          {humanBytes(nothingPicked ? choosable : pending ? total : saves ? proposal.items.reduce((a, i) => a + worth(i), 0) : proposal.total_alloc)}
         </span>
         {note && (
           <span data-note="" className="shrink-0 rounded-full border border-line bg-ink-900 px-2 py-px text-[length:var(--fs-xs)] font-semibold text-muted">

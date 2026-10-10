@@ -203,7 +203,16 @@ impl Client {
         rb: reqwest::RequestBuilder,
         headers_within: Option<Duration>,
     ) -> Result<reqwest::Response, ProviderError> {
-        for attempt in 1..=MAX_ATTEMPTS {
+        self.send_attempts(rb, headers_within, MAX_ATTEMPTS).await
+    }
+
+    async fn send_attempts(
+        &self,
+        rb: reqwest::RequestBuilder,
+        headers_within: Option<Duration>,
+        attempts: u32,
+    ) -> Result<reqwest::Response, ProviderError> {
+        for attempt in 1..=attempts {
             let req = rb
                 .try_clone()
                 .ok_or_else(|| ProviderError::Config("request body cannot be retried".into()))?;
@@ -222,7 +231,7 @@ impl Client {
             if super::error::is_daily_quota(&body) {
                 return Err(ProviderError::DailyQuota(super::error::excerpt(&body)));
             }
-            if attempt == MAX_ATTEMPTS {
+            if attempt == attempts {
                 return Err(ProviderError::RateLimited(super::error::excerpt(&body)));
             }
             let wait = wait
@@ -357,6 +366,21 @@ impl Client {
         let rb = decorate(http.post(cfg.endpoint("chat/completions")), cfg, key)
             .json(&build_body(cfg, req, false));
         let resp = self.send_retrying(rb, None).await?;
+        let text = resp.text().await.map_err(map_reqwest)?;
+        assemble_body(&text)
+    }
+
+    // One attempt: a 429 ends it at once, for requests nobody waits on (web learning before RUN_FINISHED).
+    pub async fn chat_once(
+        &self,
+        cfg: &ProviderConfig,
+        key: Option<&str>,
+        req: &ChatRequest,
+    ) -> Result<AssembledTurn, ProviderError> {
+        let http = http_client(cfg, true)?;
+        let rb = decorate(http.post(cfg.endpoint("chat/completions")), cfg, key)
+            .json(&build_body(cfg, req, false));
+        let resp = self.send_attempts(rb, None, 1).await?;
         let text = resp.text().await.map_err(map_reqwest)?;
         assemble_body(&text)
     }

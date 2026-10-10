@@ -121,7 +121,7 @@ async fn a_search_about_a_type_ends_in_one_small_request_and_an_identity_row() {
     );
 
     let payload = json!({"v": 1, "kind": "learned", "items": [
-        {"memory_id": row.id, "text": ".q4nx: NPU model weights (FastFlowLM).", "url": FLM, "confirmed": false}
+        {"memory_id": row.id, "key": r"**\*.q4nx", "text": ".q4nx: NPU model weights (FastFlowLM).", "url": FLM, "confirmed": false}
     ]});
     let data = custom(&ev, "tool_data");
     assert_eq!(data.len(), 1);
@@ -303,4 +303,189 @@ async fn a_remember_on_the_same_key_or_an_unreadable_reply_stores_nothing() {
     assert_eq!(web_rows, 0);
     let notes = tool_content(&mock.requests()[2], "r1");
     assert!(notes.starts_with("Noted as memory"), "{notes}");
+}
+
+// Traces: AGENT-WEB-LEARN
+#[test]
+fn a_learned_chip_whose_row_is_gone_is_dropped_and_never_reaches_a_reused_id() {
+    use hoardini_agent::provider::{ChatMessage, ToolCallMsg};
+    use hoardini_agent::thread::Stored;
+    use hoardini_core::memory::knowledge::forget_learned;
+    let h = Harness::new(Some(FAKE_PROFILE));
+    thread::ingest(
+        &h.db,
+        "t-gone",
+        None,
+        &[msg("u1", "user", "What are .q4nx files?")],
+        1,
+    )
+    .unwrap();
+    let mut a = ChatMessage::text("assistant", "");
+    a.tool_calls = Some(vec![ToolCallMsg::new(
+        "s1",
+        "web_search",
+        r#"{"query":"q4nx","about":"*.q4nx"}"#,
+    )]);
+    let mut conn = h.db.conn().unwrap();
+    thread::append_all_at(
+        &mut conn,
+        "t-gone",
+        &[
+            Stored {
+                id: "a1".into(),
+                msg: a,
+            },
+            Stored {
+                id: "r1".into(),
+                msg: thread::tool_msg("s1", "results"),
+            },
+        ],
+        2,
+    )
+    .unwrap();
+    let (m, _) = remember_filetype(
+        &conn,
+        "q4nx",
+        ".q4nx: NPU model weights (FastFlowLM).",
+        &format!("web:{FLM}"),
+        Detail {
+            category: "model-weights".into(),
+            ..Detail::default()
+        },
+        3,
+    )
+    .unwrap();
+    let item =
+        json!({"memory_id": m.id, "key": m.key, "text": m.text, "url": FLM, "confirmed": false});
+    thread::set_ui(
+        &conn,
+        "r1",
+        &json!({"v": 1, "kind": "learned", "items": [item]}),
+    )
+    .unwrap();
+    let items = |h: &Harness| {
+        thread::agui_messages(&h.db, "t-gone", Some(FAKE_PROFILE))
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == "r1")
+            .and_then(|x| x.data)
+            .unwrap()["items"]
+            .clone()
+    };
+    assert_eq!(items(&h).as_array().unwrap().len(), 1);
+
+    assert!(memory::delete(&conn, m.id).unwrap());
+    let protect = memory::remember_with(
+        &conn,
+        NewMemory::new(
+            Scope::Path,
+            r"C:\Users\zq_owner\Documents\tax",
+            MemKind::Protect,
+            "Never touch my tax files",
+            "user",
+        ),
+        4,
+        FAKE_PROFILE,
+    )
+    .unwrap();
+    assert_eq!(protect.id, m.id, "the id was reused");
+    assert_eq!(items(&h), json!([]), "the chip is gone after a reload");
+    assert!(
+        !forget_learned(&conn, m.id, Some(&m.key), &m.text, FAKE_PROFILE).unwrap(),
+        "its Undo cannot delete the protect note"
+    );
+    assert!(memory::get(&conn, protect.id).unwrap().is_some());
+}
+
+// Traces: AGENT-WEB-LEARN
+#[test]
+fn the_first_complete_json_object_of_the_reply_is_read() {
+    use hoardini_agent::tools::parse_identity;
+    let flm = Some("FastFlowLM".to_string());
+    let one = r#"{"app": "FastFlowLM", "use": "NPU model weights", "category": "model-weights"}"#;
+    assert_eq!(parse_identity(one).unwrap().app, flm);
+    let trailing = format!("{one} Sources: {{1}}");
+    assert_eq!(parse_identity(&trailing).unwrap().app, flm);
+    let two = format!("{one}\n{{\"app\": \"other\", \"use\": \"x\"}}");
+    assert_eq!(parse_identity(&two).unwrap().app, flm);
+    let lead = format!("From result {{1}}: {one}");
+    assert_eq!(parse_identity(&lead).unwrap().app, flm);
+    assert!(parse_identity("no json {here}").is_none());
+}
+
+// Traces: AGENT-WEB-SEARCH
+#[tokio::test(flavor = "multi_thread")]
+async fn a_glob_that_matches_only_a_folder_above_is_not_already_known() {
+    let h = Harness::new(Some(FAKE_PROFILE));
+    with_search(&h).await;
+    memory::remember_with(
+        &h.db.conn().unwrap(),
+        NewMemory::new(
+            Scope::Glob,
+            r"~\code\**\target",
+            MemKind::Fact,
+            "Rust build output",
+            "user",
+        ),
+        1_800_000_000_000,
+        FAKE_PROFILE,
+    )
+    .unwrap();
+    let c = ctx(&h, FAKE_PROFILE, "g1");
+    let r = Registry::full();
+    let below = content(r.call(
+        &c,
+        "web_search",
+        r#"{"query": "debug folder", "about": "~\\code\\x\\target\\debug"}"#,
+    ));
+    assert!(below.starts_with("<<<UNTRUSTED_WEB_CONTENT"), "{below}");
+    let at = content(r.call(
+        &c,
+        "web_search",
+        r#"{"query": "target folder", "about": "~\\code\\x\\target"}"#,
+    ));
+    assert!(
+        at.starts_with("Already known: Rust build output (from you"),
+        "{at}"
+    );
+}
+
+// Traces: AGENT-WEB-LEARN
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rate_limited_learning_request_is_not_retried_before_the_run_ends() {
+    let h = Harness::new(Some(FAKE_PROFILE));
+    with_search(&h).await;
+    let mock = MockLlm::start(vec![
+        Turn::Calls(
+            None,
+            vec![call(
+                "s1",
+                "web_search",
+                json!({"query": "q4nx file format", "about": "*.q4nx"}),
+            )],
+        ),
+        Turn::Text("They are FastFlowLM NPU weights.".into()),
+        Turn::Http(429, r#"{"error": {"message": "slow down"}}"#.into()),
+        Turn::Text(r#"{"app": "FastFlowLM", "use": "NPU model weights"}"#.into()),
+    ])
+    .await;
+    let started = std::time::Instant::now();
+    let ev = h
+        .run(
+            h.provider(&mock.base_url),
+            user("t-429", "u1", "What are .q4nx files?"),
+        )
+        .await;
+    assert_valid_sequence(&ev);
+    assert_eq!(
+        mock.requests().len(),
+        3,
+        "the 429 ends the learning request"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "no backoff before RUN_FINISHED"
+    );
+    assert!(custom(&ev, "tool_data").is_empty());
+    assert!(filetype(&h.db.conn().unwrap(), "q4nx").unwrap().is_none());
 }

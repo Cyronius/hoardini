@@ -192,6 +192,29 @@ fn real_directory_sizes_and_counts() {
     assert_consistent(&e);
 }
 
+// Traces: SRV-INDEX-CHILDREN, INDEX-HARDLINK-ONCE
+#[test]
+fn a_hard_link_duplicate_lists_at_zero_so_child_rows_add_up() {
+    let fs = FakeFs::new(r"C:\");
+    fs.file(r"C:\b\model.gguf", 200 * MIB);
+    fs.hard_link(r"C:\b\model.gguf", r"C:\a\copy.gguf");
+    fs.file(r"C:\b\other.bin", 5 * MIB);
+    let e = env();
+    run(&e, &fs, r"C:\", 2);
+    let conn = e.db.conn().unwrap();
+    let b = node_by_path(&conn, r"C:\b").unwrap().unwrap();
+    let page = index::child_rows(&conn, b.id, 50).unwrap();
+    let rows: Vec<(&str, u64, u64)> = page
+        .items
+        .iter()
+        .map(|c| (c.name.as_str(), c.size, c.files))
+        .collect();
+    assert_eq!(rows, [("other.bin", 5 * MIB, 1), ("model.gguf", 0, 0)]);
+    assert_eq!(page.items.iter().map(|c| c.size).sum::<u64>(), b.size);
+    let first = index::child_rows(&conn, b.id, 1).unwrap();
+    assert_eq!((first.more_count, first.more_bytes), (1, 0));
+}
+
 // Traces: INDEX-HARDLINK-ONCE
 #[test]
 fn hard_links_count_once_with_a_deterministic_owner() {

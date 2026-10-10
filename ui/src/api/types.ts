@@ -79,6 +79,7 @@ export type ProposalItem = {
   memory_note: string | null;
   op?: SystemOpView;
   copy_note?: string | null;
+  saves?: number | null;
 };
 export type RarelyUsedApp = {
   id: string;
@@ -109,7 +110,7 @@ export type Proposal = {
   card?: string | null;
   touched?: boolean;
 };
-export type Learned = { memory_id: number; text: string; url?: string; confirmed?: boolean; pinned?: boolean };
+export type Learned = { memory_id: number; text: string; url?: string; key?: string; confirmed?: boolean; pinned?: boolean };
 
 export type ReviewArea = {
   path: string;

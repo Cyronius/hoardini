@@ -1273,6 +1273,19 @@ fn refresh_profile(h: &Harness, files: &[(&str, u64)], free: u64) {
 }
 
 // Traces: AGENT-TOOL-DATA
+#[test]
+fn card_tools_send_no_card_before_the_first_refresh() {
+    let h = Harness::new(Some(FAKE_PROFILE));
+    let c = ctx(&h, FAKE_PROFILE, "c1");
+    for tool in ["top_dirs", "top_files"] {
+        match Registry::full().call(&c, tool, "{}") {
+            Ok(Outcome::Text { data, .. }) => assert!(data.is_none(), "{tool}: {data:?}"),
+            other => panic!("{tool}: {other:?}"),
+        }
+    }
+}
+
+// Traces: AGENT-TOOL-DATA
 #[tokio::test]
 async fn card_tools_send_their_data_to_the_ui_and_never_to_the_model() {
     let h = Harness::new(Some(FAKE_PROFILE));

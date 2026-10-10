@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use hoardini_core::memory::knowledge;
 use hoardini_core::paths::humanize_bytes;
 use hoardini_core::proposals::{self, Proposal};
 use hoardini_core::review;
@@ -664,28 +665,32 @@ fn hidden_call(c: &ToolCallMsg) -> bool {
     c.function.name.starts_with("propose_") && proposal_id_of(c).is_none()
 }
 
-// A chip confirmed after its run was stored would otherwise offer Confirm again on reload.
-fn learned_now(conn: &Connection, mut v: Value) -> Value {
+// Read again on reload: a confirmed chip offers no Confirm, and one whose row is gone (ids are reused) is dropped.
+fn learned_now(conn: &Connection, profile: Option<&str>, mut v: Value) -> Value {
     if v.get("kind").and_then(Value::as_str) != Some("learned") {
         return v;
     }
-    for it in v
-        .get_mut("items")
-        .and_then(Value::as_array_mut)
-        .into_iter()
-        .flatten()
-    {
-        let Some(id) = it.get("memory_id").and_then(Value::as_i64) else {
-            continue;
-        };
-        let source: Option<String> = conn
-            .query_row("SELECT source FROM memory WHERE id = ?1", [id], |r| {
-                r.get(0)
-            })
-            .optional()
-            .ok()
-            .flatten();
-        it["confirmed"] = Value::Bool(source.as_deref() == Some("user"));
+    let system = hoardini_core::paths::profile_dir()
+        .to_string_lossy()
+        .into_owned();
+    let profile = profile.unwrap_or(&system);
+    if let Some(items) = v.get_mut("items").and_then(Value::as_array_mut) {
+        items.retain_mut(|it| {
+            let (Some(id), Some(text)) = (
+                it.get("memory_id").and_then(Value::as_i64),
+                it.get("text").and_then(Value::as_str),
+            ) else {
+                return false;
+            };
+            let key = it.get("key").and_then(Value::as_str);
+            match knowledge::learned_row(conn, id, key, text, profile) {
+                Ok(Some(m)) => {
+                    it["confirmed"] = Value::Bool(m.source == "user");
+                    true
+                }
+                _ => false,
+            }
+        });
     }
     v
 }
@@ -750,7 +755,7 @@ pub fn agui_messages_from(
             tool_call_id: m.tool_call_id.clone(),
             data: ui
                 .remove(&s.id)
-                .map(|v| learned_now(&conn, v))
+                .map(|v| learned_now(&conn, profile, v))
                 .map(|v| match profile {
                     Some(p) => redact_value(&v, p),
                     None => v,

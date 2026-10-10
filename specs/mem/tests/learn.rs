@@ -124,3 +124,120 @@ fn a_cleaned_entry_matches_by_path_or_rule_and_reads_as_a_reason() {
         Some("p4".into())
     );
 }
+
+fn job_fixture(card: Option<&str>) -> (tempfile::TempDir, hoardini_core::store::Db, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = hoardini_core::store::Db::open(dir.path().join("learn.db")).unwrap();
+    let work = dir.path().join("work").to_string_lossy().into_owned();
+    let c = db.conn().unwrap();
+    row(
+        &c,
+        &work,
+        Detail {
+            category: "unknown".into(),
+            ..Detail::default()
+        },
+    );
+    c.execute(
+        "INSERT INTO proposal(id, conversation_id, kind, params_json, status, total_alloc, created_ms, review_id, card) \
+         VALUES ('p1', 'review', 'delete', '{\"summary\":\"x\"}', 'done', 16384, 1, ?1, ?2)",
+        rusqlite::params![card.map(|_| "r1"), card],
+    )
+    .unwrap();
+    for (seq, (name, selected, status)) in
+        [("go.bin", true, "done"), ("left.bin", false, "skipped")]
+            .into_iter()
+            .enumerate()
+    {
+        c.execute(
+            "INSERT INTO proposal_item(proposal_id, seq, path, kind, alloc, logical, verdict, selected, status) \
+             VALUES ('p1', ?1, ?2, ?3, 8192, 8192, 'safe', ?4, ?5)",
+            rusqlite::params![
+                seq as i64,
+                format!("{work}\\{name}"),
+                hoardini_core::policy::ItemKind::File.to_db(),
+                selected,
+                status
+            ],
+        )
+        .unwrap();
+    }
+    (dir, db, work)
+}
+
+fn kept_paths(c: &hoardini_core::memory::Connection, work: &str) -> Vec<String> {
+    hoardini_core::memory::location::location_at(c, P, work)
+        .unwrap()
+        .unwrap()
+        .detail
+        .unwrap()
+        .kept
+        .iter()
+        .filter_map(|v| v["path"].as_str().map(str::to_string))
+        .collect()
+}
+
+// Traces: MEM-LEARN-JOB
+#[test]
+fn a_job_ending_while_another_connection_writes_still_learns() {
+    use hoardini_core::memory::learn::learn_from_job;
+    use std::time::{Duration, Instant};
+    let (dir, db, work) = job_fixture(None);
+    let env = hoardini_core::policy::PolicyEnv::with_paths(
+        std::path::Path::new(P),
+        &dir.path().join("data"),
+    );
+    let (held, release) = std::sync::mpsc::channel::<()>();
+    let other = {
+        let db = db.clone();
+        std::thread::spawn(move || {
+            let c = db.conn().unwrap();
+            c.execute_batch(
+                "BEGIN IMMEDIATE; INSERT INTO meta(key, value) VALUES ('other', '1') \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
+            )
+            .unwrap();
+            held.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            c.execute_batch("COMMIT").unwrap();
+        })
+    };
+    release.recv().unwrap();
+    let c = db.conn().unwrap();
+    let t = Instant::now();
+    let learned = learn_from_job(&c, &env, "p1", T);
+    other.join().unwrap();
+    assert_eq!(learned.unwrap(), 1, "it waited for the lock");
+    assert!(t.elapsed() >= Duration::from_millis(200));
+    let row = hoardini_core::memory::location::location_at(&c, P, &work)
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.detail.unwrap().cleaned.len(), 1);
+}
+
+// Traces: MEM-LEARN-JOB
+#[test]
+fn an_item_left_unticked_on_a_card_that_starts_unticked_is_not_kept() {
+    use hoardini_core::memory::learn::learn_from_job;
+    let (dir, db, work) = job_fixture(Some("downloads"));
+    let env = hoardini_core::policy::PolicyEnv::with_paths(
+        std::path::Path::new(P),
+        &dir.path().join("data"),
+    );
+    let c = db.conn().unwrap();
+    learn_from_job(&c, &env, "p1", T).unwrap();
+    assert!(kept_paths(&c, &work).is_empty(), "nobody chose to keep it");
+
+    let (dir, db, work) = job_fixture(Some("temp"));
+    let env = hoardini_core::policy::PolicyEnv::with_paths(
+        std::path::Path::new(P),
+        &dir.path().join("data"),
+    );
+    let c = db.conn().unwrap();
+    learn_from_job(&c, &env, "p1", T).unwrap();
+    assert_eq!(
+        kept_paths(&c, &work),
+        [format!("{work}\\left.bin")],
+        "unticked on a card that starts ticked"
+    );
+}

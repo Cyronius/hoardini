@@ -1300,7 +1300,7 @@ async function agentRun(input: { runId: string; messages: { id?: string; role: s
         await say(s, "`~\\.hipfire` is where **hipfire**, a local model runner, keeps the models it downloads.");
         const m: T.Memory = { id: ++memSeq, scope: "path", key: "~\\.hipfire", kind: "fact", text: "~\\.hipfire: model cache (hipfire).", source: `web:${url}`, confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null, pinned: false, last_used_ms: now(), forgotten_ms: null, detail: { category: "model-store", app: "hipfire", use: "model cache" } };
         memories.push(m);
-        const data = { v: 1, kind: "learned", items: [{ memory_id: m.id, text: m.text, url, confirmed: false }] };
+        const data = { v: 1, kind: "learned", items: [{ memory_id: m.id, key: m.key, text: m.text, url, confirmed: false }] };
         s.send({ type: "CUSTOM", name: "tool_data", value: { tool_call_id: toolCallId, data } });
         const stored = thread.messages.find((x) => x.toolCallId === toolCallId);
         if (stored) stored.data = data;
@@ -1569,6 +1569,13 @@ async function route(req: Request): Promise<Response> {
     case "jobs":
       if (!seg[1]) return json([...jobs.values()]);
       return json({ ok: true });
+    case "learned": {
+      const b = await body<{ key?: string; text: string }>();
+      const idx = memories.findIndex((m) => m.id === Number(seg[2]) && (b.key === undefined || m.key === b.key) && m.text === b.text);
+      if (seg[1] !== "web" || method !== "DELETE" || idx < 0) return err("learned entry not found", 404);
+      memories.splice(idx, 1);
+      return json({ ok: true });
+    }
     case "memory": {
       if (seg[1] === "limit") {
         if (method === "PUT") memLimit = Math.max(10, (await body<{ limit: number }>()).limit);

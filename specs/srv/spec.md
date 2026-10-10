@@ -141,12 +141,13 @@ inclusive; with neither, every point is returned. With no indexed volume the res
 **Applies to:** hoardini-server
 **Verification:** test
 
-`GET /api/index/children?path=<folder>&limit=<n>` (default 50, at most 1000) shall return `{path, size, files, children, small, more}` for an indexed folder. `children` are its direct children from the index, biggest first (ties by name), each `{path, name, kind ("dir" | "file" | "link"), size, files, mtime_ms, denied, has_children}`; `has_children` is true for a folder with any child row or folded small files. `small` is `{count, bytes}` of the files folded into this folder by the row threshold (INDEX-SMALL-FOLD), and `more` is `{count, bytes}` of the children past the limit. `path` may start with `~`, matches the index without regard to case, and every returned path shows the profile as `~`. A missing or non-absolute path is 400, a file is 400, and a path not in the index is 404.
+`GET /api/index/children?path=<folder>&limit=<n>` (default 50, at most 1000) shall return `{path, size, files, children, small, more}` for an indexed folder. `children` are its direct children from the index, biggest first (ties by name), each `{path, name, kind ("dir" | "file" | "link"), size, files, mtime_ms, denied, has_children}`; `has_children` is true for a folder with any child row or folded small files. A file that is a hard-link duplicate (INDEX-HARDLINK-ONCE) lists, and ranks, with `size` and `files` 0, so the rows add up to the folder's size as in the treemap (SRV-INDEX-MAP). `small` is `{count, bytes}` of the files folded into this folder by the row threshold (INDEX-SMALL-FOLD), and `more` is `{count, bytes}` of the children past the limit. `path` may start with `~`, matches the index without regard to case, and every returned path shows the profile as `~`. A missing or non-absolute path is 400, a file is 400, and a path not in the index is 404.
 
 **Acceptance criteria:**
 - `C:\data` holding `models\` (300 + 100 MiB), `big.iso` (200 MiB), `cache\` (50 MiB), an empty folder, and two small files (4 KiB and 8 KiB allocated): `limit=2` returns `models` (`dir`, 400 MiB, 2 files, `has_children`) then `big.iso` (`file`, 1 file, no children), `small` `{count: 2, bytes: 12288}`, `more` `{count: 2, bytes: 50 MiB}`, `size` 650 MiB + 12288 and `files` 6.
 - `path=c:\DATA` with no limit lists `models`, `big.iso`, `cache`, `empty` in that order; `empty` has no children and `more` is zero.
 - `path=C:\data\big.iso` is 400, `C:\nope` is 404, and no `path` is 400.
+- With `C:\a\copy.gguf` owning a 200 MiB file that `C:\b\model.gguf` hard-links, `C:\b` (with a 5 MiB `other.bin`) lists `other.bin` (5 MiB) then `model.gguf` (0 bytes, 0 files), summing to the folder's 5 MiB; with `limit=1`, `more` is `{count: 1, bytes: 0}` (`index::child_rows`, `specs/index/tests/index.rs`).
 
 Test: `specs/srv/tests/srv.rs`.
 
@@ -170,7 +171,7 @@ Test: `specs/srv/tests/srv.rs`.
 **Applies to:** hoardini-server
 **Verification:** test
 
-`GET /api/index/map?path=<folder>&w=<px>&h=<px>` (`w` and `h` default 1200 and 800, clamped to 16–8192) shall return `{tree, ancestors, min_bytes, nodes, capped}` for an indexed folder, for the Explore treemap (UI-EXPLORE). A block of `size` bytes covers `size / root size` of the `w × h` canvas, so `min_bytes` is the smallest size that still gets 9 px² (rounded up). Each node is `{path, name, kind ("dir" | "file" | "link" | "small"), size, files, ext (files only, lower case, "" when none), children?, more?, tag}`. A folder is opened biggest first: its child rows and one `small` block for its folded small files (INDEX-SMALL-FOLD; `path` is the folder's, `name` "small files", `files` their count) are kept, biggest first (ties by name), while they are at least `min_bytes`, and the rest are merged into the folder's `more: {count, bytes}` (`count` is the rows plus the folded files it stands for). An opened folder always has `children` and `more`, and its `size` is the sum of its children's sizes plus `more.bytes`, so every level adds up to the root's size; a gap in the index is counted in `more.bytes`. The response holds at most 5,000 nodes: folders open largest first until the cap, then nothing more is opened, merged blocks go to `more`, and `capped` is true. `nodes` is the number of nodes returned. `ancestors` lists `{path, name}` from the drive root down to the folder's parent, for breadcrumbs. Paths follow SRV-INDEX-CHILDREN (`~` accepted and shown; 400 for a missing or non-absolute path or a file; 404 for a path not in the index).
+`GET /api/index/map?path=<folder>&w=<px>&h=<px>` (`w` and `h` default 1200 and 800, clamped to 16–8192) shall return `{tree, ancestors, min_bytes, nodes, capped}` for an indexed folder, for the Explore treemap (UI-EXPLORE). A block of `size` bytes covers `size / root size` of the `w × h` canvas, so `min_bytes` is the smallest size that still gets 9 px² (rounded up). Each node is `{path, name, kind ("dir" | "file" | "link" | "small"), size, files, ext (files only, lower case, "" when none), children?, more?, tag}`. A folder is opened biggest first: its child rows and one `small` block for its folded small files (INDEX-SMALL-FOLD; `path` is the folder's, `name` "small files", `files` their count) are kept, biggest first (ties by name), while they are at least `min_bytes`, and the rest are merged into the folder's `more: {count, bytes}` (`count` is the rows plus the folded files it stands for). An opened folder always has `children` and `more`, and its `size` is the sum of its children's sizes plus `more.bytes`, so every level adds up to the root's size; a gap in the index is counted in `more.bytes`. The response holds at most 5,000 nodes: folders open largest first until the cap, then nothing more is opened, merged blocks go to `more`, and `capped` is true. `nodes` is the number of nodes returned. `ancestors` lists `{path, name}` from the index root (the drive root, or a watched folder that is not a whole drive) down to the folder's parent, for breadcrumbs, so every crumb is a folder the map can open. Paths follow SRV-INDEX-CHILDREN (`~` accepted and shown; 400 for a missing or non-absolute path or a file; 404 for a path not in the index).
 
 `tag` is `{state, label?, verdict?}`, decided by the nearest knowledge at or above the node (above the indexed folder too, when a watched folder is not a whole drive), with no model call:
 1. **proposed:** the node is, or is under, a pending item of a pending proposal (a chat or review card); the label is the item's reason (else the card's summary) and the verdict the item's.
@@ -184,6 +185,7 @@ A `small` block has its folder's tag.
 - With a pending card item `C:\data\cache` (reason "Rebuilds itself", `safe`), a declined one for `big.iso`, a `catalog` location row for `models` (LM Studio models, `redownload`) and the user's Keep for `tiny`: `cache` and `c.bin` are `proposed` with that label and verdict; `models` and `a.gguf` are `review` / LM Studio models / `redownload`; `node_modules` is `review` / node_modules / `redownload` while `proj` is `unknown`; `tiny` is `user` / yours / `keep`; `big.iso` is `unknown`; the small block has `C:\data`'s tag. At `C:\` the root is `unknown` labelled "the drive root" and `Windows` is `system` / the Windows folder / `keep`. A watched folder `C:\x\node_modules\lib` indexed on its own is `review` / node_modules / `redownload`, from the entry above it.
 - 5,100 files of 2 MiB in one folder at 8192 × 8192: `nodes` 5,000, `capped` true, 4,999 children from `f0000.bin`, `more` `{count: 101, bytes: 202 MiB}`, and the size still adds up.
 - A file is 400, a path not in the index 404, no path 400.
+- A watched folder `C:\x\proj` indexed on its own: the map of `C:\x\proj\sub\deep` has `ancestors` `C:\x\proj`, `C:\x\proj\sub`.
 
 Test: `specs/srv/tests/srv.rs`.
 
@@ -250,13 +252,21 @@ row's pin, so it offers Unpin; it is `[]` for
 pending, approved, running and declined proposals and for dedupe. It is in place when the job's terminal frame is
 streamed. `DELETE /api/proposals/{id}/learned/{memory_id}` undoes that job's entries on that row (`learn::undo`) and
 answers `{ok: true}`, or 404 when the row holds nothing of that job. `POST /api/memory/{id}/confirm` re-saves a
-location or file-type row as `user`-sourced and pinned, keeping its text and identity and dropping any verdict
-(`knowledge::confirm`), and returns the row; a note answers 400 and an unknown id 404.
+location or file-type row as `user`-sourced and pinned, keeping its text and identity (`knowledge::confirm`); a verdict
+and actions a classifier (`deny`, `catalog`, `mix`, `index`) or a job gave stay, since a user row is never reassessed
+and dropping them would lift a kept folder's protection for good, and any other row's verdict is dropped (a web row has
+none). It returns the row; a note answers 400, an unknown id 404, and a database error 500. `DELETE
+/api/learned/web/{memory_id}` with `{key, text}` (a web search's Learned chip, AGENT-WEB-LEARN) deletes that row only
+while it still has that key and a `web:` source, or a `user` source and that text (`knowledge::forget_learned`), and
+answers `{ok: true}`, else 404; the UI's chip calls it instead of `DELETE /api/memory/{id}`, so an id reused by another
+memory is never deleted.
 
 **Acceptance criteria:**
 - A pending two-file delete has `learned` `[]`. With one file approved, `learned` holds one entry by the time the job's terminal frame arrives, reading `go.bin in ~\...\work — cleaned 8.0 KB on <MM-DD>; 1 item you left unticked is kept` with `confirmed: false` and `pinned: false`, and `GET /api/thread` shows the same. After `PUT /api/memory/{memory_id}` with `pinned: true` the entry has `pinned: true`; after `POST /api/memory/{memory_id}/confirm` it has `confirmed: true`.
 - `DELETE` of that entry answers `{ok: true}`, the proposal's `learned` becomes `[]`, and a second `DELETE` answers 404.
 - Confirming a `web:` row for `q4nx` returns it with source `user`, `pinned` true, the same text and `detail.app`; confirming a note answers 400, and id 999999 answers 404.
+- `DELETE /api/learned/web/{id}` of a `web:` `q4nx` row with another key answers 404, with its own key and text 200, then 404; once a protect note has taken the id, it answers 404 and the note stays.
+- Confirming the classified `~\Pictures` row (verdict `keep`, from the content mix) keeps `keep` and the `archive` action, and a photo inside is still blocked from deletes after a sweep 200 days later (`specs/mem/tests/knowledge.rs`).
 
 ### SRV-PROPOSAL-SELECTION: The server keeps a pending card's ticks
 **Applies to:** hoardini-server
@@ -270,7 +280,7 @@ Approving or declining a proposal also marks it `touched`.
 
 **Acceptance criteria:**
 - Of two unticked items, `PUT {item_ids: [a]}` answers `touched: true` with `a` ticked and `b` not, and `GET /api/proposals/{id}` shows the same items.
-- An unknown item id answers 409, an unknown proposal 404, and after a decline the route answers 409.
+- An unknown item id answers 409, an item blocked with the reason "Not found" answers 409 (not 404), an unknown proposal 404, and after a decline the route answers 409.
 - An approved proposal shows `touched: true`.
 
 Test: `specs/srv/tests/srv.rs`.
