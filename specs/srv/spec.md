@@ -244,8 +244,9 @@ The conversation routes are:
 **Verification:** test
 
 Proposal JSON (`GET /api/proposals/{id}` and the `proposals` map of `GET /api/thread`) carries `learned:
-[{memory_id, text, confirmed}]` from `memory::learn::learned_for` (MEM-LEARN-JOB), with the profile shown as `~`;
-`confirmed` is true once the row is `user`-sourced, so after a reload the chip offers no Confirm; it is `[]` for
+[{memory_id, text, confirmed, pinned}]` from `memory::learn::learned_for` (MEM-LEARN-JOB), with the profile shown as `~`;
+`confirmed` is true once the row is `user`-sourced, so after a reload the chip offers no Confirm, and `pinned` is the
+row's pin, so it offers Unpin; it is `[]` for
 pending, approved, running and declined proposals and for dedupe. It is in place when the job's terminal frame is
 streamed. `DELETE /api/proposals/{id}/learned/{memory_id}` undoes that job's entries on that row (`learn::undo`) and
 answers `{ok: true}`, or 404 when the row holds nothing of that job. `POST /api/memory/{id}/confirm` re-saves a
@@ -253,7 +254,7 @@ location or file-type row as `user`-sourced and pinned, keeping its text and ide
 (`knowledge::confirm`), and returns the row; a note answers 400 and an unknown id 404.
 
 **Acceptance criteria:**
-- A pending two-file delete has `learned` `[]`. With one file approved, `learned` holds one entry by the time the job's terminal frame arrives, reading `go.bin in ~\...\work — cleaned 8.0 KB on <MM-DD>; 1 item you left unticked is kept` with `confirmed: false`, and `GET /api/thread` shows the same. After `POST /api/memory/{memory_id}/confirm` the proposal's entry has `confirmed: true`.
+- A pending two-file delete has `learned` `[]`. With one file approved, `learned` holds one entry by the time the job's terminal frame arrives, reading `go.bin in ~\...\work — cleaned 8.0 KB on <MM-DD>; 1 item you left unticked is kept` with `confirmed: false` and `pinned: false`, and `GET /api/thread` shows the same. After `PUT /api/memory/{memory_id}` with `pinned: true` the entry has `pinned: true`; after `POST /api/memory/{memory_id}/confirm` it has `confirmed: true`.
 - `DELETE` of that entry answers `{ok: true}`, the proposal's `learned` becomes `[]`, and a second `DELETE` answers 404.
 - Confirming a `web:` row for `q4nx` returns it with source `user`, `pinned` true, the same text and `detail.app`; confirming a note answers 400, and id 999999 answers 404.
 
