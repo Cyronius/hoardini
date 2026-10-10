@@ -112,6 +112,15 @@ pub fn render(ev: &Evidence) -> String {
             let _ = writeln!(d, "+{} more", ev.duplicates.len() - 8);
         }
     }
+    if !ev.copies.is_empty() {
+        let _ = writeln!(d, "Copies elsewhere:");
+        for c in ev.copies.iter().take(8) {
+            let _ = writeln!(d, "- {} [{}]: {}", c.check, c.confidence.as_str(), c.note());
+        }
+        if ev.only_copy {
+            let _ = writeln!(d, "Every copy check came up empty: this is the only copy we know of.");
+        }
+    }
     if !ev.memories.is_empty() {
         let _ = writeln!(d, "Saved notes:");
         for m in ev.memories.iter().take(8) {
@@ -145,7 +154,7 @@ impl Tool for Inspect {
     }
 
     fn description(&self) -> &'static str {
-        "Evidence about one file or folder: catalog match, file type and model metadata, owner app, open handles, last-used signals, duplicates, saved notes, and the verdict cap."
+        "Evidence about one file or folder: catalog match, file type and model metadata, owner app, open handles, last-used signals, duplicates, copies elsewhere (cloud sync, git, Hugging Face, winget), saved notes, and the verdict cap."
     }
 
     fn parameters(&self) -> Value {

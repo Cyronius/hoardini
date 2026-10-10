@@ -104,6 +104,44 @@ pub fn parse<R: Read + Seek>(mut r: R, file_len: u64) -> Option<PeInfo> {
     Some(info)
 }
 
+const MAX_SIGNATURE: u64 = 1024 * 1024;
+
+// The embedded Authenticode PKCS#7 blob (data directory 4 holds a file offset, not an RVA).
+pub fn signature_blob<R: Read + Seek>(mut r: R, file_len: u64) -> Option<Vec<u8>> {
+    let dos = read_at(&mut r, 0, 0x40).ok()?;
+    if dos.get(..2)? != b"MZ" {
+        return None;
+    }
+    let lfanew = u32_at(&dos, 0x3c)? as u64;
+    let nt = read_at(&mut r, lfanew, 24).ok()?;
+    if nt.get(..4)? != b"PE\0\0" {
+        return None;
+    }
+    let opt_size = u16_at(&nt, 20)? as usize;
+    let opt = read_at(&mut r, lfanew + 24, opt_size).ok()?;
+    let dd_base = if u16_at(&opt, 0)? == 0x20b { 112 } else { 96 };
+    let off = u32_at(&opt, dd_base + 32)? as u64;
+    let size = u32_at(&opt, dd_base + 36)? as u64;
+    if off == 0 || !(8..=MAX_SIGNATURE).contains(&size) || off + size > file_len {
+        return None;
+    }
+    let cert = read_at(&mut r, off, size as usize).ok()?;
+    let len = (u32_at(&cert, 0)? as usize).min(cert.len());
+    // WIN_CERT_TYPE_PKCS_SIGNED_DATA
+    if u16_at(&cert, 6)? != 2 || len <= 8 {
+        return None;
+    }
+    Some(cert[8..len].to_vec())
+}
+
+// Through the atime-preserving handle, like every other header read.
+pub fn signer(path: &std::path::Path) -> Option<String> {
+    let f = hoardini_win::open_read_preserving_atime(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let blob = signature_blob(f, len)?;
+    hoardini_win::pkcs7_signer(&blob).ok().flatten()
+}
+
 fn find_version_blob(rsrc: &[u8], rsrc_rva: u64) -> Option<&[u8]> {
     let first_entry = |dir: u32, want_id: Option<u32>| -> Option<u32> {
         let d = dir as usize;

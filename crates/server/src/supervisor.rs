@@ -64,6 +64,8 @@ pub struct Supervisor {
     pub volume_edits: tokio::sync::Mutex<()>,
     // Children join this job so a hard-killed server cannot orphan an indexer.
     job: Option<hoardini_win::KillOnCloseJob>,
+    // Copy checks follow a finished refresh and the user's return.
+    copy: std::sync::OnceLock<Weak<crate::copywork::CopyWorker>>,
     me: Weak<Supervisor>,
 }
 
@@ -156,8 +158,17 @@ impl Supervisor {
             presence: Mutex::new(Presence::default()),
             volume_edits: tokio::sync::Mutex::new(()),
             job,
+            copy: std::sync::OnceLock::new(),
             me: me.clone(),
         })
+    }
+
+    pub fn set_copy_worker(&self, w: &Arc<crate::copywork::CopyWorker>) {
+        let _ = self.copy.set(Arc::downgrade(w));
+    }
+
+    fn copy_worker(&self) -> Option<Arc<crate::copywork::CopyWorker>> {
+        self.copy.get().and_then(Weak::upgrade)
     }
 
     fn bump(&self) {
@@ -337,6 +348,9 @@ impl Supervisor {
             p.posted = looking;
         }
         self.reschedule();
+        if let Some(w) = self.copy_worker() {
+            w.looking_changed(self.looking());
+        }
     }
 
     pub fn watch(&self) -> Watcher {
@@ -344,10 +358,13 @@ impl Supervisor {
             p.streams += 1;
         }
         self.reschedule();
+        if let Some(w) = self.copy_worker() {
+            w.looking_changed(self.looking());
+        }
         Watcher(self.me.clone())
     }
 
-    fn looking(&self) -> bool {
+    pub(crate) fn looking(&self) -> bool {
         self.presence
             .lock()
             .is_ok_and(|p| p.posted && p.streams > 0)
@@ -498,6 +515,9 @@ impl Supervisor {
             }
         }
         self.bump();
+        if let Some(w) = self.copy_worker() {
+            w.after_refresh();
+        }
     }
 
     // Starts the first scan of newly watched roots, or folds them into the pass already running.

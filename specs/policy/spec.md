@@ -18,8 +18,12 @@ Then one of three outcomes:
 - **Selectable**: `status = "pending"`; `total_alloc` sums these items only. It starts ticked or unticked per
   POLICY-DEFAULT-TICK.
 
-Each item stores a `cap` (`keep` / `review` / none) and the shown `verdict`, which is the LLM's verdict raised to at
-least the cap (`Verdict::capped`). `policy::cap_for(conn, path, catalog_cap, in_use)` exposes the same cap to evidence.
+Verdicts are ordered `safe` < `redownload` < `synced` < `review` < `keep`. `synced` means a cloud sync engine holds the
+file: its local copy may go online-only (ACT-ONLINE-ONLY), never be deleted for it. Each item stores a `cap` (`keep` /
+`review`, `redownload` or `synced` where a copy check relaxed `review`, or none) and the shown `verdict`, which is the
+LLM's verdict raised to at least the cap (`Verdict::capped`); an online-only item's verdict comes from the sync check, not
+the LLM. Each item's JSON also carries `copy_note`, the best copy-check answer's note or "only copy we know of"
+(`copycheck::note_for`, EVID-COPY-CHECK), on cards that are pending or running, except `system_cleanup` cards, whose items are operations. `policy::cap_for(conn, path, catalog_cap, in_use)` exposes the same cap to evidence.
 The locations below come from `PolicyEnv` (`system()` reads the real environment; `with_paths(profile, data_dir)` lets
 tests point the profile and data folder at temp directories).
 
@@ -106,13 +110,22 @@ after it, immediately before the item executes, so a path swapped for a junction
 
 Each item's cap shall be the strongest of: the catalog cap; `review` for a path no catalog entry knows; `review` for a
 single file inside a shared-blob store (the whole model folder is the safe unit); `keep` when the file is in use or the
-path is denied. The stored verdict is the LLM verdict raised to the cap; a verdict above the cap stays.
+path is denied. The stored verdict is the LLM verdict raised to the cap; a verdict above the cap stays. A copy check that
+proved another copy relaxes the one cap that is about not knowing (EVID-COPY-CHECK): a current `identical` answer from
+any check but `sync` turns the `review` cap of a path no catalog entry knows into `redownload`, so the item can start
+ticked. A `sync` answer does that only on an online-only card, where the cap becomes `synced`; on any other card a cloud
+copy never relaxes anything, because deleting a synced file deletes the cloud copy too. The offline checks run again for
+the item first (`copycheck::identical_for`), so a twin deleted or an archive copy gone since the last pass never counts,
+and a copy the same card would remove (a path the card also holds, or one inside it) does not count either. A shared
+blob's `review`, a catalog cap, and `keep` stay, and no other confidence changes a cap.
 
 **Acceptance criteria:**
 - LLM `safe` on an HF hub blob file → verdict `review`, cap `review`; on `disk.vhdx` → `review`/`review`; on an unknown file → `review`/`review`.
 - LLM `redownload` on a whole `models--org--name` folder → `redownload`, no cap; `safe` on `node_modules` → `safe`, no cap.
 - LLM `keep` on an unknown file stays `keep` and the item starts unselected.
 - `cap_for_with(.., in_use = true)` and the cap of the profile root are `keep`; every item satisfies verdict ≥ cap.
+- On a delete card, unknown files the model calls `safe`: one with a current `identical` Hugging Face answer shows `redownload`, cap `redownload`, ticked, with the copy note; one with `same-name-and-size` and one with an `identical` `sync` answer show `review`/`review`, unticked; an HF blob file with an `identical` answer stays `review`/`review`. `cap_for_with` gives `redownload` for the first file and `keep` when it is in use. An in-sync file on an online-only card shows `synced`, cap `synced` (`specs/act/tests/online.rs`).
+- Two 101 MiB files in a current duplicate group: one proposed alone shows `redownload`, ticked; both on one card show `review`/`review`, unticked; after the twin is deleted by hand, the first proposed alone shows `review`, unticked.
 
 ### POLICY-DEFAULT-TICK: Only worthwhile safe or redownload items start ticked
 **Applies to:** hoardini
@@ -123,12 +136,14 @@ verdict, which is already capped (POLICY-VERDICT-CAP), is `safe` or `redownload`
 `review`); and it is not small. An item is small when its `alloc` is under 50 MiB **and** under 2% of the proposal's
 `total_alloc`, so a card made only of small files still ticks its biggest ones. Every item's JSON carries
 `small: boolean`. The rule is `proposals::is_small(alloc, total)` and `proposals::default_tick(blocked, verdict, small)`.
-A follow-up proposal (ACT-FOLLOW-UP) keeps the approved tick state instead. Tests: `specs/policy/tests/policy.rs`;
+On an online-only card (ACT-ONLINE-ONLY) the same rule ticks `synced` instead of `safe` or `redownload`
+(`proposals::default_tick_for(kind, blocked, verdict, small)`); `synced` never ticks on any other card. A follow-up proposal (ACT-FOLLOW-UP) keeps the approved tick state instead. Tests: `specs/policy/tests/policy.rs`;
 the item JSON is also checked in `specs/srv/tests/srv.rs`.
 
 **Acceptance criteria:**
 - `is_small`: 50 MiB − 1 byte of a huge total is small; exactly 50 MiB and 50 MiB + 1 are not. 1,999 of 100,000 is small; exactly 2,000 (2%) and 2,001 are not. 3 MiB of a 3 MiB + 40 KiB card is not small while 4 KiB of it is. 0 of 0 is not small.
-- `default_tick` is true for unblocked, not-small `safe` and `redownload`; false when blocked, small, `review`, `keep`, or no verdict.
+- `default_tick` is true for unblocked, not-small `safe` and `redownload`; false when blocked, small, `synced`, `review`, `keep`, or no verdict.
+- `default_tick_for(online_only, ..)` is true only for unblocked, not-small `synced`; `default_tick_for(delete, .., synced, ..)` is false, and for every other kind it equals `default_tick` (`specs/act/tests/online.rs`).
 - In one proposal: a `node_modules` folder the model calls `safe` and an HF `models--org--m` folder it calls `redownload` start ticked; a `node_modules` called `review`, one with no verdict, and an unknown file called `safe` (shown as `review`) start unticked; a 4 KiB `node_modules` called `safe` is `small` and unticked; no other item is `small`.
 
 ### POLICY-ITEM-MEMORY: Each item shows the note that covers it
@@ -156,13 +171,14 @@ A location row (MEM-LOCATION) whose verdict is `keep` shall block, on a path at,
 delete and dedupe always, and archive and compress unless its `actions` list them (your photos allow `archive`, a Keep
 answer allows `archive` and `compress`, OS files allow none). The item is stored
 `blocked` with a reason naming the location and quoting the row's text, and the same check skips an approved item at
-execution when the row appeared after the proposal. A location whose verdict is not `keep` blocks nothing. The check is
+execution when the row appeared after the proposal. A location whose verdict is not `keep` blocks nothing, and no
+location blocks online-only (the cloud copy stays, ACT-ONLINE-ONLY) or a system cleanup. The check is
 `memory::location::keep_block(conn, env, path, action)`, called from `policy::examine` and `policy::revalidate`.
 
 **Acceptance criteria:**
 - With `work\photos` kept with `[archive]` ("Your photos and videos: ...") and `work\system` kept with none: deleting a photo or a file under `system` is `blocked` with a reason containing "a kept location" and the row's text; a file under a `safe` location stays `pending`.
 - Deleting `work\photos` itself is blocked, and deleting `work`, which contains it, is blocked with "contains".
-- For the photo, `examine` blocks dedupe and compress and allows archive; for the `system` file it blocks archive; under the `safe` location dedupe is allowed.
+- For the photo, `examine` blocks dedupe and compress and allows archive, and an online-only block never names the kept location; for the `system` file it blocks archive; under the `safe` location dedupe is allowed.
 - A delete proposed before `work\later` became a kept location is `skipped` at approval with the row's text in its detail, and the file stays.
 
 Test: `specs/policy/tests/policy.rs`.

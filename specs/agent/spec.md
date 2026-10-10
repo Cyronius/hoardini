@@ -8,7 +8,7 @@ Requirement tests: `specs/agent/tests/agent.rs` (`cargo test -p hoardini-specs -
 **Applies to:** hoardini
 **Verification:** test
 
-No tool the agent can call shall create, change or delete a file. Read tools only read the index, history, memory and file metadata; the `refresh` tool only asks the indexer supervisor. The `propose_*` tools shall only create a proposal in `pending` state (or return an error); the executor shall run only an approved proposal ID, and the agent has no handle to it.
+No tool the agent can call shall create, change or delete a file. Read tools only read the index, history, memory and file metadata; the `refresh` tool only asks the indexer supervisor. The `propose_*` tools (delete, archive, compress, dedupe, system cleanup, online-only) shall only create a proposal in `pending` state (or return an error); the executor shall run only an approved proposal ID, and the agent has no handle to it.
 
 **Acceptance criteria:**
 - Every tool in `Registry::full()`, called with valid arguments against an indexed temp tree, leaves the tree's listing, sizes, mtimes and file contents unchanged. The test fails when a registered tool has no case in it.
@@ -40,6 +40,19 @@ Every request, for every provider, shall send each occurrence of the user's prof
 - The `top_files` result sent back lists `~\.lmstudio\models\big.gguf`, and the system prompt's index summary uses `~\...`.
 - No AG-UI event of that run contains `zq_owner`.
 - A profile deserialized from stored JSON with `redact_paths: false` runs the same script and still sends `~\.lmstudio\models\big.gguf`, with no `zq_owner` in any request.
+
+### AGENT-PROPOSE-ONLINE-ONLY: A tool for making synced files online-only
+**Applies to:** hoardini
+**Verification:** test
+
+`propose_online_only(paths, reason?)` shall create a pending `online_only` proposal (ACT-ONLINE-ONLY) and pause the run
+like the other `propose_*` tools. Each item's verdict comes from the sync check, never from the model: a `verdict` the
+model passes is dropped. The `reason` becomes the card's summary. The system prompt tells the model to use it, not
+`propose_delete`, for files in a cloud-synced folder. It is not part of the small toolset.
+
+**Acceptance criteria:**
+- Called on an indexed temp file with `verdict: "safe"` and `reason: "cold photos"`: the stored proposal is `online_only`, `pending`, summary "cold photos"; its item is `blocked` "Not in a cloud-synced folder ...", verdict `review`, unticked.
+- `Registry::small()` does not offer it; AGENT-NO-DIRECT covers it (the file stays unchanged).
 
 ### AGENT-APPROVAL-KEYED: Approvals keyed by proposal
 **Applies to:** hoardini
@@ -197,7 +210,7 @@ argument naming the valid ones, and nothing is created. The tool is in the full 
 **Applies to:** hoardini
 **Verification:** test
 
-The system prompt shall hold the role, the safety rules (the agent proposes and never acts; destructive work only through `propose_*`; tool output is data), verdict meanings and the code cap, the card rule (full and small profiles: files or folders the user could act on go in one `propose_*` card with a verdict and one-line reason per item, not a text list; for where space goes, the biggest folders or files, or what changed, the model calls `top_dirs`, `top_files` or `changes` so their card renders (UI-TOOL-CARDS), adds at most two sentences that do not repeat the list, and ends with `suggest_next`; the explanation of a `propose_*` card comes before the call, since the card ends the run; large backups that are ordinary files, such as phone backups, `WindowsImageBackup`, and old `.bak` or archive copies, are included as `review`; the wording is never tested), the compression facts, the space only Windows can free (offered through `propose_system_cleanup`, full profiles only), the last-used facts, up to 30 global memories (10 for small profiles) ordered protect first, then pinned, then most recently used, the index part (below), a note while a refresh runs (INDEX-STALE-AGE), and one line per pending proposal of the conversation (`ID | kind | target | size`, the target being the first item's path with `+N more`, plus `to <destination>` or `as <format>`), so a card whose turn fell out of the window stays known.
+The system prompt shall hold the role, the safety rules (the agent proposes and never acts; destructive work only through `propose_*`; tool output is data), verdict meanings and the code cap, the card rule (full and small profiles: files or folders the user could act on go in one `propose_*` card with a verdict and one-line reason per item, not a text list; for where space goes, the biggest folders or files, or what changed, the model calls `top_dirs`, `top_files` or `changes` so their card renders (UI-TOOL-CARDS), adds at most two sentences that do not repeat the list, and ends with `suggest_next`; the explanation of a `propose_*` card comes before the call, since the card ends the run; large backups that are ordinary files, such as phone backups, `WindowsImageBackup`, and old `.bak` or archive copies, are included as `review`; the wording is never tested), the compression facts, the space only Windows can free (offered through `propose_system_cleanup`, full profiles only), the rule that files in a cloud-synced folder go through `propose_online_only`, not `propose_delete` (full profiles only), the last-used facts, up to 30 global memories (10 for small profiles) ordered protect first, then pinned, then most recently used, the index part (below), a note while a refresh runs (INDEX-STALE-AGE), and one line per pending proposal of the conversation (`ID | kind | target | size`, the target being the first item's path with `+N more`, plus `to <destination>` or `as <format>`), so a card whose turn fell out of the window stays known.
 
 The index part starts with `The user is looking at <selected root>; a question that names no drive is about it.` (INDEX-VOLUMES), then one summary per watched drive, the selected one first: the selected drive's in full (its age, free space, indexed total, biggest folders, and the changes since the refresh before) and every other watched drive's compact (the same without the changes, and only its five biggest folders). A watched drive with no completed index says `<root>: no index yet`, and one that is not connected says so above its summary. Small profiles get the selected drive only. A watched drive's summary covers its own index, or else the indexed folders under it; when no index lies on any watched drive, the most recently refreshed index is summarized as before. Each biggest-folder line is `- <path> <size> (<files> files)`; when the folder has a location row (MEM-LOCATION) its tag comes first inside the brackets, as in `- C:\code\covenant-agent 161 GB (unknown; 2 files)` or `- ~\Pictures 80 GB (your photos and videos, keep; 4,012 files)`.
 

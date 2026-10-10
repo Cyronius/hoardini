@@ -9,7 +9,7 @@ use crate::policy::PolicyEnv;
 use crate::proposals::{Proposal, ProposalKind, StoredItem};
 use crate::vault::SecretStore;
 
-use super::{archive, compress, dedupe, delete};
+use super::{archive, compress, dedupe, delete, online};
 
 pub type CopyHook = Arc<dyn Fn(&Path) + Send + Sync>;
 
@@ -69,6 +69,7 @@ pub(crate) fn handler_for(kind: ProposalKind) -> Option<Box<dyn Handler>> {
         ProposalKind::Archive => Some(Box::new(archive::ArchiveHandler)),
         ProposalKind::Compress => Some(Box::new(compress::CompressHandler)),
         ProposalKind::Dedupe => Some(Box::new(dedupe::DedupeHandler)),
+        ProposalKind::OnlineOnly => Some(Box::new(online::OnlineOnlyHandler)),
         // Runs as one batch behind one admin prompt (actions::system), not item by item.
         ProposalKind::SystemCleanup => None,
     }

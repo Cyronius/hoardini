@@ -17,6 +17,11 @@ use windows::Win32::System::Threading::{
     PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
     ProcessPowerThrottling, SetPriorityClass, SetProcessInformation,
 };
+use windows::Win32::System::Threading::{
+    GetCurrentThread, SetThreadInformation, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
+    THREAD_MODE_BACKGROUND_END, THREAD_POWER_THROTTLING_CURRENT_VERSION,
+    THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE, ThreadPowerThrottling,
+};
 use windows::core::PCWSTR;
 
 use crate::util::{owned, raw, werr};
@@ -64,6 +69,43 @@ pub fn leave_background_mode() -> io::Result<()> {
     )?;
     // ControlMask 0 hands the QoS choice back to the system instead of pinning HighQoS.
     set_power_throttling(0, 0)
+}
+
+// Per thread, so background work inside the server leaves the rest of the process at normal priority.
+pub fn enter_thread_background_mode() -> io::Result<()> {
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) }.map_err(werr)?;
+    let state = THREAD_POWER_THROTTLING_STATE {
+        Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+    };
+    unsafe {
+        SetThreadInformation(
+            GetCurrentThread(),
+            ThreadPowerThrottling,
+            (&state as *const THREAD_POWER_THROTTLING_STATE).cast(),
+            size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
+        )
+    }
+    .map_err(werr)
+}
+
+pub fn leave_thread_background_mode() -> io::Result<()> {
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END) }.map_err(werr)?;
+    let state = THREAD_POWER_THROTTLING_STATE {
+        Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: 0,
+        StateMask: 0,
+    };
+    unsafe {
+        SetThreadInformation(
+            GetCurrentThread(),
+            ThreadPowerThrottling,
+            (&state as *const THREAD_POWER_THROTTLING_STATE).cast(),
+            size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
+        )
+    }
+    .map_err(werr)
 }
 
 // Kept alive for the life of the process; dropping it closes the job handle.

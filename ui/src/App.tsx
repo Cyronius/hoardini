@@ -3,6 +3,7 @@ import { routes, streamStatus } from "./api/client";
 import { AiNotices } from "./components/AiNotices";
 import { ChatSession } from "./components/Chat";
 import { FirstRun } from "./components/FirstRun";
+import { OnlineChecksConsent } from "./components/OnlineChecksConsent";
 import { Header } from "./components/Header";
 import { Stage } from "./components/mascot/Stage";
 import { Drawer } from "./drawer/Drawer";
@@ -89,6 +90,7 @@ export function App() {
     <div className="flex h-full flex-col bg-ink-900 text-paper">
       <Header />
       <AiNotices />
+      <OnlineChecksConsent />
       {nonce > 0 ? <ChatSession key={nonce} seed={seed} /> : <div className="flex-1" />}
       <Drawer />
       <FirstRun />

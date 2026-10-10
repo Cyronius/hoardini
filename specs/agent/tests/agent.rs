@@ -138,6 +138,7 @@ fn every_tool_leaves_the_filesystem_unchanged_and_propose_tools_only_create_pend
             "propose_system_cleanup",
             json!({"operations": ["recycle_bin", "component_store"]}),
         ),
+        ("propose_online_only", json!({"paths": [file]})),
     ];
     let reg = Registry::full();
     for name in reg.names() {
@@ -943,6 +944,44 @@ async fn a_rejected_key_points_the_user_at_provider_settings() {
         .await;
     let m = ev.last().unwrap()["message"].as_str().unwrap().to_string();
     assert!(m.contains("HTTP 401") && m.contains("API key"), "{m}");
+}
+
+// Traces: AGENT-PROPOSE-ONLINE-ONLY
+#[test]
+fn propose_online_only_takes_its_verdicts_from_the_sync_state() {
+    let h = Harness::new(None);
+    let (_tree, root) = real_tree(&h);
+    let file = format!(r"{root}\models\big.gguf");
+    let out = Registry::full()
+        .call(
+            &ctx(&h, &real_profile(), "call_online"),
+            "propose_online_only",
+            &json!({"paths": [file], "verdict": "safe", "reason": "cold photos"}).to_string(),
+        )
+        .unwrap();
+    let Outcome::Proposal { proposal_id } = out else {
+        panic!("expected a proposal")
+    };
+    let p = proposals::get(&h.db, &proposal_id).unwrap().unwrap();
+    assert_eq!(p.kind, proposals::ProposalKind::OnlineOnly);
+    assert_eq!(p.status, "pending");
+    assert_eq!(p.summary, "cold photos");
+    let it = &p.items[0];
+    assert_eq!(it.status, "blocked");
+    assert!(
+        it.block_reason
+            .as_deref()
+            .unwrap()
+            .starts_with("Not in a cloud-synced folder"),
+        "{it:#?}"
+    );
+    assert_eq!(
+        it.verdict,
+        Some(hoardini_core::policy::Verdict::Review),
+        "the model's verdict is ignored"
+    );
+    assert!(!it.selected);
+    assert!(!Registry::small().names().contains(&"propose_online_only"));
 }
 
 // Traces: AGENT-SMALL-PROFILE

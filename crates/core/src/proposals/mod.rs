@@ -1,6 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+use crate::copycheck;
 use crate::destinations;
 use crate::index::is_ancestor_path;
 use crate::memory;
@@ -19,6 +20,19 @@ pub fn default_tick(blocked: bool, verdict: Option<Verdict>, small: bool) -> boo
     !blocked && matches!(verdict, Some(Verdict::Safe | Verdict::Redownload)) && !small
 }
 
+// `synced` ticks only on an online-only card; anywhere else it would delete the cloud copy too.
+pub fn default_tick_for(
+    kind: ProposalKind,
+    blocked: bool,
+    verdict: Option<Verdict>,
+    small: bool,
+) -> bool {
+    match kind {
+        ProposalKind::OnlineOnly => !blocked && verdict == Some(Verdict::Synced) && !small,
+        _ => default_tick(blocked, verdict, small),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalKind {
@@ -27,6 +41,8 @@ pub enum ProposalKind {
     Compress,
     Dedupe,
     SystemCleanup,
+    #[serde(rename = "online_only")]
+    OnlineOnly,
 }
 
 impl ProposalKind {
@@ -37,6 +53,7 @@ impl ProposalKind {
             ProposalKind::Compress => "compress",
             ProposalKind::Dedupe => "dedupe",
             ProposalKind::SystemCleanup => "system_cleanup",
+            ProposalKind::OnlineOnly => "online_only",
         }
     }
 
@@ -47,6 +64,7 @@ impl ProposalKind {
             "compress" => Some(ProposalKind::Compress),
             "dedupe" => Some(ProposalKind::Dedupe),
             "system_cleanup" => Some(ProposalKind::SystemCleanup),
+            "online_only" => Some(ProposalKind::OnlineOnly),
             _ => None,
         }
     }
@@ -58,6 +76,7 @@ impl ProposalKind {
             ProposalKind::Compress => Action::Compress,
             ProposalKind::Dedupe => Action::Dedupe,
             ProposalKind::SystemCleanup => Action::SystemCleanup,
+            ProposalKind::OnlineOnly => Action::OnlineOnly,
         }
     }
 }
@@ -111,6 +130,8 @@ pub struct ProposalItem {
     pub memory_note: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub op: Option<OpView>,
+    #[serde(default)]
+    pub copy_note: Option<String>,
 }
 
 // A requested path the gate refused outright (deny list, protect memory, not absolute, nested).
@@ -448,16 +469,47 @@ fn build(
     let mut rows = Vec::new();
     for (path, i) in accepted {
         let item = &req.items[i];
+        // Online-only verdicts come from the sync engine's own state, never from the model.
+        let verdict = if req.kind == ProposalKind::OnlineOnly {
+            let synced = copycheck::sync_result(&conn, env.cloud().clone(), &env.profile, &path)
+                .is_some_and(|r| {
+                    r.confidence == copycheck::Confidence::Identical
+                        && !copycheck::is_pinned(&r.detail)
+                });
+            Some(if synced {
+                Verdict::Synced
+            } else {
+                Verdict::Review
+            })
+        } else {
+            item.verdict
+        };
         let ex = policy::examine(&conn, env, &path, req.kind.action())?;
         let note = memory::note_covering_with(&conn, &path, &env.profile)?.map(|m| m.text);
         rows.push(Row {
-            verdict: item.verdict.map(|v| v.capped(ex.cap)),
+            verdict: verdict.map(|v| v.capped(ex.cap)),
             reason: item.reason.clone(),
             tick: carry.as_ref().and_then(|c| c.ticks.get(i).copied()),
             path,
             ex,
             note,
         });
+    }
+    // A copy that this same card would also remove is no copy at all.
+    let paths: Vec<String> = rows.iter().map(|r| r.path.clone()).collect();
+    for r in &mut rows {
+        let Some(loc) = r.ex.copy.as_ref().and_then(|c| c.locator.clone()) else {
+            continue;
+        };
+        let doomed = paths.iter().any(|p| {
+            !p.eq_ignore_ascii_case(&r.path)
+                && (p.eq_ignore_ascii_case(&loc) || is_ancestor_path(p, &loc))
+        });
+        if doomed {
+            r.ex.cap = r.ex.cap.max(Some(Verdict::Review));
+            r.verdict = r.verdict.map(|v| v.capped(r.ex.cap));
+            r.ex.copy = None;
+        }
     }
     if rows.is_empty() {
         return Ok(Err(dropped));
@@ -498,7 +550,7 @@ fn build(
         let blocked = r.ex.block.is_some();
         let selected = match r.tick {
             Some(tick) => tick && !blocked,
-            None => default_tick(blocked, r.verdict, is_small(r.ex.alloc, total)),
+            None => default_tick_for(req.kind, blocked, r.verdict, is_small(r.ex.alloc, total)),
         };
         tx.execute(
             "INSERT INTO proposal_item(proposal_id, seq, path, node_id, kind, alloc, logical, mtime, file_id,
@@ -651,6 +703,7 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
                 small: is_small(alloc, total_alloc),
                 memory_note: r.get(11)?,
                 op: None,
+                copy_note: None,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -659,6 +712,11 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         for (it, op) in items.iter_mut().zip(&params.ops) {
             it.op = Some(op.clone());
             it.small = false;
+        }
+    } else if matches!(status.as_str(), "pending" | "approved" | "running") {
+        // Only live cards show it, and a finished card's paths may be gone.
+        for it in &mut items {
+            it.copy_note = copycheck::note_for(conn, &it.path);
         }
     }
     Ok(Some(Proposal {

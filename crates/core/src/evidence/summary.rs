@@ -88,6 +88,9 @@ pub fn build(e: &Evidence, now_ms: i64) -> String {
     if !e.duplicates.is_empty() {
         parts.push(format!("{} duplicate(s)", e.duplicates.len()));
     }
+    if let Some(c) = e.copy_phrase() {
+        parts.push(c);
+    }
     if let Some(m) = e.memories.iter().find(|m| m.kind == Kind::Protect) {
         parts.push(format!("PROTECTED by user note: {}", m.text));
     } else if !e.memories.is_empty() {

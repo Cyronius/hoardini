@@ -1,6 +1,8 @@
 #![allow(clippy::missing_safety_doc)]
 
 mod atime;
+mod authenticode;
+mod cloud;
 mod dpapi;
 mod enumerate;
 mod fsutil;
@@ -16,6 +18,8 @@ mod util;
 mod volume;
 
 pub use atime::open_read_preserving_atime;
+pub use authenticode::pkcs7_signer;
+pub use cloud::{PlaceholderInfo, free_up_space, placeholder_info, provider_display_name};
 pub use dpapi::{dpapi_protect, dpapi_unprotect};
 pub use enumerate::{alloc_size_by_open, list_dir, list_dir_each};
 pub use fsutil::{
@@ -25,11 +29,12 @@ pub use killjob::kill_child_on_exit;
 pub use net::smb_connect;
 pub use process::{
     JobGuard, KillOnCloseJob, ProcessMemory, cap_process_memory, current_working_set,
-    enter_background_mode, kill_with_job, leave_background_mode, physical_cores, process_memory,
+    enter_background_mode, enter_thread_background_mode, kill_with_job, leave_background_mode,
+    leave_thread_background_mode, physical_cores, process_memory,
 };
 pub use registry::{
-    hibernate_enabled, installed_programs, last_access_setting, steam_path, user_assist,
-    wsl_distros,
+    SyncRootRegistration, hibernate_enabled, installed_programs, last_access_setting, steam_path,
+    sync_root_registrations, user_assist, wsl_distros,
 };
 pub use rm::processes_using;
 pub use shell::{
@@ -49,6 +54,8 @@ pub const FILE_ATTRIBUTE_SPARSE_FILE: u32 = 0x200;
 pub const FILE_ATTRIBUTE_COMPRESSED: u32 = 0x800;
 pub const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
 pub const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x40000;
+pub const FILE_ATTRIBUTE_PINNED: u32 = 0x80000;
+pub const FILE_ATTRIBUTE_UNPINNED: u32 = 0x100000;
 pub const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x400000;
 
 pub const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;

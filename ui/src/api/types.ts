@@ -47,8 +47,8 @@ export type IndexSummary = {
   duplicate_hint: { bytes: number; count: number } | null;
 };
 
-export type Verdict = "safe" | "redownload" | "review" | "keep";
-export type ProposalKind = "delete" | "archive" | "compress" | "dedupe" | "system_cleanup";
+export type Verdict = "safe" | "redownload" | "synced" | "review" | "keep";
+export type ProposalKind = "delete" | "archive" | "compress" | "dedupe" | "system_cleanup" | "online_only";
 export type SystemOpView = {
   op: "component_store" | "restore_points" | "hibernation" | "compact_vhdx" | "recycle_bin";
   volume?: string;
@@ -75,6 +75,7 @@ export type ProposalItem = {
   small: boolean;
   memory_note: string | null;
   op?: SystemOpView;
+  copy_note?: string | null;
 };
 export type RarelyUsedApp = {
   id: string;
@@ -204,11 +205,28 @@ export type HistoryPoint = {
 };
 
 export type IndexSpeed = "lean" | "fast";
+export type OnlineService = "huggingface" | "winget";
+export type OnlineChecks = { asked: boolean; services: Record<OnlineService, boolean> };
 export type Settings = {
   index_speed: IndexSpeed;
   builtin_idle_minutes: number;
   index_size_bytes: number;
+  online_checks: OnlineChecks;
 };
+export type SettingsPatch = Partial<Omit<Settings, "index_size_bytes" | "online_checks">> & {
+  online_checks?: { asked?: boolean; services?: Partial<Record<OnlineService, boolean>> };
+};
+
+export type CopyConfidence = "identical" | "same-name-and-size" | "claimed" | "none";
+export type CopyCheckResult = {
+  check: string;
+  locator: string | null;
+  confidence: CopyConfidence;
+  checked_ms: number;
+  detail: Record<string, unknown>;
+  note: string;
+};
+export type CopyChecks = { path: string; results: CopyCheckResult[]; only_copy: boolean; note: string | null };
 
 export type ThreadDetail = {
   id: "main";

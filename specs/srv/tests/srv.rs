@@ -363,7 +363,7 @@ async fn a_key_in_a_provider_header_must_be_a_vault_reference() {
     let _ = f.h.shutdown.send(());
 }
 
-// Traces: SRV-SETTINGS
+// Traces: SRV-SETTINGS, EVID-COPY-CONSENT
 #[tokio::test(flavor = "multi_thread")]
 async fn settings_round_trip() {
     let f = Fixture::new().await;
@@ -372,11 +372,20 @@ async fn settings_round_trip() {
     keys.sort();
     assert_eq!(
         keys,
-        ["builtin_idle_minutes", "index_size_bytes", "index_speed"]
+        [
+            "builtin_idle_minutes",
+            "index_size_bytes",
+            "index_speed",
+            "online_checks"
+        ]
     );
     assert_eq!(s["index_speed"], "lean");
     assert_eq!(s["builtin_idle_minutes"], 10);
     assert!(s["index_size_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(
+        s["online_checks"],
+        json!({"asked": false, "services": {"huggingface": false, "winget": false}})
+    );
 
     let (st, s) = f
         .call(
@@ -391,12 +400,30 @@ async fn settings_round_trip() {
     assert_ne!(s["index_size_bytes"], 1);
     assert!(s.get("threshold_bytes").is_none());
 
+    let (st, s) = f
+        .call(
+            "PUT",
+            "/api/settings",
+            Some(json!({"online_checks": {"asked": true, "services": {"huggingface": true}}})),
+        )
+        .await;
+    assert_eq!(st, 200);
+    assert_eq!(
+        s["online_checks"],
+        json!({"asked": true, "services": {"huggingface": true, "winget": false}})
+    );
+
     let (_, again) = f.call("GET", "/api/settings", None).await;
     assert_eq!(again["index_speed"], "fast");
+    assert_eq!(again["online_checks"]["services"]["huggingface"], true);
     for bad in [
         json!({"index_speed": "turbo"}),
         json!({"index_speed": true}),
         json!({"builtin_idle_minutes": "x"}),
+        json!({"online_checks": 3}),
+        json!({"online_checks": {"services": {"huggingface": "yes"}}}),
+        json!({"online_checks": {"services": {"bing": true}}}),
+        json!({"index_speed": "lean", "online_checks": {"asked": "no"}}),
     ] {
         let (st, e) = f.call("PUT", "/api/settings", Some(bad.clone())).await;
         assert_eq!(st, 400, "{bad}");
@@ -407,7 +434,82 @@ async fn settings_round_trip() {
         again["index_speed"], "fast",
         "a rejected PUT changes nothing"
     );
+    assert_eq!(
+        again["online_checks"],
+        json!({"asked": true, "services": {"huggingface": true, "winget": false}})
+    );
     let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-COPY-CHECKS
+#[tokio::test(flavor = "multi_thread")]
+async fn copy_check_answers_are_served_for_a_path_with_the_profile_as_tilde() {
+    let f = Fixture::new().await;
+    let file = f.dir.path().join("model.gguf");
+    std::fs::write(&file, b"weights").unwrap();
+    let path = hoardini_core::index::normalize_path(&file.to_string_lossy());
+    {
+        let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+        let conn = db.conn().unwrap();
+        let sub = hoardini_core::copycheck::Subject::load(&conn, &path).unwrap();
+        let r = hoardini_core::copycheck::CopyResult::new(
+            "huggingface",
+            Some("org/model".into()),
+            hoardini_core::copycheck::Confidence::Identical,
+            json!({"note": "identical to org/model on Hugging Face", "root": path}),
+        );
+        hoardini_core::copycheck::store(&conn, &sub, &r).unwrap();
+        hoardini_core::store::set_meta(&conn, "copy_online_waiting", "3").unwrap();
+    }
+    let profile = hoardini_core::paths::profile_dir()
+        .to_string_lossy()
+        .into_owned();
+    let tilde = hoardini_core::paths::redact(&path);
+    for q in [&path, &tilde] {
+        let (st, v) = f
+            .call("GET", &format!("/api/copy-checks?path={}", enc(q)), None)
+            .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["path"], tilde.as_str());
+        assert_eq!(v["only_copy"], false);
+        assert_eq!(v["note"], "identical to org/model on Hugging Face");
+        let r = &v["results"][0];
+        assert_eq!(
+            (
+                r["check"].as_str(),
+                r["confidence"].as_str(),
+                r["locator"].as_str()
+            ),
+            (Some("huggingface"), Some("identical"), Some("org/model"))
+        );
+        assert_eq!(r["detail"]["root"], tilde.as_str());
+        assert!(r["checked_ms"].as_i64().unwrap() > 0);
+        let escaped = profile.to_lowercase().replace('\\', "\\\\");
+        assert!(!v.to_string().to_lowercase().contains(&escaped), "{v}");
+    }
+    std::fs::write(&file, b"weights, changed").unwrap();
+    let (_, v) = f
+        .call(
+            "GET",
+            &format!("/api/copy-checks?path={}", enc(&path)),
+            None,
+        )
+        .await;
+    assert_eq!(v["results"], json!([]), "stale once the file changed");
+    let (st, _) = f.call("GET", "/api/copy-checks", None).await;
+    assert_eq!(st, 400);
+    let (_, w) = f.call("GET", "/api/copy-checks/waiting", None).await;
+    assert_eq!(w, json!({"online_waiting": 3}));
+    let _ = f.h.shutdown.send(());
+}
+
+fn enc(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 // Traces: SRV-MEMORY-CRUD

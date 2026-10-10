@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
 import { routes } from "../api/client";
-import type { IndexSpeed, Settings } from "../api/types";
+import type { IndexSpeed, OnlineService, Settings } from "../api/types";
 import { LeafIcon } from "../components/icons";
 import { humanBytes } from "../format";
 import { SavedTick, useAutoSave } from "./autosave";
 import { ClearHistorySection } from "./ClearHistory";
-import { ErrorLine, errMsg, Section } from "./ui";
+import { ErrorLine, errMsg, Section, Toggle } from "./ui";
+
+const SERVICES: { id: OnlineService; label: string; hint: string }[] = [
+  { id: "huggingface", label: "Hugging Face", hint: "Model files: looks up the repo and compares its published hash with this PC's copy." },
+  { id: "winget", label: "winget", hint: "Installers: asks winget for the package and compares its installer hash." },
+];
 
 const SPEEDS: { id: IndexSpeed; label: string; hint: string }[] = [
   { id: "lean", label: "Lean", hint: "Slower, stays out of your way" },
@@ -18,6 +23,15 @@ export function SettingsTab() {
   const speed = useAutoSave(async (v: IndexSpeed) => {
     try {
       setS(await routes.putSettings({ index_speed: v }));
+    } catch (e) {
+      routes.settings().then(setS).catch(() => {});
+      throw e;
+    }
+  });
+
+  const online = useAutoSave(async (patch: { service: OnlineService; on: boolean }) => {
+    try {
+      setS(await routes.putSettings({ online_checks: { asked: true, services: { [patch.service]: patch.on } } }));
     } catch (e) {
       routes.settings().then(setS).catch(() => {});
       throw e;
@@ -78,6 +92,27 @@ export function SettingsTab() {
           </div>
         </div>
         <ErrorLine error={speed.error} />
+      </Section>
+      <Section title="Online checks" action={<SavedTick status={online.status} />}>
+        <p className="text-[length:var(--fs-xs)] text-faint">
+          Confirms that a big file can be downloaded again before it is offered as re-downloadable. Sends file names and package or repo names, never
+          file contents or hashes. Checks against your own copies, git, and cloud sync always run on this PC.
+        </p>
+        <div className="space-y-2">
+          {SERVICES.map((svc) => (
+            <Toggle
+              key={svc.id}
+              label={svc.label}
+              hint={svc.hint}
+              checked={s.online_checks.services[svc.id]}
+              onChange={(on) => {
+                setS({ ...s, online_checks: { asked: true, services: { ...s.online_checks.services, [svc.id]: on } } });
+                online.commit({ service: svc.id, on });
+              }}
+            />
+          ))}
+        </div>
+        <ErrorLine error={online.error} />
       </Section>
       <ClearHistorySection />
     </div>

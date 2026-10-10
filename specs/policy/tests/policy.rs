@@ -3,6 +3,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
+use hoardini_core::copycheck::{self, Confidence, CopyResult, Subject};
 use hoardini_core::memory::knowledge::upsert_with;
 use hoardini_core::memory::{self, Detail, Kind, Knowledge, NewMemory, Scope, remember_with};
 use hoardini_core::policy::{Action, Verdict, cap_for_with, deny_reason, examine};
@@ -544,6 +545,75 @@ fn shown_verdict_never_exceeds_the_policy_cap() {
     );
 }
 
+fn copy_answer(fx: &Fx, p: &Path, check: &str, confidence: Confidence) {
+    let conn = fx.db.conn().unwrap();
+    let sub = Subject::load(&conn, &s(p)).unwrap();
+    let r = CopyResult::new(check, Some("o/m".into()), confidence, serde_json::json!({}));
+    copycheck::store(&conn, &sub, &r).unwrap();
+}
+
+// Traces: POLICY-VERDICT-CAP, POLICY-DEFAULT-TICK, EVID-COPY-CHECK
+#[test]
+fn an_identical_copy_lifts_the_unknown_location_cap_to_redownload() {
+    let fx = Fx::new();
+    let verified = fx.file("models\\mine.gguf", &data(64 * 1024, 1));
+    let likely = fx.file("models\\likely.gguf", &data(64 * 1024, 2));
+    let synced = fx.file("cloud\\photo.jpg", &data(64 * 1024, 3));
+    let blob = fx.pfile(
+        r".cache\huggingface\hub\models--org--m\blobs\0123abcd",
+        &data(64 * 1024, 4),
+    );
+    copy_answer(&fx, &verified, "huggingface", Confidence::Identical);
+    copy_answer(&fx, &likely, "huggingface", Confidence::SameNameAndSize);
+    copy_answer(&fx, &synced, "sync", Confidence::Identical);
+    copy_answer(&fx, &blob, "huggingface", Confidence::Identical);
+
+    let p = fx
+        .propose(
+            ProposalKind::Delete,
+            &[&verified, &likely, &synced, &blob],
+            None,
+        )
+        .unwrap();
+    let got = |path: &Path| {
+        let it = item(&p, path);
+        (it.verdict, it.cap, it.selected)
+    };
+    assert_eq!(
+        got(&verified),
+        (Some(Verdict::Redownload), Some(Verdict::Redownload), true),
+        "the model's safe becomes redownload and starts ticked"
+    );
+    assert_eq!(
+        got(&likely),
+        (Some(Verdict::Review), Some(Verdict::Review), false)
+    );
+    assert_eq!(
+        got(&synced),
+        (Some(Verdict::Review), Some(Verdict::Review), false),
+        "a cloud copy never relaxes a delete"
+    );
+    assert_eq!(
+        got(&blob),
+        (Some(Verdict::Review), Some(Verdict::Review), false),
+        "a single shared blob stays review whatever its copy"
+    );
+    assert_eq!(
+        item(&p, &verified).copy_note.as_deref(),
+        Some("identical copy at o/m")
+    );
+    let conn = fx.db.conn().unwrap();
+    assert_eq!(
+        cap_for_with(&conn, &fx.env, &verified, None, false).unwrap(),
+        Some(Verdict::Redownload)
+    );
+    assert_eq!(
+        cap_for_with(&conn, &fx.env, &verified, None, true).unwrap(),
+        Some(Verdict::Keep),
+        "in use still wins"
+    );
+}
+
 // Traces: POLICY-DEFAULT-TICK
 #[test]
 fn small_means_under_50_mib_and_under_2_percent_of_the_card() {
@@ -784,6 +854,8 @@ fn a_keep_location_blocks_delete_and_dedupe_but_allows_its_listed_actions() {
     assert!(block(&photo, Action::Dedupe).is_some());
     assert_eq!(block(&photo, Action::Archive), None);
     assert!(block(&photo, Action::Compress).is_some());
+    let online = block(&photo, Action::OnlineOnly).unwrap_or_default();
+    assert!(!online.contains("a kept location"), "{online}");
     assert!(block(&os, Action::Archive).is_some());
     assert_eq!(block(&scratch, Action::Dedupe), None);
 
@@ -841,5 +913,68 @@ fn location_rows_from_the_classifier_are_not_item_notes() {
     assert_eq!(
         q.items[0].memory_note.as_deref(),
         Some("You said this folder can go.")
+    );
+}
+
+fn sparse(path: &Path, len: u64) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::File::create(path).unwrap();
+    hoardini_win::set_sparse_and_zero_range(path, 0, 0).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_len(len)
+        .unwrap();
+}
+
+// Traces: POLICY-VERDICT-CAP, EVID-COPY-DUP
+#[test]
+fn a_copy_that_is_gone_or_on_the_same_card_relaxes_nothing() {
+    let fx = Fx::new();
+    let a = fx.work.join(r"models\a.bin");
+    let b = fx.work.join(r"backup\a.bin");
+    sparse(&a, 101 << 20);
+    sparse(&b, 101 << 20);
+    fx.index_work();
+    let conn = fx.db.conn().unwrap();
+    conn.execute(
+        "INSERT INTO dup_group(id, size, hash, created_ms) VALUES (1, ?1, 'blake', 0)",
+        [101i64 << 20],
+    )
+    .unwrap();
+    for p in [&a, &b] {
+        let sub = Subject::load(&conn, &s(p)).unwrap();
+        conn.execute(
+            "INSERT INTO dup_member(group_id, path, file_id, mtime) VALUES (1, ?1, ?2, ?3)",
+            rusqlite::params![s(p), sub.file_id.unwrap().to_vec(), sub.mtime],
+        )
+        .unwrap();
+    }
+    let one = fx.propose(ProposalKind::Delete, &[&a], None).unwrap();
+    let it = item(&one, &a);
+    assert_eq!(
+        (it.verdict, it.selected),
+        (Some(Verdict::Redownload), true),
+        "the twin outside the card is a copy"
+    );
+
+    let both = fx.propose(ProposalKind::Delete, &[&a, &b], None).unwrap();
+    for p in [&a, &b] {
+        let it = item(&both, p);
+        assert_eq!(
+            (it.verdict, it.cap, it.selected),
+            (Some(Verdict::Review), Some(Verdict::Review), false),
+            "a card holding both copies keeps neither as the other's backup"
+        );
+    }
+
+    std::fs::remove_file(&b).unwrap();
+    let alone = fx.propose(ProposalKind::Delete, &[&a], None).unwrap();
+    let it = item(&alone, &a);
+    assert_eq!(
+        (it.verdict, it.selected),
+        (Some(Verdict::Review), false),
+        "a twin deleted since the last pass is no copy"
     );
 }

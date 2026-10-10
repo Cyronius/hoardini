@@ -140,7 +140,9 @@ export const routes = {
   children: (path: string, limit = 50) => api<T.Children>(`/api/index/children?path=${enc(path)}&limit=${limit}`),
   reveal: (path: string) => api<{ ok: true }>("/api/reveal", { body: { path } }),
   settings: () => api<T.Settings>("/api/settings"),
-  putSettings: (s: Partial<Omit<T.Settings, "index_size_bytes">>) => put<T.Settings>("/api/settings", s),
+  putSettings: (s: T.SettingsPatch) => put<T.Settings>("/api/settings", s),
+  copyChecks: (path: string) => api<T.CopyChecks>(`/api/copy-checks?path=${enc(path)}`),
+  copyChecksWaiting: () => api<{ online_waiting: number }>("/api/copy-checks/waiting"),
 };
 
 // EventSource cannot send headers; fetch streaming keeps the token out of the URL.

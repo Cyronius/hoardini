@@ -554,6 +554,8 @@ pub fn keep_block(
             Action::Archive | Action::Compress => !d.actions.contains(&action),
             // Windows' own tools act on system areas, which no location row may hold back.
             Action::SystemCleanup => false,
+            // The cloud copy stays, so nothing kept is lost.
+            Action::OnlineOnly => false,
         };
         if d.verdict != Some(Verdict::Keep) || !blocked {
             continue;

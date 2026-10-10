@@ -21,6 +21,59 @@ pub struct GgufInfo {
     pub context_length: Option<u64>,
     pub parameters: Option<u64>,
     pub truncated: bool,
+    #[serde(default)]
+    pub basename: Option<String>,
+    #[serde(default)]
+    pub source_repo: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub base_model_urls: Vec<String>,
+}
+
+// `org/name` from a Hugging Face model URL; datasets, spaces and other hosts give None.
+pub fn hf_repo_of_url(url: &str) -> Option<String> {
+    let rest = url
+        .trim()
+        .strip_prefix("https://huggingface.co/")
+        .or_else(|| url.trim().strip_prefix("http://huggingface.co/"))
+        .or_else(|| url.trim().strip_prefix("huggingface.co/"))?;
+    let mut parts = rest.split(['/', '?', '#']).filter(|p| !p.is_empty());
+    let org = parts.next()?;
+    let name = parts.next()?;
+    if matches!(org, "datasets" | "spaces" | "api" | "docs") {
+        return None;
+    }
+    Some(format!("{org}/{name}"))
+}
+
+impl GgufInfo {
+    // Where the header says the weights came from, most direct first.
+    pub fn hf_repos(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let direct = self
+            .source_repo
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| r.split('/').count() == 2)
+            .map(str::to_string);
+        let urls = [&self.source_url, &self.url]
+            .into_iter()
+            .filter_map(|u| u.as_deref().and_then(hf_repo_of_url))
+            .chain(
+                self.base_model_urls
+                    .iter()
+                    .filter_map(|u| hf_repo_of_url(u)),
+            );
+        for r in direct.into_iter().chain(urls) {
+            if !out.iter().any(|o| o.eq_ignore_ascii_case(&r)) {
+                out.push(r);
+            }
+        }
+        out
+    }
 }
 
 fn ftype_name(v: u32) -> Option<&'static str> {
@@ -280,6 +333,15 @@ pub fn parse<R: Read + Seek>(mut reader: R, file_len: u64) -> std::io::Result<Gg
             ("general.name", Val::S(s)) => info.name = Some(s.clone()),
             ("general.architecture", Val::S(s)) => info.architecture = Some(s.clone()),
             ("general.size_label", Val::S(s)) => info.size_label = Some(s.clone()),
+            ("general.basename", Val::S(s)) => info.basename = Some(s.clone()),
+            ("general.source.huggingface.repository", Val::S(s)) => {
+                info.source_repo = Some(s.clone())
+            }
+            ("general.source.url", Val::S(s)) => info.source_url = Some(s.clone()),
+            ("general.url", Val::S(s)) => info.url = Some(s.clone()),
+            (k, Val::S(s)) if k.starts_with("general.base_model.") && k.ends_with(".repo_url") => {
+                info.base_model_urls.push(s.clone())
+            }
             ("general.file_type", v) => info.file_type = v.as_u64().map(|x| x as u32),
             (k, v) if k.ends_with(".context_length") => {
                 if let Some(x) = v.as_u64() {

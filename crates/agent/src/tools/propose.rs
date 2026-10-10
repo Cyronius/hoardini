@@ -13,6 +13,7 @@ pub struct ProposeArchive;
 pub struct ProposeCompress;
 pub struct ProposeDedupe;
 pub struct ProposeSystemCleanup;
+pub struct ProposeOnlineOnly;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -428,5 +429,50 @@ impl Tool for ProposeSystemCleanup {
         )
         .map_err(|e| ToolError::Failed(format!("the proposal was not created: {e}")))?;
         Ok(Outcome::Proposal { proposal_id: p.id })
+    }
+}
+
+#[derive(Deserialize)]
+struct OnlineArgs {
+    paths: Entries,
+    #[serde(default, deserialize_with = "opt_string")]
+    reason: Option<String>,
+}
+
+impl Tool for ProposeOnlineOnly {
+    fn name(&self) -> &'static str {
+        "propose_online_only"
+    }
+
+    fn description(&self) -> &'static str {
+        "Propose making files in a cloud-synced folder (OneDrive, Dropbox, iCloud) online-only: the copy on this PC is freed and the file stays in the cloud, downloading again when opened. Never deletes. Use this, not propose_delete, for synced files. Shows the user a card; stop after calling it."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({"type": "object", "properties": {
+            "paths": path_schema(),
+            "reason": {"type": "string", "description": "One line: why these can live in the cloud only"}
+        }, "required": ["paths"]})
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::Propose
+    }
+
+    fn run(&self, ctx: &ToolCtx, args: Value) -> Result<Outcome, ToolError> {
+        let a: OnlineArgs = parse(args)?;
+        let paths = PathsArgs {
+            paths: a.paths,
+            verdict: None,
+            reason: a.reason.clone(),
+            destination: None,
+        };
+        // The sync engine's state sets each verdict; the model's is ignored.
+        let items: Vec<NewItem> = items(ctx, &paths)?
+            .into_iter()
+            .map(|i| NewItem { verdict: None, ..i })
+            .collect();
+        let s = summary("Make online-only", a.reason.as_deref(), items.len());
+        submit(ctx, new_proposal(ctx, ProposalKind::OnlineOnly, s, items))
     }
 }

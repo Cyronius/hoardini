@@ -1,0 +1,33 @@
+Found balenaEtcher [Balena.Etcher]
+Version: 2.1.7
+Publisher: Balena Ltd. <hello@balena.io>
+Publisher Url: https://www.balena.io/
+Publisher Support Url: https://github.com/balena-io/etcher/blob/HEAD/docs/SUPPORT.md
+Author: Balena Ltd.
+Description: Etcher is a powerful OS image flasher built with web technologies to ensure flashing an SDCard or USB drive is a pleasant and safe experience. It protects you from accidentally writing to your hard-drives, ensures every byte of data was written correctly, and much more. It can also directly flash Raspberry Pi devices that support USB device boot mode.
+Homepage: https://etcher.balena.io/
+License: Apache-2.0
+License Url: https://github.com/balena-io/etcher/blob/HEAD/LICENSE
+Privacy Url: https://www.balena.io/privacy-policy
+Copyright: Copyright 2016-2026 Balena Ltd.
+Release Notes:
+  507fd3e9 (patch: fix copyright, 2026-06-02)
+  26ad031b (patch: macos hardening, 2026-09-18)
+Release Notes Url: https://github.com/balena-io/etcher/releases/tag/v2.1.7
+Documentation:
+  Docs: https://etcher-docs.balena.io/
+Tags:
+  boot
+  dd
+  flash
+  format
+  image
+  img
+  iso
+  usb
+Installer:
+  Installer Type: exe
+  Installer Url: https://github.com/balena-io/etcher/releases/download/v2.1.7/balenaEtcher-2.1.7.Setup.exe
+  Installer SHA256: 386bb45da6e0edeb20e065427cdef30a876e4d2a59579f8add329d8510ac12f8
+  Release Date: 2026-09-18
+  Offline Distribution Supported: true

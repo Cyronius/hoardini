@@ -103,6 +103,8 @@ export function moveFor(kind: string, destKind?: string | null): Move | null {
       return "flop";
     case "archive":
       return destKind === "rclone" ? "throw-up" : "throw";
+    case "online_only":
+      return "throw-up";
     case "dedupe":
       return "clap";
     default:

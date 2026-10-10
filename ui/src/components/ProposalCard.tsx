@@ -8,12 +8,14 @@ import { useStore } from "../store";
 const VERDICT_LABEL: Record<Verdict, string> = {
   safe: "safe",
   redownload: "re-download",
+  synced: "synced",
   review: "review",
   keep: "keep",
 };
 const VERDICT_STYLE: Record<Verdict, string> = {
   safe: "bg-ok/15 text-ok border-ok/30",
   redownload: "bg-info/15 text-info border-info/30",
+  synced: "bg-info/10 text-info border-info/40",
   review: "bg-brass/15 text-brass border-brass/30",
   keep: "bg-ink-800 text-muted border-line",
 };
@@ -133,8 +135,12 @@ function ItemRow({
           </span>
           {item.reason && <span className="block text-[length:var(--fs-xs)] text-muted">{item.reason}</span>}
           {item.memory_note && <span className="block text-[length:var(--fs-xs)] text-faint">Noted: {item.memory_note}</span>}
+          {item.copy_note && <span className="block text-[length:var(--fs-xs)] text-faint">Copy: {item.copy_note}</span>}
           {/* `reason` is the model's; the cap comes from policy code, so they are never joined into one sentence. */}
-          {item.cap && !blocked && <span className="block text-[length:var(--fs-xs)] text-brass">Capped to "{VERDICT_LABEL[item.cap]}" by a safety rule</span>}
+          {/* A `redownload` or `synced` cap from a copy check is already explained by the Copy line. */}
+          {item.cap && !blocked && (item.cap === "review" || item.cap === "keep" || !item.copy_note) && (
+            <span className="block text-[length:var(--fs-xs)] text-brass">Capped to "{VERDICT_LABEL[item.cap]}" by a safety rule</span>
+          )}
           {item.block_reason && <span className="block text-[length:var(--fs-xs)] font-semibold text-err">Blocked: {item.block_reason}</span>}
           {item.status === "failed" && item.detail && <span className="block text-[length:var(--fs-xs)] text-err">{item.detail}</span>}
           {(item.status === "done" || item.status === "skipped") && (
@@ -216,6 +222,7 @@ const VERB: Record<Proposal["kind"], string> = {
   compress: "Compressed",
   dedupe: "Deduplicated",
   system_cleanup: "Cleaned up",
+  online_only: "Made online-only",
 };
 const ENDED: Proposal["status"][] = ["declined", "done", "partial", "failed"];
 
@@ -313,7 +320,9 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
           ? `Compress${proposal.format ? ` (${proposal.format})` : ""}`
           : system
             ? "Clean up with Windows"
-            : "Remove duplicates";
+            : proposal.kind === "online_only"
+              ? "Make online-only"
+              : "Remove duplicates";
   const outcome = outcomeLine(proposal, job);
   const compressNote = proposal.kind === "compress" ? compressNoteFor(proposal.format) : null;
   const dedupe = proposal.kind === "dedupe" ? proposal.dedupe : null;
@@ -394,6 +403,11 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
           {proposal.kind === "archive" && (
             <p className="mt-1 text-[length:var(--fs-sm)] text-muted">Copies to {dest}, verifies the copy, then deletes the originals.</p>
           )}
+          {proposal.kind === "online_only" && (
+            <p className="mt-1 text-[length:var(--fs-sm)] text-muted">
+              Frees the copy on this PC. Each file stays in its cloud folder and downloads again when you open it. Files not in sync yet are left as they are.
+            </p>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {permanentDelete ? (
               <HoldButton label={system ? "Hold to clean up" : "Hold to delete"} disabled={busy || selected.size === 0} onConfirm={() => void approve()} />
@@ -410,7 +424,9 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
                     ? "Compress"
                     : system
                       ? "Clean up"
-                      : "Remove duplicates"}
+                      : proposal.kind === "online_only"
+                        ? "Make online-only"
+                        : "Remove duplicates"}
               </button>
             )}
             <button

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::catalog::{Catalog, Env};
+use crate::cloud::{Cloud, CloudState, SyncRoot};
 use crate::index::normalize_path;
 use crate::paths;
 
@@ -15,6 +16,22 @@ pub struct PolicyEnv {
     pub program_data: String,
     pub vars: HashMap<String, String>,
     catalog: Option<Arc<Catalog>>,
+    cloud: Arc<dyn Cloud>,
+}
+
+// Tests start with no sync roots, so the real OneDrive or Dropbox never leaks in.
+struct NoCloud;
+
+impl Cloud for NoCloud {
+    fn roots(&self) -> Vec<SyncRoot> {
+        Vec::new()
+    }
+    fn state(&self, _path: &Path) -> std::io::Result<Option<CloudState>> {
+        Ok(None)
+    }
+    fn free(&self, _path: &Path) -> std::io::Result<u64> {
+        Err(std::io::Error::other("no cloud provider"))
+    }
 }
 
 impl std::fmt::Debug for PolicyEnv {
@@ -58,6 +75,7 @@ impl PolicyEnv {
             ),
             vars,
             catalog: None,
+            cloud: crate::cloud::system(),
         }
     }
 
@@ -84,7 +102,17 @@ impl PolicyEnv {
             cat_env = cat_env.set(k, v.clone());
         }
         env.catalog = Catalog::with_env(&cat_env).ok().map(Arc::new);
+        env.cloud = Arc::new(NoCloud);
         env
+    }
+
+    pub fn with_cloud(mut self, cloud: Arc<dyn Cloud>) -> PolicyEnv {
+        self.cloud = cloud;
+        self
+    }
+
+    pub fn cloud(&self) -> &Arc<dyn Cloud> {
+        &self.cloud
     }
 
     pub fn catalog(&self) -> &Catalog {

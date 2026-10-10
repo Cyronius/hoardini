@@ -5,6 +5,7 @@ mod delete;
 mod handler;
 mod install;
 mod journal;
+mod online;
 mod rclone;
 mod system;
 

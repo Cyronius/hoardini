@@ -8,6 +8,7 @@ use axum::routing::{MethodRouter, delete, get, post, put};
 use hoardini_agent::thread;
 use hoardini_core::actions::Job;
 use hoardini_core::apps;
+use hoardini_core::copycheck::consent;
 use hoardini_core::destinations::{self, NewDestination};
 use hoardini_core::history::{self, Since};
 use hoardini_core::index;
@@ -21,7 +22,7 @@ use serde_json::{Map, Value, json};
 
 use crate::state::{ApiError, ApiResult, AppState, blocking, parse};
 use crate::supervisor::index_speed;
-use crate::{builtin, providers, rclone, status, stream, tree, volumes};
+use crate::{builtin, copychecks, providers, rclone, status, stream, tree, volumes};
 
 pub struct Entry {
     pub method: &'static str,
@@ -138,6 +139,8 @@ fn entries() -> Vec<Entry> {
         get_("/api/history", history_points),
         get_("/api/settings", settings_get),
         put_("/api/settings", settings_put),
+        get_("/api/copy-checks", copychecks::get),
+        get_("/api/copy-checks/waiting", copychecks::waiting),
         get_("/api/archive", archive_list),
         post_("/api/archive/{id}/restore", archive_restore),
         post_("/api/dialog/pick-folder", pick_folder),
@@ -589,6 +592,7 @@ fn settings_value(s: &AppState) -> anyhow::Result<Value> {
         "index_speed": index_speed(&conn),
         "builtin_idle_minutes": meta_u64(&conn, "builtin_idle_minutes", 10),
         "index_size_bytes": size(db) + size(wal.into()),
+        "online_checks": consent::load(&conn),
     }))
 }
 
@@ -599,6 +603,14 @@ async fn settings_get(State(s): State<AppState>) -> ApiResult {
 async fn settings_put(State(s): State<AppState>, body: Bytes) -> ApiResult {
     let patch: Map<String, Value> = parse(&body)?;
     let mut writes: Vec<(&'static str, String)> = Vec::new();
+    let online = match patch.get("online_checks") {
+        Some(v) => {
+            let st = s.clone();
+            let current = blocking(move || Ok(consent::load(&st.db.conn()?))).await?;
+            Some(consent::patch(current, v).map_err(ApiError::bad)?)
+        }
+        None => None,
+    };
     for (k, v) in &patch {
         match k.as_str() {
             "index_speed" => {
@@ -628,12 +640,18 @@ async fn settings_put(State(s): State<AppState>, body: Bytes) -> ApiResult {
             for (k, v) in &writes {
                 set_meta(&conn, k, v)?;
             }
+            if let Some(c) = &online {
+                consent::save(&conn, c)?;
+            }
             Ok(Json(settings_value(&s)?))
         }
     })
     .await?;
     if let Some(sp) = speed {
         s.supervisor.speed_changed(&sp);
+    }
+    if online.is_some() {
+        s.copy.kick();
     }
     s.bump();
     Ok(res)
