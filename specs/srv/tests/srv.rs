@@ -2685,6 +2685,29 @@ async fn index_map_tags_each_block_with_what_hoardini_knows() {
 }
 
 // Traces: SRV-INDEX-MAP
+#[test]
+fn a_watched_folders_breadcrumbs_start_at_the_folder_the_index_holds() {
+    use hoardini_core::explore;
+    use hoardini_core::index::{FakeFs, RefreshOptions, node_by_path, refresh};
+    use hoardini_core::policy::PolicyEnv;
+    let dir = tempfile::tempdir().unwrap();
+    let db = hoardini_core::store::Db::open(dir.path().join("h.db")).unwrap();
+    let fs = FakeFs::new(r"C:\x\proj");
+    fs.file(r"C:\x\proj\sub\a.bin", 50 * MIB);
+    fs.file(r"C:\x\proj\sub\deep\b.bin", 30 * MIB);
+    let conn = db.conn().unwrap();
+    assert!(
+        refresh(&conn, &fs, r"C:\x\proj", &RefreshOptions::default())
+            .unwrap()
+            .completed
+    );
+    let deep = node_by_path(&conn, r"C:\x\proj\sub\deep").unwrap().unwrap();
+    let m = explore::map(&conn, &PolicyEnv::system(), &deep, 1000, 1000, 5000).unwrap();
+    let crumbs: Vec<&str> = m.ancestors.iter().map(|c| c.path.as_str()).collect();
+    assert_eq!(crumbs, [r"C:\x\proj", r"C:\x\proj\sub"], "each crumb opens");
+}
+
+// Traces: SRV-INDEX-MAP
 #[tokio::test(flavor = "multi_thread")]
 async fn index_map_stops_at_the_node_cap_and_still_adds_up() {
     use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
