@@ -130,6 +130,7 @@ impl Fx {
             consent: OnlineConsent::default(),
             catalog: Some(Arc::new(Catalog::with_env(&cat).unwrap())),
             ollama_models: Some(format!(r"{p}\.ollama\models")),
+            live_consent: false,
         }
     }
 }
@@ -1393,6 +1394,51 @@ fn a_folder_answer_goes_stale_when_a_file_inside_is_rewritten() {
     std::fs::write(&tok, b"modified").unwrap();
     let r = answer(&fx, &env, HubCheck::NAME, &lm).unwrap();
     assert_ne!(r.confidence, Confidence::Identical, "{}", note(&r));
+}
+
+// Traces: EVID-COPY-CONSENT, EVID-COPY-BACKGROUND
+#[test]
+fn turning_a_service_off_mid_pass_stops_its_requests() {
+    let fx = Fx::new();
+    let models = fx.profile().join(r".lmstudio\models\pub");
+    sparse(&models.join(r"repo\a.gguf"), 102 * MIB);
+    sparse(&models.join(r"repo2\b.gguf"), 101 * MIB);
+    let conn = fx.db.conn().unwrap();
+    let out = index::refresh(
+        &conn,
+        &WinLister,
+        &s(&fx.profile()),
+        &RefreshOptions {
+            workers: 2,
+            ..RefreshOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(out.completed);
+    copycheck::consent::save(&conn, &hf_on()).unwrap();
+    let hub = StandIn::start(vec![]);
+    let mut env = CheckEnv::system(&conn);
+    env.profile = s(&fx.profile());
+    env.cloud = Arc::new(FakeCloud::default());
+    env.winget = Arc::new(FakeWinget::default());
+    env.hub_base = hub.base.clone();
+    let polls = AtomicUsize::new(0);
+    let go = || {
+        if polls.fetch_add(1, Ordering::SeqCst) == 1 {
+            let off = OnlineConsent {
+                asked: true,
+                services: Services::default(),
+            };
+            copycheck::consent::save(&fx.db.conn().unwrap(), &off).unwrap();
+        }
+        true
+    };
+    copycheck::run_volume(&fx.db, &env, &Registry::standard(), &s(&fx.profile()), &go).unwrap();
+    assert_eq!(
+        hub.requests(),
+        ["/api/models/pub/repo/tree/main?recursive=1"],
+        "the second file was checked after the user turned Hugging Face off"
+    );
 }
 
 // Traces: EVID-COPY-SYNC

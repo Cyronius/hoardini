@@ -110,6 +110,8 @@ impl CopyWorker {
         let Ok(conn) = self.db.conn() else {
             return;
         };
+        // Cleared now, not at the end, so a kick during this pass stays owed if the pass ends unwatched.
+        self.owed.store(false, Ordering::SeqCst);
         let env = CheckEnv::system(&conn);
         let reg = Registry::standard();
         let go = || self.go();
@@ -143,10 +145,11 @@ impl CopyWorker {
             if let Err(e) = copycheck::set_online_waiting(&conn, waiting) {
                 tracing::debug!(error = %e, "waiting count not stored");
             }
-            self.owed.store(false, Ordering::SeqCst);
             if let Ok(mut g) = self.finished_at.lock() {
                 *g = Some(Instant::now());
             }
+        } else {
+            self.owed.store(true, Ordering::SeqCst);
         }
     }
 }

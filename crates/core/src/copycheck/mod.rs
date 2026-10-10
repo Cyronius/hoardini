@@ -387,6 +387,7 @@ pub struct Found {
     pub detail: Value,
 }
 
+#[derive(Clone)]
 pub struct CheckEnv {
     pub profile: String,
     pub cloud: Arc<dyn Cloud>,
@@ -396,6 +397,8 @@ pub struct CheckEnv {
     pub consent: OnlineConsent,
     pub catalog: Option<Arc<crate::catalog::Catalog>>,
     pub ollama_models: Option<String>,
+    // The server's env: `run_volume` reads consent again before each candidate, so turning a service off stops it at once.
+    pub live_consent: bool,
 }
 
 impl CheckEnv {
@@ -411,6 +414,7 @@ impl CheckEnv {
             ollama_models: std::env::var("OLLAMA_MODELS")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
+            live_consent: true,
         }
     }
 
@@ -425,6 +429,7 @@ impl CheckEnv {
             consent: OnlineConsent::default(),
             catalog: None,
             ollama_models: None,
+            live_consent: false,
         }
     }
 
@@ -898,9 +903,16 @@ pub fn run_volume(
     go: &dyn Fn() -> bool,
 ) -> anyhow::Result<RunReport> {
     let conn = db.conn()?;
-    let cx = Cx { conn: &conn, env };
+    let mut env = env.clone();
     let pruned = prune(&conn, volume_root)?;
-    let list = candidates(&cx, reg, volume_root)?;
+    let list = candidates(
+        &Cx {
+            conn: &conn,
+            env: &env,
+        },
+        reg,
+        volume_root,
+    )?;
     let mut report = RunReport {
         pruned,
         candidates: list.len(),
@@ -916,7 +928,17 @@ pub fn run_volume(
         let Some(s) = Subject::load(&conn, &c.path) else {
             continue;
         };
-        let o = check_subject(&cx, reg, &s);
+        if env.live_consent {
+            env.consent = consent::load(&conn);
+        }
+        let o = check_subject(
+            &Cx {
+                conn: &conn,
+                env: &env,
+            },
+            reg,
+            &s,
+        );
         report.checked += 1;
         report.online_waiting += usize::from(!o.waiting.is_empty());
         if o.needs_hash && !s.dir && hash::current(&conn, &s).is_none() {
@@ -955,7 +977,21 @@ pub fn run_volume(
     }
     // A duplicate's answer needs both hashes, so everything that waited is asked again once all are in.
     for s in waiting {
-        check_subject(&cx, reg, &s);
+        if !go() {
+            report.stopped = true;
+            return Ok(report);
+        }
+        if env.live_consent {
+            env.consent = consent::load(&conn);
+        }
+        check_subject(
+            &Cx {
+                conn: &conn,
+                env: &env,
+            },
+            reg,
+            &s,
+        );
     }
     Ok(report)
 }

@@ -165,7 +165,9 @@ over all watched volumes in meta `copy_online_waiting` after each full pass (`se
 **Verification:** test
 
 Online checks (Hugging Face, winget) declare a service, and `check_subject` runs one only while
-`online_checks.services.<service>` is on (meta `online_checks`, SRV-SETTINGS). Until the user has answered (`asked`
+`online_checks.services.<service>` is on (meta `online_checks`, SRV-SETTINGS). The server's env (`CheckEnv::system`,
+`live_consent`) makes `run_volume` read the consent again before each candidate, so a service turned off mid-pass sends
+nothing more. Until the user has answered (`asked`
 false), an online check that applies is reported as waiting (`Outcome.waiting`, counted by `run_volume`) and `only_copy`
 stays false for its paths; once asked with the service off, the check simply does not run. Offline checks (duplicate,
 archive, sync, git, Ollama, catalog) never look at consent. Requests that go out carry repo ids, search terms made from
@@ -176,6 +178,7 @@ fetched and compared on this machine. A content-addressed blob (named by its SHA
 - With consent unasked, checking an LM Studio GGUF sends no request to the Hugging Face stand-in, reports `huggingface` as waiting, still runs the offline `dup` check, and `only_copy` is false.
 - With `asked` true and `huggingface` off, nothing is sent and nothing waits.
 - With `huggingface` on, the stand-in receives requests whose paths and queries contain neither the file's SHA-256, nor its size, nor the profile path.
+- In a `run_volume` over two LM Studio GGUFs with a `CheckEnv::system` env, saving `huggingface` off after the first candidate leaves the stand-in with that one file's tree request.
 
 ### EVID-COPY-DUP: Another copy on the indexed drives
 **Applies to:** hoardini
@@ -345,7 +348,9 @@ thread background mode (low CPU and very low I/O priority, EcoQoS), one pass at 
 refresh pass ends (unless the last full pass finished less than 15 minutes ago, since journal refreshes come every few
 minutes), when `online_checks` is saved, and when someone starts looking (SRV-PRESENCE) while a pass is owed (at
 launch, or after one stopped early). It runs only while someone is looking and stops between files and between hash
-chunks when nobody is, so a minimized app does no copy-check work (SRV-IDLE-ZERO). Each volume's pass logs `copy checks
+chunks when nobody is, so a minimized app does no copy-check work (SRV-IDLE-ZERO). A pass clears the owed flag when it
+starts and raises it again when it stops early, so a kick that arrives during a pass that then ends unwatched is still
+owed at the next `looking: true`. Each volume's pass logs `copy checks
 done` with its candidate, checked, and hashed counts and how many wait on consent.
 
 **Verification (manual):**
