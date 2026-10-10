@@ -148,6 +148,38 @@ The conversation routes are:
 - Create → list shows it → `?q=` finds it, an unrelated query finds nothing → `PUT` changes text and kind → `DELETE` → list empty; `PUT`/`DELETE` of a missing id → 404.
 - The created note's `detail` is null; a file-type row written for `q4nx` lists with `detail.category` `model-weights` and `detail.app` `FastFlowLM`.
 
+### SRV-PROPOSAL-SELECTION: The server keeps a pending card's ticks
+**Applies to:** hoardini-server
+**Verification:** test
+
+`PUT /api/proposals/{id}/selection {item_ids}` shall tick exactly the listed items of a pending proposal and untick its
+other pending items (`proposals::select`), mark the proposal `touched` (REVIEW-SUPERSEDE), and answer the proposal's
+display JSON, so a review's Ready to free (REVIEW-TRIGGER) follows the user's ticks. An id that is not a pending item of
+the proposal, or a proposal that is not pending, answers 409 and changes nothing; an unknown proposal answers 404.
+Approving or declining a proposal also marks it `touched`.
+
+**Acceptance criteria:**
+- Of two unticked items, `PUT {item_ids: [a]}` answers `touched: true` with `a` ticked and `b` not, and `GET /api/proposals/{id}` shows the same items.
+- An unknown item id answers 409, an unknown proposal 404, and after a decline the route answers 409.
+- An approved proposal shows `touched: true`.
+
+Test: `specs/srv/tests/srv.rs`.
+
+### SRV-LOCATION-ANSWER: What is this? answers
+**Applies to:** hoardini-server
+**Verification:** test
+
+`POST /api/locations/answer {path, answer}`, with `answer` one of `keep`, `disposable`, `move-elsewhere` and
+`never-touch` and `path` absolute or under `~`, shall record the answer with `location::answer` (MEM-LOCATION) and answer
+the stored memory row. Every stored review area at that path then shows the answer's label, category, verdict, actions
+and text as `why_not`, and is no longer `unknown`. A missing path or an unknown answer answers 400.
+
+**Acceptance criteria:**
+- Keep for the unknown `C:\code\covenant-agent` area answers a pinned `user` row keyed `C:\code\covenant-agent` with label `yours`, verdict `keep` and actions `[archive, compress]`; `GET /api/review` then shows that area with label `yours`, `unknown: false`, verdict `keep` and why_not `You keep this folder; it may still be moved or compressed.`
+- `maybe` as the answer, or no path, answers 400; Never touch on `C:\code\covenant-agent\data` leaves a `user` protect note on it.
+
+Test: `specs/srv/tests/srv.rs`.
+
 ### SRV-STATUS-STREAM: Status stream
 **Applies to:** hoardini-server
 **Verification:** test

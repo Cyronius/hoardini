@@ -22,6 +22,7 @@ use tokio::sync::watch;
 pub mod builtin;
 mod providers;
 mod rclone;
+mod review;
 mod routes;
 mod state;
 mod status;
@@ -293,6 +294,7 @@ pub async fn start_with_launcher(
         dialogs: opts.dialogs,
         ui_dir: opts.ui_dir,
         runs: Mutex::new(HashMap::new()),
+        reviews: Mutex::new(()),
         change,
         shutdown: shutdown_tx,
         token: token.clone(),
@@ -314,9 +316,22 @@ pub async fn start_with_launcher(
             tracing::warn!(error = %e, "deleting a removed drive's index did not finish");
         }
     });
+    let weak = Arc::downgrade(&state);
+    supervisor.on_launch_refreshed(Arc::new(move || {
+        let Some(s) = weak.upgrade() else {
+            return;
+        };
+        tokio::task::spawn_blocking(move || match review::rebuild_after_launch(&s) {
+            Ok(true) => s.bump(),
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "rebuilding the review after the launch refresh failed")
+            }
+        });
+    }));
     // --no-refresh also keeps the periodic journal refresh off: the index is left alone.
     if opts.refresh_on_start {
-        if let Err(e) = supervisor.start_refresh(supervisor.auto_mode()) {
+        if let Err(e) = supervisor.start_launch_refresh(supervisor.auto_mode()) {
             tracing::warn!(error = %e, "refresh on start failed");
         }
         supervisor.enable_journal();

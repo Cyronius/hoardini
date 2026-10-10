@@ -310,7 +310,7 @@ impl Executor {
         }
         let mut job = new_job(p.kind.as_str(), Some(proposal_id));
         tx.execute(
-            "UPDATE proposal SET status = 'approved', decided_ms = ?2, job_id = ?3 WHERE id = ?1",
+            "UPDATE proposal SET status = 'approved', decided_ms = ?2, job_id = ?3, touched = 1 WHERE id = ?1",
             params![proposal_id, now, job.id],
         )?;
         insert_job(&tx, &job)?;

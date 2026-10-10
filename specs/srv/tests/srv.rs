@@ -1549,3 +1549,336 @@ async fn blank_timeout_steps_and_context_mean_the_defaults() {
     assert_eq!(list[0]["max_tool_steps"], 20);
     assert_eq!(list[0]["context_window"], 32768);
 }
+
+// A fake C:\ holding one unknown 161 GiB project; each call is one more completed refresh.
+fn seed_drive(db_path: &Path) {
+    let db = hoardini_core::store::Db::open(db_path).unwrap();
+    let fs = hoardini_core::index::FakeFs::new(r"C:\");
+    fs.set_volume(2000 << 30, 800 << 30);
+    fs.file(r"C:\code\covenant-agent\models\m.dat", 100 << 30);
+    fs.file(r"C:\code\covenant-agent\data\x.dat", 61 << 30);
+    let out = hoardini_core::index::refresh(
+        &db.conn().unwrap(),
+        &fs,
+        r"C:\",
+        &hoardini_core::index::RefreshOptions::default(),
+    )
+    .unwrap();
+    assert!(out.completed);
+}
+
+// Traces: REVIEW-TRIGGER
+#[tokio::test(flavor = "multi_thread")]
+async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart() {
+    let f = Fixture::new().await;
+    let (st, _) = f.call("POST", "/api/review/open", None).await;
+    assert_eq!(st, 404, "no index yet");
+    let dbp = f.dir.path().join("h.db");
+    seed_drive(&dbp);
+
+    let (st, a) = f.call("POST", "/api/review/open", None).await;
+    assert_eq!(st, 200, "{a}");
+    let id = a["review"]["id"].as_str().unwrap().to_string();
+    assert_eq!(a["review"]["volume"], r"C:\");
+    assert_eq!(a["review"]["scope_path"], Value::Null);
+    assert!(a["review"]["created_ms"].as_i64().unwrap() > 0);
+    assert_eq!(
+        a["header"],
+        json!({"root": r"C:\", "used_bytes": 1200u64 << 30, "free_bytes": 800u64 << 30, "ready_bytes": 0})
+    );
+    assert_eq!(a["cards"], json!([]));
+    assert_eq!(a["proposals"], json!({}));
+    let area = &a["areas"][0];
+    assert_eq!(area["path"], r"C:\code\covenant-agent");
+    assert_eq!(area["size"], 161u64 << 30);
+    assert_eq!(
+        (
+            &area["unknown"],
+            &area["label"],
+            &area["category"],
+            &area["verdict"]
+        ),
+        (
+            &json!(true),
+            &json!("unknown"),
+            &json!("unknown"),
+            &Value::Null
+        )
+    );
+    assert!(
+        area["why_not"]
+            .as_str()
+            .unwrap()
+            .starts_with("Not identified")
+    );
+    assert_eq!(area["hint"], Value::Null);
+    assert_eq!(area["actions"], json!([]));
+
+    let (_, again) = f.call("POST", "/api/review/open", None).await;
+    assert_eq!(again["review"]["id"], id.as_str());
+    let (_, got) = f.call("GET", "/api/review", None).await;
+    assert_eq!(got["review"]["id"], id.as_str());
+    let (_, status) = f.call("GET", "/api/status", None).await;
+    assert_eq!(status["review"]["id"], id.as_str());
+
+    let (st, folder) = f
+        .call("POST", "/api/review/run", Some(json!({"path": r"C:\code"})))
+        .await;
+    assert_eq!(st, 200, "{folder}");
+    assert_eq!(folder["review"]["scope_path"], r"C:\code");
+    let fid = folder["review"]["id"].as_str().unwrap().to_string();
+    let (_, got) = f.call("GET", "/api/review", None).await;
+    assert_eq!(got["review"]["id"], id.as_str(), "the volume review stays");
+    let (_, got) = f.call("GET", &format!("/api/review?id={fid}"), None).await;
+    assert_eq!(got["review"]["scope_path"], r"C:\code");
+    let (st, _) = f
+        .call("POST", "/api/review/run", Some(json!({"path": r"C:\nope"})))
+        .await;
+    assert_eq!(st, 404);
+
+    seed_drive(&dbp);
+    let (_, b) = f.call("POST", "/api/review/open", None).await;
+    let bid = b["review"]["id"].as_str().unwrap().to_string();
+    assert_ne!(bid, id, "a refresh finished since");
+    hoardini_core::store::Db::open(&dbp)
+        .unwrap()
+        .conn()
+        .unwrap()
+        .execute(
+            "UPDATE review SET created_ms = created_ms - 7 * 3600000 WHERE id = ?1",
+            [&bid],
+        )
+        .unwrap();
+    let (_, c) = f.call("POST", "/api/review/open", None).await;
+    assert_ne!(c["review"]["id"], bid.as_str(), "older than 6 hours");
+    let (_, d) = f.call("POST", "/api/review/run", None).await;
+    assert_ne!(d["review"]["id"], c["review"]["id"]);
+    assert_eq!(d["review"]["scope_path"], Value::Null);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: REVIEW-SUPERSEDE
+#[tokio::test(flavor = "multi_thread")]
+async fn the_launch_refresh_rebuilds_an_untouched_review() {
+    use hoardini_core::review::{self, Scope};
+    let dir = tempfile::tempdir().unwrap();
+    let exe = fake_indexer(dir.path(), 0);
+    let fdir = tempfile::tempdir().unwrap();
+    let dbp = fdir.path().join("h.db");
+    seed_drive(&dbp);
+    let first = {
+        let db = hoardini_core::store::Db::open(&dbp).unwrap();
+        let vid: i64 = db
+            .conn()
+            .unwrap()
+            .query_row("SELECT id FROM volume", [], |r| r.get(0))
+            .unwrap();
+        review::build(
+            &db,
+            &hoardini_core::policy::PolicyEnv::system(),
+            &hoardini_core::index::WinLister,
+            Scope::Volume(vid),
+            hoardini_core::store::now_ms(),
+        )
+        .unwrap()
+    };
+    seed_drive(&dbp);
+    let f = Fixture::in_dir(fdir, None, Some(exe), true).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let (_, got) = f.call("GET", "/api/review", None).await;
+        if got["review"]["id"]
+            .as_str()
+            .is_some_and(|id| id != first.id)
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "not rebuilt after the launch refresh: {got}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-LOCATION-ANSWER
+#[tokio::test(flavor = "multi_thread")]
+async fn a_what_is_this_answer_is_a_user_row_and_shows_on_the_review() {
+    let f = Fixture::new().await;
+    seed_drive(&f.dir.path().join("h.db"));
+    let (st, _) = f.call("POST", "/api/review/open", None).await;
+    assert_eq!(st, 200);
+
+    let (st, m) = f
+        .call(
+            "POST",
+            "/api/locations/answer",
+            Some(json!({"path": r"C:\code\covenant-agent", "answer": "keep"})),
+        )
+        .await;
+    assert_eq!(st, 200, "{m}");
+    assert_eq!(m["source"], "user");
+    assert_eq!(m["pinned"], true);
+    assert_eq!(m["key"], r"C:\code\covenant-agent");
+    assert_eq!(
+        (
+            &m["detail"]["label"],
+            &m["detail"]["verdict"],
+            &m["detail"]["actions"]
+        ),
+        (
+            &json!("yours"),
+            &json!("keep"),
+            &json!(["archive", "compress"])
+        )
+    );
+    let (_, r) = f.call("GET", "/api/review", None).await;
+    let area = &r["areas"][0];
+    assert_eq!(area["path"], r"C:\code\covenant-agent");
+    assert_eq!(
+        (&area["label"], &area["unknown"], &area["verdict"]),
+        (&json!("yours"), &json!(false), &json!("keep"))
+    );
+    assert_eq!(
+        area["why_not"],
+        "You keep this folder; it may still be moved or compressed."
+    );
+
+    let (st, _) = f
+        .call(
+            "POST",
+            "/api/locations/answer",
+            Some(json!({"path": r"C:\code\x", "answer": "maybe"})),
+        )
+        .await;
+    assert_eq!(st, 400);
+    let (st, _) = f
+        .call(
+            "POST",
+            "/api/locations/answer",
+            Some(json!({"answer": "keep"})),
+        )
+        .await;
+    assert_eq!(st, 400);
+    let (st, _) = f
+        .call(
+            "POST",
+            "/api/locations/answer",
+            Some(json!({"path": r"C:\code\covenant-agent\data", "answer": "never-touch"})),
+        )
+        .await;
+    assert_eq!(st, 200);
+    let (_, rows) = f.call("GET", "/api/memory", None).await;
+    assert!(
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "protect"
+                && r["key"] == r"C:\code\covenant-agent\data"
+                && r["source"] == "user")
+    );
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-PROPOSAL-SELECTION, REVIEW-SUPERSEDE
+#[tokio::test(flavor = "multi_thread")]
+async fn the_server_keeps_a_cards_ticks_and_any_change_or_decision_touches_it() {
+    use hoardini_core::proposals::{self, NewItem, NewProposal, ProposalKind};
+    let f = Fixture::new().await;
+    let work = f.dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let a = work.join("a.bin");
+    let b = work.join("b.bin");
+    let c = work.join("c.bin");
+    for p in [&a, &b, &c] {
+        std::fs::write(p, vec![1u8; 8192]).unwrap();
+    }
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let make = |paths: &[&Path]| {
+        proposals::create(
+            &db,
+            NewProposal {
+                conversation_id: Some("main".into()),
+                tool_call_id: None,
+                kind: ProposalKind::Delete,
+                destination_id: None,
+                format: None,
+                dedupe: None,
+                summary: "files".into(),
+                items: paths
+                    .iter()
+                    .map(|p| NewItem {
+                        path: p.to_string_lossy().into_owned(),
+                        verdict: None,
+                        reason: None,
+                    })
+                    .collect(),
+            },
+        )
+        .unwrap()
+    };
+    let p = make(&[&a, &b]);
+    assert!(!p.touched);
+    let ida = p
+        .items
+        .iter()
+        .find(|i| i.path.ends_with("a.bin"))
+        .unwrap()
+        .id;
+    let url = format!("/api/proposals/{}/selection", p.id);
+    let (st, v) = f.call("PUT", &url, Some(json!({"item_ids": [ida]}))).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["touched"], true);
+    let ticks: Vec<(bool, bool)> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["path"].as_str().unwrap().ends_with("a.bin"),
+                i["selected"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(ticks, [(true, true), (false, false)]);
+    let (_, again) = f
+        .call("GET", &format!("/api/proposals/{}", p.id), None)
+        .await;
+    assert_eq!(again["items"], v["items"]);
+
+    let (st, _) = f
+        .call("PUT", &url, Some(json!({"item_ids": [999_999]})))
+        .await;
+    assert_eq!(st, 409);
+    let (st, _) = f
+        .call(
+            "PUT",
+            "/api/proposals/no-such/selection",
+            Some(json!({"item_ids": []})),
+        )
+        .await;
+    assert_eq!(st, 404);
+    let (st, _) = f
+        .call("POST", &format!("/api/proposals/{}/decline", p.id), None)
+        .await;
+    assert_eq!(st, 200);
+    let (st, _) = f.call("PUT", &url, Some(json!({"item_ids": []}))).await;
+    assert_eq!(st, 409, "only a pending card takes ticks");
+
+    let q = make(&[&c]);
+    let idc = q.items[0].id;
+    let (st, r) = f
+        .call(
+            "POST",
+            &format!("/api/proposals/{}/approve", q.id),
+            Some(json!({"item_ids": [idc]})),
+        )
+        .await;
+    assert_eq!(st, 200, "{r}");
+    let (_, got) = f
+        .call("GET", &format!("/api/proposals/{}", q.id), None)
+        .await;
+    assert_eq!(got["touched"], true);
+    let _ = f.h.shutdown.send(());
+}

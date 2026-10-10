@@ -133,6 +133,20 @@ pub struct Proposal {
     pub dropped: Vec<DroppedItem>,
     pub parent_id: Option<String>,
     pub follow_up_id: Option<String>,
+    #[serde(default)]
+    pub review_id: Option<String>,
+    #[serde(default)]
+    pub card: Option<String>,
+    #[serde(default)]
+    pub touched: bool,
+}
+
+// `ticked: false` overrides POLICY-DEFAULT-TICK for cards that must start unticked (REVIEW-BUILD).
+#[derive(Clone, Debug)]
+pub struct ReviewCard {
+    pub review_id: String,
+    pub card: String,
+    pub ticked: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -198,7 +212,17 @@ fn nothing_left(dropped: &[DroppedItem]) -> anyhow::Error {
 }
 
 pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result<Proposal> {
-    build(db, env, req, None)?.map_err(|dropped| nothing_left(&dropped))
+    build(db, env, req, None, None)?.map_err(|dropped| nothing_left(&dropped))
+}
+
+// Err(dropped) when the gate refused every path.
+pub fn create_review_card(
+    db: &Db,
+    env: &PolicyEnv,
+    req: NewProposal,
+    card: &ReviewCard,
+) -> anyhow::Result<Result<Proposal, Vec<DroppedItem>>> {
+    build(db, env, req, None, Some(card))
 }
 
 // A follow-up keeps each item's approved tick (aligned with the request's items) instead of the default.
@@ -248,7 +272,12 @@ pub(crate) fn create_follow_up(
         parent_id: parent_id.to_string(),
         ticks,
     };
-    Ok(build(db, env, req, Some(carry))?.ok())
+    let card = p.review_id.zip(p.card).map(|(review_id, card)| ReviewCard {
+        review_id,
+        card,
+        ticked: true,
+    });
+    Ok(build(db, env, req, Some(carry), card.as_ref())?.ok())
 }
 
 // Err(dropped) when the gate refused every path.
@@ -257,6 +286,7 @@ fn build(
     env: &PolicyEnv,
     req: NewProposal,
     carry: Option<Carry>,
+    card: Option<&ReviewCard>,
 ) -> anyhow::Result<Result<Proposal, Vec<DroppedItem>>> {
     if req.items.is_empty() {
         anyhow::bail!("a proposal needs at least one path");
@@ -364,8 +394,9 @@ fn build(
     };
     let tx = conn.transaction()?;
     tx.execute(
-        "INSERT INTO proposal(id, conversation_id, tool_call_id, kind, params_json, status, total_alloc, created_ms, parent_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8)",
+        "INSERT INTO proposal(id, conversation_id, tool_call_id, kind, params_json, status, total_alloc, created_ms, parent_id,
+                              review_id, card)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9, ?10)",
         params![
             id,
             req.conversation_id,
@@ -375,14 +406,17 @@ fn build(
             total,
             created,
             carry.as_ref().map(|c| c.parent_id.as_str()),
+            card.map(|c| c.review_id.as_str()),
+            card.map(|c| c.card.as_str()),
         ],
     )?;
+    let untick = card.is_some_and(|c| !c.ticked);
     for (seq, r) in rows.iter().enumerate() {
         let state = r.ex.state.as_ref();
         let blocked = r.ex.block.is_some();
         let selected = match r.tick {
             Some(tick) => tick && !blocked,
-            None => default_tick(blocked, r.verdict, is_small(r.ex.alloc, total)),
+            None => !untick && default_tick(blocked, r.verdict, is_small(r.ex.alloc, total)),
         };
         tx.execute(
             "INSERT INTO proposal_item(proposal_id, seq, path, node_id, kind, alloc, logical, mtime, file_id,
@@ -424,13 +458,46 @@ pub fn get(db: &Db, id: &str) -> anyhow::Result<Option<Proposal>> {
 pub fn decline(db: &Db, id: &str) -> anyhow::Result<Proposal> {
     let conn = db.conn()?;
     let n = conn.execute(
-        "UPDATE proposal SET status = 'declined', decided_ms = ?2 WHERE id = ?1 AND status = 'pending'",
+        "UPDATE proposal SET status = 'declined', decided_ms = ?2, touched = 1 WHERE id = ?1 AND status = 'pending'",
         params![id, now_ms()],
     )?;
     let p = load(&conn, id)?.ok_or_else(|| anyhow::anyhow!("unknown proposal {id}"))?;
     if n == 0 {
         anyhow::bail!("proposal {id} is already {}", p.status);
     }
+    Ok(p)
+}
+
+// The server keeps a pending card's ticks, so a review can sum what is ready to free (SRV-PROPOSAL-SELECTION).
+pub fn select(db: &Db, id: &str, item_ids: &[i64]) -> anyhow::Result<Proposal> {
+    let mut conn = db.conn()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let p = load(&tx, id)?.ok_or_else(|| anyhow::anyhow!("proposal {id} not found"))?;
+    if p.status != "pending" {
+        anyhow::bail!("proposal {id} is {}, not pending", p.status);
+    }
+    for i in item_ids {
+        let item = p
+            .items
+            .iter()
+            .find(|x| x.id == *i)
+            .ok_or_else(|| anyhow::anyhow!("item {i} is not part of proposal {id}"))?;
+        if item.status != "pending" {
+            anyhow::bail!(
+                "item {i} cannot be ticked: {}",
+                item.block_reason.as_deref().unwrap_or(&item.status)
+            );
+        }
+    }
+    for item in p.items.iter().filter(|x| x.status == "pending") {
+        tx.execute(
+            "UPDATE proposal_item SET selected = ?2 WHERE id = ?1",
+            params![item.id, item_ids.contains(&item.id)],
+        )?;
+    }
+    tx.execute("UPDATE proposal SET touched = 1 WHERE id = ?1", [id])?;
+    let p = load(&tx, id)?.ok_or_else(|| anyhow::anyhow!("proposal vanished"))?;
+    tx.commit()?;
     Ok(p)
 }
 
@@ -461,11 +528,15 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         Option<String>,
         Option<String>,
         Option<String>,
+        Option<String>,
+        Option<String>,
+        bool,
     );
     let head: Option<Head> = conn
         .query_row(
             "SELECT conversation_id, tool_call_id, kind, params_json, status, total_alloc, created_ms, job_id, parent_id,
-                    (SELECT f.id FROM proposal f WHERE f.parent_id = p.id ORDER BY f.created_ms DESC, f.id DESC LIMIT 1)
+                    (SELECT f.id FROM proposal f WHERE f.parent_id = p.id ORDER BY f.created_ms DESC, f.id DESC LIMIT 1),
+                    review_id, card, touched
              FROM proposal p WHERE p.id = ?1",
             [id],
             |r| {
@@ -480,6 +551,9 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
                     r.get(7)?,
                     r.get(8)?,
                     r.get(9)?,
+                    r.get(10)?,
+                    r.get(11)?,
+                    r.get(12)?,
                 ))
             },
         )
@@ -495,6 +569,9 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         job_id,
         parent_id,
         follow_up_id,
+        review_id,
+        card,
+        touched,
     )) = head
     else {
         return Ok(None);
@@ -554,6 +631,9 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         dropped: params.dropped,
         parent_id,
         follow_up_id,
+        review_id,
+        card,
+        touched,
     }))
 }
 

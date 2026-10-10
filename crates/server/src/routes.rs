@@ -19,7 +19,7 @@ use serde_json::{Map, Value, json};
 
 use crate::state::{ApiError, ApiResult, AppState, blocking, parse};
 use crate::supervisor::index_speed;
-use crate::{builtin, providers, rclone, status, stream, volumes};
+use crate::{builtin, providers, rclone, review, status, stream, volumes};
 
 pub struct Entry {
     pub method: &'static str,
@@ -93,6 +93,7 @@ fn entries() -> Vec<Entry> {
         get_("/api/proposals/{id}", proposal_get),
         post_("/api/proposals/{id}/approve", proposal_approve),
         post_("/api/proposals/{id}/decline", proposal_decline),
+        put_("/api/proposals/{id}/selection", proposal_select),
         get_("/api/jobs", jobs_list),
         post_("/api/jobs/{id}/cancel", job_cancel),
         get_("/api/memory", memory_list),
@@ -140,6 +141,11 @@ fn entries() -> Vec<Entry> {
         get_("/api/builtin", builtin_get),
         post_("/api/builtin/install", builtin_install),
         delete_("/api/builtin", builtin_delete),
+        post_("/api/review/open", review::open),
+        post_("/api/review/run", review::run),
+        get_("/api/review", review::get),
+        post_("/api/review/look-closer", review::look_closer),
+        post_("/api/locations/answer", review::answer),
     ]
 }
 
@@ -221,7 +227,7 @@ async fn index_summary(State(s): State<AppState>) -> ApiResult {
     .await
 }
 
-fn display_proposal(mut p: Proposal) -> Value {
+pub(crate) fn display_proposal(mut p: Proposal) -> Value {
     p.summary = redact(&p.summary);
     for it in &mut p.items {
         it.path = redact(&it.path);
@@ -348,6 +354,23 @@ async fn proposal_decline(State(s): State<AppState>, Path(id): Path<String>) -> 
     blocking(move || proposals::decline(&st.db, &id).map_err(classify)).await?;
     s.bump();
     Ok(Json(json!({"approved": false})))
+}
+
+#[derive(Deserialize)]
+struct SelectBody {
+    item_ids: Vec<i64>,
+}
+
+async fn proposal_select(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult {
+    let b: SelectBody = parse(&body)?;
+    let st = s.clone();
+    let p = blocking(move || proposals::select(&st.db, &id, &b.item_ids).map_err(classify)).await?;
+    s.bump();
+    Ok(Json(display_proposal(p)))
 }
 
 async fn jobs_list(State(s): State<AppState>) -> ApiResult {

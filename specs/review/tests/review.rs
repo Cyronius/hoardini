@@ -1,3 +1,6 @@
+mod areas;
+mod build;
+
 use std::path::Path;
 
 use hoardini_core::catalog::UnitKind;

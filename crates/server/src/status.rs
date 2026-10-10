@@ -30,6 +30,7 @@ fn build_sync(s: &AppState) -> Value {
         "vanished_total_bytes": s.exec.vanished_total(),
         "active_provider": active,
         "running_runs": running,
+        "review": crate::review::status_ref(s),
     })
 }
 

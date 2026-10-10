@@ -17,6 +17,7 @@ pub const DESCEND_PCT: u64 = 10;
 pub const STORE_WEIGHT_PCT: u64 = 80;
 // Keeps the weight scan on node_file_alloc's range; smaller weight files count as other bytes.
 pub const WEIGHT_MIN_BYTES: u64 = 16 << 20;
+pub const SPLIT_DEPTH: usize = 3;
 const HOUR_MS: i64 = 3_600_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -350,10 +351,22 @@ impl Walker<'_> {
         Ok(())
     }
 
-    // A child counts as modified when it or anything indexed inside it was.
     fn contents(&self, node: &NodeInfo, min_age_hours: Option<u32>) -> anyhow::Result<Vec<Part>> {
-        let kids = index::children(self.conn, node.id)?;
         let cutoff = min_age_hours.map(|h| self.now - i64::from(h) * HOUR_MS);
+        let mut out = Vec::new();
+        self.parts(node, cutoff, 0, &mut out)?;
+        Ok(out)
+    }
+
+    // A child counts as modified when it or anything indexed inside it was.
+    fn parts(
+        &self,
+        node: &NodeInfo,
+        cutoff: Option<i64>,
+        depth: usize,
+        out: &mut Vec<Part>,
+    ) -> anyhow::Result<()> {
+        let kids = index::children(self.conn, node.id)?;
         let newest: HashMap<i64, Option<i64>> = match cutoff {
             None => HashMap::new(),
             Some(_) => {
@@ -368,18 +381,23 @@ impl Walker<'_> {
                 .collect::<rusqlite::Result<_>>()?
             }
         };
-        Ok(kids
-            .into_iter()
-            .filter(|k| k.kind != NodeKind::Link)
-            .filter(|k| match cutoff {
+        for k in kids.into_iter().filter(|k| k.kind != NodeKind::Link) {
+            let last = newest.get(&k.id).copied().flatten();
+            let old = match cutoff {
                 None => true,
-                Some(c) => newest.get(&k.id).copied().flatten().is_some_and(|t| t <= c),
-            })
-            .map(|k| Part {
-                path: k.path,
-                size: k.size,
-                mtime_ms: newest.get(&k.id).copied().flatten().or(k.mtime_ms),
-            })
-            .collect())
+                Some(c) => last.is_some_and(|t| t <= c),
+            };
+            if old {
+                out.push(Part {
+                    mtime_ms: last.or(k.mtime_ms),
+                    path: k.path,
+                    size: k.size,
+                });
+            } else if k.kind == NodeKind::Dir && k.size >= DESCEND_BYTES && depth < SPLIT_DEPTH {
+                // Split, not skipped, so one live session's folder does not hide the old ones beside it.
+                self.parts(&k, cutoff, depth + 1, out)?;
+            }
+        }
+        Ok(())
     }
 }

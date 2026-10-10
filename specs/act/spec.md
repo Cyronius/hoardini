@@ -100,12 +100,13 @@ not `done`. Each item starts with the tick it was approved with: an approved ite
 ticked; an item left unticked comes back unticked. The items go through proposal creation again, so path resolution,
 the deny list, `alloc`, blocks, caps, in-use status, and the memory note are current: a newly blocked item is unticked,
 and a newly denied path is listed in `dropped`. An item whose path no longer exists is left out. Kind, destination,
-format, summary, verdicts, and reasons carry over; the follow-up has no `tool_call_id`. Nothing is created when no item
+format, summary, verdicts, and reasons carry over, and so do a review card's `review_id` and `card` (REVIEW-SUPERSEDE);
+the follow-up has no `tool_call_id`. Nothing is created when no item
 is left, and dedupe jobs get no follow-up. The follow-up row is committed before the job's terminal update is broadcast
 (`Executor::subscribe`, so the status stream's `job` frame too). Proposal JSON (`GET /api/proposals/{id}` and the
 `proposals` map of `GET /api/thread`) carries `parent_id` and `follow_up_id` (the newest proposal whose `parent_id` is
 this one), both null when absent. A job interrupted by a restart (marked failed at startup) gets no follow-up. Tests:
-`specs/act/tests/follow_up.rs`; the JSON and stream order are also checked in `specs/srv/tests/srv.rs`.
+`specs/act/tests/follow_up.rs`; the JSON and stream order are also checked in `specs/srv/tests/srv.rs`, and a review card's follow-up in `specs/review/tests/build.rs`.
 
 **Acceptance criteria:**
 - Of seven delete items, one done, one grown after the proposal (approved, skipped as changed), one left unticked, one deleted before approval, one opened after the proposal and still open, one open at proposal time (blocked) and closed before approval, and one under a protect memory added before approval: when the job's terminal update arrives the parent already has `follow_up_id`. The follow-up has `parent_id`, status `pending`, kind `delete`, conversation `main`, and the parent's summary, and holds four items. The grown file is ticked with a larger `alloc` and its verdict and reason; the unticked one is unticked; the still-open one is `blocked` and unticked with an `Open in` reason; the formerly blocked one is `pending` and unticked. The done, deleted, and protected files are not items; the protected one is in `dropped` with the memory text.
