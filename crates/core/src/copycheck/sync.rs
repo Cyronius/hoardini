@@ -22,7 +22,6 @@ pub struct FolderSync {
     pub truncated: bool,
 }
 
-// A file or folder the user set to "Always keep on this device".
 pub fn is_pinned(detail: &serde_json::Value) -> bool {
     detail["pinned"].as_bool() == Some(true)
         || detail["pinned_files"].as_u64().is_some_and(|n| n > 0)

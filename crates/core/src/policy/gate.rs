@@ -225,7 +225,6 @@ pub struct Examined {
     pub block: Option<String>,
     pub cap: Option<Verdict>,
     pub category: Option<Category>,
-    // The verified copy that relaxed the cap, if one did.
     pub copy: Option<crate::copycheck::CopyResult>,
 }
 

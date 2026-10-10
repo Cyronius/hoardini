@@ -33,7 +33,6 @@ pub struct GgufInfo {
     pub base_model_urls: Vec<String>,
 }
 
-// `org/name` from a Hugging Face model URL; datasets, spaces and other hosts give None.
 pub fn hf_repo_of_url(url: &str) -> Option<String> {
     let rest = url
         .trim()
@@ -50,7 +49,6 @@ pub fn hf_repo_of_url(url: &str) -> Option<String> {
 }
 
 impl GgufInfo {
-    // Where the header says the weights came from, most direct first.
     pub fn hf_repos(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         let direct = self

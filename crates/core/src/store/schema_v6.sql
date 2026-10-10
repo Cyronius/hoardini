@@ -1,4 +1,4 @@
--- Compression estimates for review candidates (ACT-COMPRESS-CANDIDATES); stale once size or newest mtime moves.
+-- Compression estimates for review candidates (ACT-COMPRESS-CANDIDATES).
 CREATE TABLE compress_estimate (
   path          TEXT PRIMARY KEY COLLATE NOCASE,
   size          INTEGER NOT NULL,

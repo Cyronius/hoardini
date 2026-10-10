@@ -44,7 +44,7 @@ struct RawEntry {
     lfs: Option<RawLfs>,
 }
 
-// `GET /api/models/{repo}/tree/{rev}?recursive=1`: files only, LFS size wins over the pointer size.
+// An LFS file's size is its content's, not its pointer's, since the content is what lands on disk.
 pub fn parse_tree(body: &str) -> anyhow::Result<Vec<TreeEntry>> {
     let raw: Vec<RawEntry> = serde_json::from_str(body)?;
     Ok(raw
@@ -76,7 +76,6 @@ pub fn parse_search(body: &str) -> anyhow::Result<Vec<String>> {
 pub struct Layout {
     pub repo: String,
     pub rev: String,
-    // The file's path inside the repo; None for the repo folder itself or a blob.
     pub rel: Option<String>,
     pub cache_root: Option<String>,
 }
@@ -85,7 +84,6 @@ fn segs(path: &str) -> Vec<&str> {
     path.split('\\').filter(|s| !s.is_empty()).collect()
 }
 
-// `...\hub\models--org--name\snapshots\<rev>\a\b.gguf`, `...\models--org--name\blobs\<sha>`, or the repo folder.
 pub fn hf_cache_layout(path: &str) -> Option<Layout> {
     let s = segs(path);
     let i = s.iter().position(|p| p.starts_with("models--"))?;
@@ -168,7 +166,7 @@ fn is_model_folder(path: &str) -> bool {
         })
 }
 
-// The stem minus a trailing quant tag: `Qwen3-8B-Q4_K_M` searches as `Qwen3-8B`.
+// Repo names carry no quant tag, so a file's tag would make the search miss.
 pub fn search_term(file_name: &str) -> String {
     let stem = file_name
         .rsplit_once('.')
@@ -245,7 +243,6 @@ fn trees() -> &'static Mutex<HashMap<TreeKey, Cached>> {
 impl HubCheck {
     pub const NAME: &'static str = "huggingface";
 
-    // None when the repo or revision does not exist (or is private); errors are network trouble.
     fn tree(
         &self,
         base: &str,
@@ -519,7 +516,7 @@ fn find_file(cx: &Cx<'_>, hub: &HubCheck, s: &Subject) -> anyhow::Result<Find> {
 
 type LocalFile = (String, std::path::PathBuf, u64);
 
-// `skipped` says why the walk did not see the whole folder; a folder only partly seen is never `identical`.
+// A folder only partly seen is never `identical`, so the walk says what it skipped.
 struct Walk {
     files: Vec<LocalFile>,
     skipped: Option<String>,

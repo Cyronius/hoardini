@@ -51,7 +51,6 @@ pub enum Outcome {
     Text {
         content: String,
         custom: Vec<(String, Value)>,
-        // The UI's card payload; stored in `message.ui_json` and never sent to the model.
         data: Option<Value>,
         learn: Option<WebLearn>,
     },

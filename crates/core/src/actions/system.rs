@@ -17,7 +17,6 @@ const WSL_SHUTDOWN_WAIT: Duration = Duration::from_secs(60);
 
 pub trait SystemRunner: Send + Sync {
     fn local(&self, op: &SystemOp) -> anyhow::Result<OpResult>;
-    // All elevated operations behind one administrator prompt; `done(n)` reports how many have ended.
     fn elevated(
         &self,
         ops: &[SystemOp],

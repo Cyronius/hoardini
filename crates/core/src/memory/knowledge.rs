@@ -209,7 +209,7 @@ pub fn confirm(
     upsert_with(conn, k, now, profile).map(|(m, _)| Some(m))
 }
 
-// What a web search's Learned chip names, so its Undo and a reload never act on a row whose id was reused.
+// Ids are reused, so a Learned chip's row is matched by its key and text too.
 pub fn learned_row(
     conn: &Connection,
     id: i64,

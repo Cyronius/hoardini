@@ -455,7 +455,6 @@ pub fn is_job(source: &str) -> bool {
     source.starts_with("job:")
 }
 
-// `rule` is a glob in key syntax (`~\...`, `*` within a folder, `**` across folders, metacharacters bracketed).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cleaned {
     pub ms: i64,
@@ -607,7 +606,6 @@ pub fn location_covering(
     Ok(None)
 }
 
-// The nearest answer the user gave at or above a path; classifier and job rows in between do not count.
 pub fn user_answer_covering(
     conn: &Connection,
     profile: &str,

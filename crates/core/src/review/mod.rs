@@ -44,7 +44,6 @@ pub struct CardRef {
     pub card: String,
     pub title: String,
     pub proposal_id: String,
-    // A card an earlier review of the same scope made, still live because the user touched it.
     pub carried: bool,
 }
 
@@ -221,7 +220,6 @@ fn touches_sync(roots: &[SyncRoot], path: &str) -> bool {
         .any(|r| overlaps(&normalize_path(&r.path), path))
 }
 
-// The part of a unit its card holds: the picks inside it, or all of it when a pick holds it.
 fn claimed_by(u: &Unit, picks: &[Pick]) -> u64 {
     let n: u64 = picks
         .iter()
@@ -622,7 +620,6 @@ fn drop_orphans(conn: &Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
-// The leftovers the walk found, plus what Windows' own tools could free on the system drive.
 fn windows_card(
     db: &Db,
     env: &PolicyEnv,
@@ -658,7 +655,6 @@ fn windows_card(
     Ok(Some(p.id))
 }
 
-// Estimates the scope's biggest compress candidates; true when that made a folder proposable that the review does not hold.
 pub fn compress_estimates(
     db: &Db,
     env: &PolicyEnv,
@@ -742,7 +738,7 @@ pub fn get(conn: &Connection, id: &str) -> anyhow::Result<Option<Review>> {
     let Some((volume_id, volume, scope_path, scan_id, created_ms, areas_json)) = head else {
         return Ok(None);
     };
-    // Touched cards of earlier reviews (a volume review's include folder reviews') stay live, so they are listed here.
+    // Touched cards of earlier reviews (for a volume review, folder reviews' too) stay live, so they are listed here.
     let mut st = conn.prepare(
         "SELECT p.id, p.card, p.review_id != ?1 FROM proposal p WHERE p.review_id = ?1 AND p.parent_id IS NULL \
          UNION ALL \
@@ -851,7 +847,7 @@ pub fn open(
     }
 }
 
-// The open route's background job: a build that ran while this one was queued may have left a fresh review.
+// A build that ran while this one was queued may have left a fresh review.
 pub fn build_if_stale(
     db: &Db,
     env: &PolicyEnv,
@@ -901,7 +897,6 @@ pub fn ready_bytes(conn: &Connection, review_id: &str) -> anyhow::Result<i64> {
     Ok(total)
 }
 
-// The review's own proposals, plus each carried card and its follow-ups.
 pub fn proposal_ids(conn: &Connection, review_id: &str) -> anyhow::Result<Vec<String>> {
     let mut st =
         conn.prepare("SELECT id FROM proposal WHERE review_id = ?1 ORDER BY created_ms, id")?;

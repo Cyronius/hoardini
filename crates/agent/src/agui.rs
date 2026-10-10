@@ -49,7 +49,6 @@ pub struct AgMessage {
     pub tool_calls: Option<Vec<AgToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
-    // A tool message's card payload (AGENT-TOOL-DATA); the server sends it, never reads it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }

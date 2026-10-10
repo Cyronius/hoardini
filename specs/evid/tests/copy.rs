@@ -217,7 +217,6 @@ impl WingetCli for FakeWinget {
     }
 }
 
-// A stand-in for huggingface.co that answers from recorded responses and logs every request line.
 struct StandIn {
     base: String,
     log: Arc<Mutex<Vec<String>>>,

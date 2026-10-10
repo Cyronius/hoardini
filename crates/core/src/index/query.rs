@@ -220,7 +220,6 @@ pub struct ChildRow {
     pub has_children: bool,
 }
 
-// One page of a folder's children, biggest first; the rest is counted into `more`.
 pub fn child_rows(conn: &Connection, node_id: i64, limit: usize) -> Result<Ranked<ChildRow>> {
     let limit = limit.max(1);
     let mut has_rows =

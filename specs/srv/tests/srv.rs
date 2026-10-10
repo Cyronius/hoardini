@@ -2073,7 +2073,6 @@ async fn a_finished_job_lists_what_it_learned_and_the_chip_routes_undo_and_confi
     let _ = f.h.shutdown.send(());
 }
 
-// A fake C:\ holding one unknown 161 GiB project; each call is one more completed refresh.
 fn seed_drive(db_path: &Path) {
     let db = hoardini_core::store::Db::open(db_path).unwrap();
     let fs = hoardini_core::index::FakeFs::new(r"C:\");
@@ -2512,7 +2511,6 @@ async fn the_server_keeps_a_cards_ticks_and_any_change_or_decision_touches_it() 
 
 const MIB: u64 = 1 << 20;
 
-// C:\data as the map tests know it: 684 MiB in rows plus 12 KiB of folded small files.
 fn explore_index(db_path: &Path) -> hoardini_core::store::Db {
     use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
     let db = hoardini_core::store::Db::open(db_path).unwrap();

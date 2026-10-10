@@ -12,7 +12,6 @@ pub struct ToolGroup {
     pub any_of: Vec<String>,
     // Every pattern must match the call's argument strings (profile shown as ~).
     pub args_all: Vec<Regex>,
-    // When set, the patterns see only this argument's value.
     pub arg: Option<String>,
 }
 
@@ -35,7 +34,6 @@ pub struct CaseSpec {
     pub id: String,
     pub turns: Vec<String>,
     pub required: Vec<ToolGroup>,
-    // When set, the case's last call must be one of these and must have gone through.
     pub ends_with: Vec<String>,
     pub allow_propose: bool,
     pub allow_remember: bool,
@@ -44,7 +42,6 @@ pub struct CaseSpec {
     pub forbid_text: Vec<Rule>,
     // Run with the web search stand-in active, so only full profiles get the case.
     pub search: bool,
-    // File types the run must leave a type row for (AGENT-WEB-LEARN).
     pub learns: Vec<String>,
 }
 
@@ -269,7 +266,7 @@ pub fn score(case: &CaseSpec, turns: &[Turn], run_error: Option<&str>, profile: 
     score_with(case, turns, run_error, profile, &[])
 }
 
-// `learned` is the file types with a type row after the run; the transcript cannot show what the run learned after it ended.
+// `learned` comes from the database: the transcript cannot show what the run learned after it ended.
 pub fn score_with(
     case: &CaseSpec,
     turns: &[Turn],

@@ -96,7 +96,6 @@ fn blob_digest(cx: &Cx<'_>, path: &str) -> Option<String> {
     Some(format!("sha256:{}", hex.to_ascii_lowercase()))
 }
 
-// `manifests\<registry>\<namespace>\<model>\<tag>` files whose layers or config name the digest.
 pub fn models_using(manifests: &Path, digest: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![(manifests.to_path_buf(), Vec::<String>::new())];

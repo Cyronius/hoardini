@@ -116,7 +116,6 @@ pub fn index_age(conn: &Connection) -> String {
     }
 }
 
-// The refresh time of the volume holding `path`, else of the most recently refreshed one.
 pub fn as_of_ms(conn: &Connection, path: Option<&str>) -> Option<i64> {
     let mut st = conn
         .prepare("SELECT root, last_refresh_ms FROM volume WHERE last_refresh_ms IS NOT NULL")

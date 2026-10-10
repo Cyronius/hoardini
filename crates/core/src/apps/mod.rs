@@ -292,7 +292,6 @@ impl AppSource for SystemApps {
 static SOURCE: RwLock<Option<Arc<dyn AppSource>>> = RwLock::new(None);
 
 #[doc(hidden)]
-// Lets the server tests list fake apps and record launches instead of running uninstallers.
 pub fn set_source(source: Option<Arc<dyn AppSource>>) {
     *SOURCE.write().unwrap_or_else(|e| e.into_inner()) = source;
 }

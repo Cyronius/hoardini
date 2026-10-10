@@ -132,7 +132,6 @@ impl CopyResult {
         }
     }
 
-    // "hash": waits for the background SHA-256; "sync": waits for the sync engine; "files": waits on its files' results.
     pub fn pending(&self) -> Option<&str> {
         self.detail.get("pending").and_then(Value::as_str)
     }
@@ -345,7 +344,6 @@ pub(crate) fn with_fingerprint(mut r: CopyResult, s: &Subject) -> CopyResult {
     r
 }
 
-// A folder's found copy holds only while its contents are the ones it was found for.
 pub(crate) fn same_contents(s: &Subject, r: &CopyResult) -> bool {
     if !s.dir {
         return true;
@@ -457,7 +455,6 @@ pub trait CopyCheck: Send + Sync {
         None
     }
     fn applies(&self, cx: &Cx<'_>, s: &Subject) -> bool;
-    // Folder items worth checking in the background even when nobody asked yet.
     fn covers_dir(&self, _cx: &Cx<'_>, _path: &str) -> bool {
         false
     }
@@ -727,7 +724,6 @@ fn only_copy_of(conn: &Connection, s: &Subject, rs: &[CopyResult]) -> bool {
         && !waiting_on_consent(conn, s)
 }
 
-// "Only copy we know of": something checked it, every answer is `none`, and nothing is still pending or waiting on consent.
 pub fn only_copy(conn: &Connection, path: &str) -> bool {
     Subject::load(conn, path).is_some_and(|s| only_copy_of(conn, &s, &current(conn, &s)))
 }
@@ -758,7 +754,7 @@ pub fn in_recycle_bin(path: &str) -> bool {
         .any(|c| c.eq_ignore_ascii_case("$Recycle.Bin"))
 }
 
-// Ticked on a live delete or archive card, the path itself or a folder above it; unticked items wait for a tick, which execution re-checks.
+// Unticked items wait for a tick, which execution re-checks.
 pub fn held_by_live_card(conn: &Connection, path: &str) -> bool {
     let Ok(mut st) = conn.prepare_cached(
         "SELECT i.path FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id
@@ -793,7 +789,6 @@ pub fn in_cleared_place(catalog: &crate::catalog::Catalog, path: &str) -> bool {
     })
 }
 
-// A copy on this PC counts while it is still there unchanged, outside a Recycle Bin, and no live card is set to remove it.
 pub fn copy_stands(conn: &Connection, s: &Subject, r: &CopyResult) -> bool {
     let Some(loc) = r.locator.as_deref().filter(|l| is_local_path(l)) else {
         return true;

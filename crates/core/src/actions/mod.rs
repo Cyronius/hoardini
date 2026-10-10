@@ -271,7 +271,6 @@ impl Executor {
     }
 
     #[doc(hidden)]
-    // Replaces the Windows tools and the admin prompt for system_cleanup jobs.
     pub fn set_system_runner(&self, runner: Option<Arc<dyn SystemRunner>>) {
         *self.shared.system.lock() = runner;
     }

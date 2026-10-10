@@ -74,7 +74,6 @@ fn raw_info(h: &OwnedHandle) -> io::Result<Option<(PlaceholderInfo, CF_PIN_STATE
     )))
 }
 
-// None when the path is not a cloud-files placeholder at all.
 pub fn placeholder_info(path: &Path) -> io::Result<Option<PlaceholderInfo>> {
     info_of(&open_meta(path, false)?)
 }

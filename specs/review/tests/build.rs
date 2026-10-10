@@ -27,7 +27,6 @@ const DAY: i64 = 24 * HOUR;
 // FakeFs stamps every node at 1_700_000_000_000, so everything not touched is 400 days old.
 const NOW: i64 = 1_700_000_000_000 + 400 * DAY + HOUR;
 
-// Real folders and files on disk, sized by a fake index of the same paths.
 pub struct Disk {
     dir: tempfile::TempDir,
     pub root: String,
@@ -67,7 +66,6 @@ impl Disk {
         }
     }
 
-    // A real folder whose indexed size is one fake file inside it.
     pub fn folder(&self, rel: &str, file: &str, bytes: u64) -> String {
         let dir = self.path(rel);
         std::fs::create_dir_all(&dir).unwrap();
@@ -524,7 +522,6 @@ fn approving_a_review_card_touches_it_and_its_follow_up_stays_in_the_review() {
     assert_eq!(review::proposal_ids(&conn, &r.id).unwrap().len(), 2);
 }
 
-// A sync root stand-in: in-sync state is set per path, nothing is ever freed.
 struct FakeCloud {
     root: String,
     synced: Mutex<Vec<String>>,

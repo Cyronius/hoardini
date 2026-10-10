@@ -212,7 +212,6 @@ fn qualifies(conn: &Connection, id: i64, now: i64) -> anyhow::Result<Option<Opti
     Ok(Some(s.newest_ms))
 }
 
-// Top-down from `root`: a container (two big children, or one holding 90%) is opened, never listed.
 pub fn candidates(
     conn: &Connection,
     env: &PolicyEnv,
@@ -322,7 +321,7 @@ fn cached(
         .optional()?)
 }
 
-// What compressing the folder would save, by its last estimate; a compress item counts this, not its size.
+// Compressing frees only what it saves, so a compress item counts this, not the folder's size.
 pub fn saved_bytes(conn: &Connection, path: &str) -> anyhow::Result<Option<u64>> {
     Ok(conn
         .query_row(

@@ -190,7 +190,6 @@ struct Params {
     summary: String,
     #[serde(default)]
     dropped: Vec<DroppedItem>,
-    // One per item, in item order (system_cleanup only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     ops: Vec<OpView>,
 }
@@ -252,7 +251,6 @@ pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result
     build(db, env, req, None, None)?.map_err(|dropped| nothing_left(&dropped))
 }
 
-// Err(dropped) when the gate refused every path.
 pub fn create_review_card(
     db: &Db,
     env: &PolicyEnv,
@@ -294,7 +292,6 @@ pub fn create_system_cleanup(db: &Db, req: NewSystemCleanup) -> anyhow::Result<P
     create_system_cleanup_card(db, req, None)
 }
 
-// Items are operations: the path is what each one works on, alloc its estimate (0 when unknown).
 pub fn create_system_cleanup_card(
     db: &Db,
     req: NewSystemCleanup,

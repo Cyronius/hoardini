@@ -73,7 +73,6 @@ pub struct RecycleBin {
     pub items: u64,
 }
 
-// Every drive's bin for the current user.
 pub fn recycle_bin() -> io::Result<RecycleBin> {
     let mut info = SHQUERYRBINFO {
         cbSize: size_of::<SHQUERYRBINFO>() as u32,

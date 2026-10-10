@@ -17,7 +17,6 @@ CREATE TABLE review (
 );
 CREATE INDEX review_volume ON review(volume_id, created_ms);
 
--- confidence: identical | same-name-and-size | claimed | none
 CREATE TABLE copy_check (
   id           INTEGER PRIMARY KEY,
   volume_id    INTEGER NOT NULL,

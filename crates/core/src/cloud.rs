@@ -23,7 +23,6 @@ pub struct CloudState {
 // The Win32 side (registry roots, placeholder state, dehydrate) behind a trait so the decisions are testable.
 pub trait Cloud: Send + Sync {
     fn roots(&self) -> Vec<SyncRoot>;
-    // None: an ordinary file, not a cloud placeholder.
     fn state(&self, path: &Path) -> std::io::Result<Option<CloudState>>;
     fn free(&self, path: &Path) -> std::io::Result<u64>;
 }

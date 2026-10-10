@@ -24,10 +24,9 @@ pub const ONLINE_COLD_DAYS: i64 = 90;
 pub const REDOWNLOAD_CHECKS: &[&str] = &["huggingface", "winget", "archive"];
 const CHILD_FILE_MIN: u64 = copycheck::FILE_MIN;
 const CHILD_DIR_MIN: u64 = copycheck::DIR_MIN;
-// Sync checks per unit, and how deep the walk for cold synced folders goes.
 const MAX_SYNC_CHECKS: usize = 50;
 const ONLINE_DEPTH: usize = 3;
-// Per-project folders that the catalog files under other categories.
+// The catalog files these under other categories, but each belongs to one project.
 const BUILD_IDS: &[&str] = &["project-venv", "pycache"];
 
 pub struct Cx<'a> {

@@ -248,7 +248,6 @@ pub struct WslDisk {
     pub path: String,
 }
 
-// Everything detection reads outside the index; `gather` reads it without elevation.
 #[derive(Clone, Debug, Default)]
 pub struct SystemFacts {
     pub system_drive: String,
@@ -303,7 +302,6 @@ fn join(dir: &str, name: &str) -> String {
     format!("{}\\{name}", dir.trim_end_matches('\\'))
 }
 
-// `wanted` names operations from OP_NAMES (empty = every detected one); a wanted one not detected is dropped.
 pub fn propose(
     db: &crate::store::Db,
     facts: &SystemFacts,

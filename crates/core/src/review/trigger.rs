@@ -6,7 +6,6 @@ use super::{Review, latest, needs_rerun};
 
 pub enum Opened {
     Ready(Review),
-    // What to show until the build that is running ends; none before the drive's first review.
     Building(Option<Review>),
 }
 
@@ -16,9 +15,7 @@ type Job = Box<dyn FnOnce(i64) -> anyhow::Result<()> + Send>;
 
 #[derive(Default)]
 struct State {
-    // What the running build is for; empty for an `exclusive` one.
     running: Option<String>,
-    // A build asked for while another ran; it starts when that one ends.
     queued: Option<(String, Job)>,
     // Between a build ending and its announcement, so wait() returns only once it is announced.
     announcing: bool,
@@ -66,7 +63,6 @@ impl Builds {
         st.running.is_some() || st.queued.is_some()
     }
 
-    // False when a build for the same `key` already runs or waits; its result is what the caller will see.
     pub fn start<F>(self: &Arc<Self>, key: &str, job: F) -> bool
     where
         F: FnOnce(i64) -> anyhow::Result<()> + Send + 'static,
@@ -128,7 +124,6 @@ impl Builds {
         }
     }
 
-    // Waits for a running build, then runs `job` here while holding others off.
     pub fn exclusive<T>(self: &Arc<Self>, job: impl FnOnce(i64) -> T) -> T {
         {
             let mut st = self.lock();

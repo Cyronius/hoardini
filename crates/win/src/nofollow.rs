@@ -234,7 +234,6 @@ impl NoFollow {
         crate::enumerate::list_handle_each(&self.h, f)
     }
 
-    // Where the held object is now, as `\\?\C:\...`, whatever name it was opened by.
     pub fn final_path(&self) -> io::Result<String> {
         let mut buf = vec![0u16; 512];
         loop {

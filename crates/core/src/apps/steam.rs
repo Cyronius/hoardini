@@ -64,7 +64,6 @@ fn tokens(text: &str) -> Vec<Tok> {
     out
 }
 
-// Depth 1 is inside the root object.
 fn pairs(text: &str) -> Vec<(usize, String, String)> {
     let toks = tokens(text);
     let mut out = Vec::new();

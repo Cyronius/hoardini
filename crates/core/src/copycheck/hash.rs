@@ -74,7 +74,7 @@ pub fn store(conn: &Connection, s: &Subject, sha: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-// None when `go` said stop part-way. Reads through the atime-preserving handle, which also refuses placeholders.
+// Through the atime-preserving handle, which also refuses placeholders.
 pub fn sha256_file(path: &Path, go: &dyn Fn() -> bool) -> std::io::Result<Option<String>> {
     let mut f = hoardini_win::open_read_preserving_atime(path)?;
     let mut h = Sha256::new();

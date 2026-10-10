@@ -41,7 +41,6 @@ pub enum About {
 }
 
 impl About {
-    // A bare word or `*.ext` is a type; anything with a drive, `~` or a separator is a path.
     pub fn parse(raw: &str, profile: &str) -> Option<About> {
         let t = raw.trim().trim_matches(['"', '\'']);
         let path_like = t.starts_with('~') || t.contains(['\\', '/', ':']);

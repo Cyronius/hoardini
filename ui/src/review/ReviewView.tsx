@@ -42,7 +42,7 @@ function useReviewSync() {
   }, [building, statusBuilding, refetch]);
 }
 
-// Review now has its own "Reviewing…", so its build is not shown twice.
+// Review shows its own "Reviewing…", so its build is not shown twice.
 function useBuilding(): boolean {
   const building = useReview((s) => s.building);
   const running = useReview((s) => s.running);
