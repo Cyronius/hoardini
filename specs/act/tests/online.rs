@@ -26,11 +26,15 @@ impl FakeCloud {
     }
 
     fn set(&self, p: &Path, in_sync: bool) {
+        self.set_with(p, in_sync, false);
+    }
+
+    fn set_with(&self, p: &Path, in_sync: bool, pinned: bool) {
         self.states.lock().unwrap().insert(
             s(p).to_lowercase(),
             CloudState {
                 in_sync,
-                pinned: false,
+                pinned,
                 local_bytes: std::fs::metadata(p).unwrap().len(),
             },
         );
@@ -233,4 +237,52 @@ fn synced_ticks_only_on_an_online_only_card() {
         proposals::default_tick_for(ProposalKind::Delete, false, Some(Verdict::Safe), false),
         default_tick(false, Some(Verdict::Safe), false)
     );
+}
+
+// Traces: ACT-ONLINE-ONLY, EVID-COPY-SYNC
+#[test]
+fn files_kept_on_this_device_by_the_user_are_never_freed() {
+    let mut fx = Fx::new();
+    let root = fx.work.join("OneDrive");
+    let cloud = FakeCloud::new(&root);
+    fx.env = fx.env.clone().with_cloud(cloud.clone());
+    let kept = fx.file(r"OneDrive\kept.mp4", &data(90 * 1024, 1));
+    let x = fx.file(r"OneDrive\trip\x.jpg", &data(70 * 1024, 2));
+    let y = fx.file(r"OneDrive\trip\y.jpg", &data(60 * 1024, 3));
+    let trip = root.join("trip");
+    cloud.set_with(&kept, true, true);
+    cloud.set(&x, true);
+    cloud.set_with(&y, true, true);
+
+    let p = fx
+        .propose(ProposalKind::OnlineOnly, &[&kept, &trip], None)
+        .unwrap();
+    let ik = item(&p, &kept);
+    assert_eq!((ik.verdict, ik.selected), (Some(Verdict::Review), false));
+    assert_eq!(
+        ik.copy_note.as_deref(),
+        Some("synced to OneDrive, kept on this device by your choice")
+    );
+    let it = item(&p, &trip);
+    assert_eq!((it.verdict, it.selected), (Some(Verdict::Review), false));
+
+    let ex = fx.executor();
+    let res = ex.approve(&p.id, &[ik.id, it.id]).unwrap();
+    wait(&ex, &res.job_id);
+    let after = fx.get(&p.id);
+    let fk = item(&after, &kept);
+    assert_eq!(fk.status, "failed");
+    assert!(
+        fk.detail
+            .as_deref()
+            .unwrap()
+            .contains("Always keep on this device")
+    );
+    assert_eq!(
+        item(&after, &trip).detail.as_deref(),
+        Some(
+            "1 file(s) now online-only in OneDrive; 1 kept on this device by your choice were left"
+        )
+    );
+    assert_eq!(cloud.freed(), vec![s(&x)]);
 }

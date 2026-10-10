@@ -86,11 +86,19 @@ impl CopyWorker {
                 loop {
                     me.again.store(false, Ordering::SeqCst);
                     me.pass();
-                    if !me.again.load(Ordering::SeqCst) || !me.go() {
-                        break;
+                    if me.again.load(Ordering::SeqCst) && me.go() {
+                        continue;
                     }
+                    me.running.store(false, Ordering::SeqCst);
+                    // A kick between the check above and this point saw `running` and only raised `again`.
+                    if me.again.load(Ordering::SeqCst)
+                        && me.go()
+                        && !me.running.swap(true, Ordering::SeqCst)
+                    {
+                        continue;
+                    }
+                    break;
                 }
-                me.running.store(false, Ordering::SeqCst);
             });
         if let Err(e) = spawned {
             self.running.store(false, Ordering::SeqCst);

@@ -292,9 +292,13 @@ usual in-use block. An item's verdict comes from the sync check run when the car
 when it, or every file in the folder, is in sync, else `review`; the model's verdict is ignored, and only unblocked,
 not-small `synced` items start ticked (POLICY-DEFAULT-TICK). At execution each file under an approved item is asked
 again: a file the sync engine marks in sync and that still has local data is freed; one that is not in sync, or is no
-placeholder, is skipped and counted; one already online-only is left alone; shell metadata (`desktop.ini`, `thumbs.db`, `.DS_Store`) is skipped silently.
+placeholder, is skipped and counted; one set to "Always keep on this device" is the user's own choice and is skipped and
+counted too; one already online-only is left alone; shell metadata (`desktop.ini`, `thumbs.db`, `.DS_Store`) is skipped
+silently, and an unreadable subfolder is skipped and counted. If dehydrating a file fails after it was unpinned, its
+previous pin state is put back.
 Nothing is ever deleted, moved, or read. A
-file item that frees nothing fails ("nothing here is in sync with <provider> yet; nothing was changed"); a folder item
+file item that frees nothing fails ("nothing here is in sync with <provider> yet; nothing was changed", or "set to
+Always keep on this device ..." when it is pinned); a folder item
 is done when it freed or found at least one in-sync file, its detail saying how many were freed and how many were left on
 this PC. Each item is journaled per ACT-JOURNAL with undo `{"kind": "pin", "provider", "how"}`, `freed_bytes` is what
 the dehydration released, and the index row is rescanned, not removed (INDEX-ACTION-PATCH). The Win32 calls
@@ -304,7 +308,8 @@ tested against a fake sync root.
 **Acceptance criteria (fake sync root `<work>\OneDrive`, `specs/act/tests/online.rs`):**
 - Proposed together: a file outside the root is `blocked` "Not in a cloud-synced folder"; an in-sync file is `synced`, ticked, with copy note "synced to OneDrive"; a file not in sync and a folder holding one in-sync and one not-in-sync file are `review` and unticked.
 - Approving the in-sync file, the not-in-sync file, and the folder: the fake is asked to free exactly the two in-sync files; the in-sync file is `done` "1 file(s) now online-only in OneDrive"; the not-in-sync file is `failed` and untouched; the folder is `done` "1 file(s) now online-only in OneDrive; 1 not in sync were left on this PC"; the proposal is `partial`.
-- Every file, including the freed ones, still exists with its bytes; the job's freed bytes equal the two freed files' sizes; the two done items have `done` action rows with undo kind `pin` and provider OneDrive, the failed one a `failed` row; the freed files' index rows are still there.
+- Every file, including the freed ones, still exists with its bytes; the job's freed bytes equal the two freed files' sizes; the two done items have `done` action rows with undo kind `pin` and provider OneDrive, the failed one a `failed` row; the freed files' index rows are still there. A `desktop.ini` in the folder is not counted.
+- A pinned in-sync file is `review`, unticked, with copy note "synced to OneDrive, kept on this device by your choice"; approved anyway it fails naming "Always keep on this device". A folder of one in-sync and one pinned file frees only the first: "1 file(s) now online-only in OneDrive; 1 kept on this device by your choice were left".
 
 **Verification (manual, live cloud filter):**
 1. Build a throwaway provider: a program that registers an empty scratch folder as a sync root (`CfRegisterSyncRoot`, `CfConnectSyncRoot` with no callbacks), writes a few 2-3 MiB files into it, marks all but one in sync with `CfConvertToPlaceholder(MARK_IN_SYNC)`, and unregisters the root when it ends.

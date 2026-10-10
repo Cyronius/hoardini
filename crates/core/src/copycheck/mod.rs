@@ -27,7 +27,7 @@ pub use consent::{OnlineConsent, Service, Services};
 pub use dup::DupCheck;
 pub use git::GitCheck;
 pub use hub::HubCheck;
-pub use sync::SyncCheck;
+pub use sync::{SyncCheck, is_pinned};
 pub use winget::{WingetCheck, WingetCli};
 
 pub const FILE_MIN: u64 = 100 << 20;
@@ -626,45 +626,65 @@ pub fn best(results: &[CopyResult]) -> Option<&CopyResult> {
         .max_by_key(|r| (r.confidence, std::cmp::Reverse(r.check.clone())))
 }
 
-fn waiting_on_consent(conn: &Connection, s: &Subject, env: &CheckEnv) -> bool {
-    if env.consent.asked {
+fn waiting_on_consent(conn: &Connection, s: &Subject) -> bool {
+    let consent = consent::load(conn);
+    if consent.asked {
         return false;
     }
-    let reg = Registry::standard();
-    let cx = Cx { conn, env };
-    reg.checks
-        .iter()
-        .any(|c| c.service().is_some_and(|svc| !env.allows(svc)) && c.applies(&cx, s))
+    let env = CheckEnv::offline("", crate::cloud::system());
+    let cx = Cx { conn, env: &env };
+    let mut s = s.clone();
+    s.hint = hint_for(
+        conn,
+        &s.path,
+        &crate::paths::profile_dir().to_string_lossy(),
+    );
+    [
+        Box::new(HubCheck::default()) as Box<dyn CopyCheck>,
+        Box::new(WingetCheck),
+    ]
+    .iter()
+    .any(|c| c.applies(&cx, &s))
+}
+
+fn only_copy_of(conn: &Connection, s: &Subject, rs: &[CopyResult]) -> bool {
+    !rs.is_empty()
+        && rs
+            .iter()
+            .all(|r| r.confidence == Confidence::None && r.pending().is_none())
+        && !waiting_on_consent(conn, s)
 }
 
 // "Only copy we know of": something checked it, every answer is `none`, and nothing is still pending or waiting on consent.
 pub fn only_copy(conn: &Connection, path: &str) -> bool {
-    let Some(s) = Subject::load(conn, path) else {
-        return false;
-    };
-    let rs = current(conn, &s);
-    if rs.is_empty()
-        || rs
-            .iter()
-            .any(|r| r.confidence != Confidence::None || r.pending().is_some())
-    {
-        return false;
-    }
-    !waiting_on_consent(conn, &s, &CheckEnv::system(conn))
+    Subject::load(conn, path).is_some_and(|s| only_copy_of(conn, &s, &current(conn, &s)))
 }
 
 pub fn note_for(conn: &Connection, path: &str) -> Option<String> {
-    let rs = results_for(conn, path);
+    let s = Subject::load(conn, path)?;
+    let rs = current(conn, &s);
     let b = best(&rs)?;
     if b.confidence == Confidence::None {
-        return only_copy(conn, path).then(|| "only copy we know of".to_string());
+        return only_copy_of(conn, &s, &rs).then(|| "only copy we know of".to_string());
     }
     Some(b.note())
 }
 
-// An `identical` answer that lets the policy cap relax; sync answers only count for online-only.
-pub fn identical_for(conn: &Connection, path: &str, sync: bool) -> Option<CopyResult> {
-    results_for(conn, path).into_iter().find(|r| {
+// Offline checks run again first, so a twin deleted or an archive copy gone since the last pass never relaxes a cap.
+pub fn identical_for(
+    conn: &Connection,
+    cloud: Arc<dyn Cloud>,
+    profile: &str,
+    path: &str,
+    sync: bool,
+) -> Option<CopyResult> {
+    let env = CheckEnv::offline(profile, cloud);
+    let s = Subject::load(conn, path)?;
+    let fresh = check_subject(&Cx { conn, env: &env }, &Registry::standard(), &s).results;
+    let online = current(conn, &s)
+        .into_iter()
+        .filter(|r| r.check == HubCheck::NAME || r.check == WingetCheck::NAME);
+    fresh.into_iter().chain(online).find(|r| {
         r.confidence == Confidence::Identical
             && r.pending().is_none()
             && (r.check == SyncCheck::NAME) == sync

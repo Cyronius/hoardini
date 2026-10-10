@@ -770,3 +770,66 @@ fn each_item_carries_the_most_specific_non_protect_note_and_protect_still_refuse
         "a covering note that is not shown stays unused"
     );
 }
+
+fn sparse(path: &Path, len: u64) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::File::create(path).unwrap();
+    hoardini_win::set_sparse_and_zero_range(path, 0, 0).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_len(len)
+        .unwrap();
+}
+
+// Traces: POLICY-VERDICT-CAP, EVID-COPY-DUP
+#[test]
+fn a_copy_that_is_gone_or_on_the_same_card_relaxes_nothing() {
+    let fx = Fx::new();
+    let a = fx.work.join(r"models\a.bin");
+    let b = fx.work.join(r"backup\a.bin");
+    sparse(&a, 101 << 20);
+    sparse(&b, 101 << 20);
+    fx.index_work();
+    let conn = fx.db.conn().unwrap();
+    conn.execute(
+        "INSERT INTO dup_group(id, size, hash, created_ms) VALUES (1, ?1, 'blake', 0)",
+        [101i64 << 20],
+    )
+    .unwrap();
+    for p in [&a, &b] {
+        let sub = Subject::load(&conn, &s(p)).unwrap();
+        conn.execute(
+            "INSERT INTO dup_member(group_id, path, file_id, mtime) VALUES (1, ?1, ?2, ?3)",
+            rusqlite::params![s(p), sub.file_id.unwrap().to_vec(), sub.mtime],
+        )
+        .unwrap();
+    }
+    let one = fx.propose(ProposalKind::Delete, &[&a], None).unwrap();
+    let it = item(&one, &a);
+    assert_eq!(
+        (it.verdict, it.selected),
+        (Some(Verdict::Redownload), true),
+        "the twin outside the card is a copy"
+    );
+
+    let both = fx.propose(ProposalKind::Delete, &[&a, &b], None).unwrap();
+    for p in [&a, &b] {
+        let it = item(&both, p);
+        assert_eq!(
+            (it.verdict, it.cap, it.selected),
+            (Some(Verdict::Review), Some(Verdict::Review), false),
+            "a card holding both copies keeps neither as the other's backup"
+        );
+    }
+
+    std::fs::remove_file(&b).unwrap();
+    let alone = fx.propose(ProposalKind::Delete, &[&a], None).unwrap();
+    let it = item(&alone, &a);
+    assert_eq!(
+        (it.verdict, it.selected),
+        (Some(Verdict::Review), false),
+        "a twin deleted since the last pass is no copy"
+    );
+}

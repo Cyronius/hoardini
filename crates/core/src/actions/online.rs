@@ -25,13 +25,17 @@ struct Tally {
     files: usize,
     already: usize,
     not_in_sync: usize,
+    pinned: usize,
     failed: usize,
+    unreadable: usize,
     last_error: Option<String>,
 }
 
 impl OnlineOnlyRunner {
     fn one(&self, cx: &mut ItemCx<'_>, p: &Path, t: &mut Tally) {
         match self.cloud.state(p) {
+            // "Always keep on this device" is the user's own choice; a card does not override it.
+            Ok(Some(st)) if st.in_sync && st.pinned => t.pinned += 1,
             Ok(Some(st)) if st.in_sync => {
                 if st.local_bytes == 0 {
                     t.already += 1;
@@ -56,7 +60,16 @@ impl OnlineOnlyRunner {
     fn walk(&self, cx: &mut ItemCx<'_>, dir: &Path, t: &mut Tally) -> anyhow::Result<()> {
         let mut stack = vec![dir.to_path_buf()];
         while let Some(d) = stack.pop() {
-            for e in hoardini_win::list_dir(&d)? {
+            // An unreadable subfolder is left alone; only the item's own folder must list.
+            let entries = match hoardini_win::list_dir(&d) {
+                Ok(e) => e,
+                Err(e) if d == dir => return Err(e.into()),
+                Err(_) => {
+                    t.unreadable += 1;
+                    continue;
+                }
+            };
+            for e in entries {
                 cx.check_cancel()?;
                 let p = d.join(&e.name);
                 if e.is_link() || crate::cloud::never_synced(&e.name) {
@@ -98,6 +111,11 @@ impl Runner for OnlineOnlyRunner {
             if let Some(e) = t.last_error {
                 anyhow::bail!("could not make it online-only: {e}");
             }
+            if t.pinned > 0 && t.not_in_sync == 0 {
+                anyhow::bail!(
+                    "set to Always keep on this device in {provider}; nothing was changed"
+                );
+            }
             anyhow::bail!("nothing here is in sync with {provider} yet; nothing was changed");
         }
         let mut detail = format!("{} file(s) now online-only in {provider}", t.files);
@@ -107,8 +125,17 @@ impl Runner for OnlineOnlyRunner {
                 t.not_in_sync
             ));
         }
+        if t.pinned > 0 {
+            detail.push_str(&format!(
+                "; {} kept on this device by your choice were left",
+                t.pinned
+            ));
+        }
         if t.failed > 0 {
             detail.push_str(&format!("; {} could not be freed", t.failed));
+        }
+        if t.unreadable > 0 {
+            detail.push_str(&format!("; {} folder(s) could not be read", t.unreadable));
         }
         Ok(Outcome {
             undo: serde_json::json!({

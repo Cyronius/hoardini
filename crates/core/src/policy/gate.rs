@@ -203,6 +203,8 @@ pub struct Examined {
     pub block: Option<String>,
     pub cap: Option<Verdict>,
     pub category: Option<Category>,
+    // The verified copy that relaxed the cap, if one did.
+    pub copy: Option<crate::copycheck::CopyResult>,
 }
 
 #[derive(Default)]
@@ -379,6 +381,7 @@ pub fn examine(
         block: None,
         cap: None,
         category,
+        copy: None,
     };
     let state = match fs_state(Path::new(path)) {
         Ok(s) => s,
@@ -439,7 +442,7 @@ pub fn examine(
     } else {
         None
     };
-    ex.cap = super::cap_for_action(
+    (ex.cap, ex.copy) = super::cap_and_copy(
         conn,
         env,
         Path::new(path),

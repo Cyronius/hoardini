@@ -137,8 +137,8 @@ function ItemRow({
           {item.memory_note && <span className="block text-[length:var(--fs-xs)] text-faint">Noted: {item.memory_note}</span>}
           {item.copy_note && <span className="block text-[length:var(--fs-xs)] text-faint">Copy: {item.copy_note}</span>}
           {/* `reason` is the model's; the cap comes from policy code, so they are never joined into one sentence. */}
-          {/* A `redownload` or `synced` cap comes from a copy check, which the Copy line already explains. */}
-          {(item.cap === "review" || item.cap === "keep") && !blocked && (
+          {/* A `redownload` or `synced` cap from a copy check is already explained by the Copy line. */}
+          {item.cap && !blocked && (item.cap === "review" || item.cap === "keep" || !item.copy_note) && (
             <span className="block text-[length:var(--fs-xs)] text-brass">Capped to "{VERDICT_LABEL[item.cap]}" by a safety rule</span>
           )}
           {item.block_reason && <span className="block text-[length:var(--fs-xs)] font-semibold text-err">Blocked: {item.block_reason}</span>}

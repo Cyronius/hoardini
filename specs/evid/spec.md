@@ -199,7 +199,9 @@ with the provider named from the registration id. A file is `identical` when the
 sync (`CfGetPlaceholderInfo`, opened for attributes with no recall), with the provider as the locator and the note
 "synced to <provider>". A folder is `identical` when every file in it (up to 20,000) is in sync, and is walked again on every pass, since
 a file inside can fall out of sync without the folder changing. Shell metadata the engines never upload (`desktop.ini`,
-`thumbs.db`, `.DS_Store`) is not counted. Anything else is `none`
+`thumbs.db`, `.DS_Store`) is not counted, and a folder of more than 20,000 files is `none` with a note saying each file
+is checked when it is freed. A file set to "Always keep on this device", or a folder holding one, is still `identical`
+but notes it ("synced to OneDrive, kept on this device by your choice"), and online-only never ticks it. Anything else is `none`
 pending `sync`, so the next pass looks again. The Win32 calls sit behind the `Cloud` trait, and the decisions are tested
 against a fake one.
 

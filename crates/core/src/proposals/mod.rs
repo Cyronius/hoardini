@@ -357,7 +357,10 @@ fn build(
         // Online-only verdicts come from the sync engine's own state, never from the model.
         let verdict = if req.kind == ProposalKind::OnlineOnly {
             let synced = copycheck::sync_result(&conn, env.cloud().clone(), &env.profile, &path)
-                .is_some_and(|r| r.confidence == copycheck::Confidence::Identical);
+                .is_some_and(|r| {
+                    r.confidence == copycheck::Confidence::Identical
+                        && !copycheck::is_pinned(&r.detail)
+                });
             Some(if synced {
                 Verdict::Synced
             } else {
@@ -376,6 +379,22 @@ fn build(
             ex,
             note,
         });
+    }
+    // A copy that this same card would also remove is no copy at all.
+    let paths: Vec<String> = rows.iter().map(|r| r.path.clone()).collect();
+    for r in &mut rows {
+        let Some(loc) = r.ex.copy.as_ref().and_then(|c| c.locator.clone()) else {
+            continue;
+        };
+        let doomed = paths.iter().any(|p| {
+            !p.eq_ignore_ascii_case(&r.path)
+                && (p.eq_ignore_ascii_case(&loc) || is_ancestor_path(p, &loc))
+        });
+        if doomed {
+            r.ex.cap = r.ex.cap.max(Some(Verdict::Review));
+            r.verdict = r.verdict.map(|v| v.capped(r.ex.cap));
+            r.ex.copy = None;
+        }
     }
     if rows.is_empty() {
         return Ok(Err(dropped));

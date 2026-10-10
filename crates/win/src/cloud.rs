@@ -5,9 +5,9 @@ use std::path::Path;
 
 use windows::Win32::Foundation::{ERROR_NOT_A_CLOUD_FILE, WIN32_ERROR};
 use windows::Win32::Storage::CloudFilters::{
-    CF_DEHYDRATE_FLAG_NONE, CF_IN_SYNC_STATE_IN_SYNC, CF_PIN_STATE_PINNED, CF_PIN_STATE_UNPINNED,
-    CF_PLACEHOLDER_INFO_STANDARD, CF_PLACEHOLDER_STANDARD_INFO, CF_SET_PIN_FLAG_NONE,
-    CfDehydratePlaceholder, CfGetPlaceholderInfo, CfSetPinState,
+    CF_DEHYDRATE_FLAG_NONE, CF_IN_SYNC_STATE_IN_SYNC, CF_PIN_STATE, CF_PIN_STATE_PINNED,
+    CF_PIN_STATE_UNPINNED, CF_PLACEHOLDER_INFO_STANDARD, CF_PLACEHOLDER_STANDARD_INFO,
+    CF_SET_PIN_FLAG_NONE, CfDehydratePlaceholder, CfGetPlaceholderInfo, CfSetPinState,
 };
 use windows::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_NO_RECALL, FILE_READ_ATTRIBUTES, FILE_STANDARD_INFO,
@@ -42,6 +42,10 @@ fn is_not_cloud(e: &windows::core::Error) -> bool {
 }
 
 fn info_of(h: &OwnedHandle) -> io::Result<Option<PlaceholderInfo>> {
+    Ok(raw_info(h)?.map(|(i, _)| i))
+}
+
+fn raw_info(h: &OwnedHandle) -> io::Result<Option<(PlaceholderInfo, CF_PIN_STATE)>> {
     // The identity blob trails the fixed part and is at most 4 KiB.
     let mut buf = vec![0u64; (size_of::<CF_PLACEHOLDER_STANDARD_INFO>() + 4096) / 8 + 1];
     let r = unsafe {
@@ -59,12 +63,15 @@ fn info_of(h: &OwnedHandle) -> io::Result<Option<PlaceholderInfo>> {
         Err(e) => return Err(werr(e)),
     }
     let info = unsafe { &*(buf.as_ptr() as *const CF_PLACEHOLDER_STANDARD_INFO) };
-    Ok(Some(PlaceholderInfo {
-        in_sync: info.InSyncState == CF_IN_SYNC_STATE_IN_SYNC,
-        pinned: info.PinState == CF_PIN_STATE_PINNED,
-        unpinned: info.PinState == CF_PIN_STATE_UNPINNED,
-        on_disk_bytes: u64::try_from(info.OnDiskDataSize).unwrap_or(0),
-    }))
+    Ok(Some((
+        PlaceholderInfo {
+            in_sync: info.InSyncState == CF_IN_SYNC_STATE_IN_SYNC,
+            pinned: info.PinState == CF_PIN_STATE_PINNED,
+            unpinned: info.PinState == CF_PIN_STATE_UNPINNED,
+            on_disk_bytes: u64::try_from(info.OnDiskDataSize).unwrap_or(0),
+        },
+        info.PinState,
+    )))
 }
 
 // None when the path is not a cloud-files placeholder at all.
@@ -89,7 +96,7 @@ fn alloc_of(h: &OwnedHandle) -> io::Result<u64> {
 // Explorer's "Free up space": unpin, then drop the local data. The cloud filter refuses unless the file is in sync.
 pub fn free_up_space(path: &Path) -> io::Result<u64> {
     let h = open_meta(path, true)?;
-    let Some(info) = info_of(&h)? else {
+    let Some((info, prior)) = raw_info(&h)? else {
         return Err(io::Error::other("not a cloud file"));
     };
     if !info.in_sync {
@@ -98,8 +105,12 @@ pub fn free_up_space(path: &Path) -> io::Result<u64> {
     let before = alloc_of(&h)?;
     unsafe { CfSetPinState(raw(&h), CF_PIN_STATE_UNPINNED, CF_SET_PIN_FLAG_NONE, None) }
         .map_err(werr)?;
-    unsafe { CfDehydratePlaceholder(raw(&h), 0, -1, CF_DEHYDRATE_FLAG_NONE, None) }
-        .map_err(werr)?;
+    if let Err(e) = unsafe { CfDehydratePlaceholder(raw(&h), 0, -1, CF_DEHYDRATE_FLAG_NONE, None) }
+    {
+        // A failed free must not leave the file unpinned, or the provider frees it later anyway.
+        let _ = unsafe { CfSetPinState(raw(&h), prior, CF_SET_PIN_FLAG_NONE, None) };
+        return Err(werr(e));
+    }
     let after = alloc_of(&h)?;
     Ok(before.saturating_sub(after))
 }

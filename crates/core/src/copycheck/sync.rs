@@ -17,8 +17,15 @@ const WALK_CAP: usize = 20_000;
 pub struct FolderSync {
     pub files: usize,
     pub not_in_sync: usize,
+    pub pinned: usize,
     pub local_bytes: u64,
     pub truncated: bool,
+}
+
+// A file or folder the user set to "Always keep on this device".
+pub fn is_pinned(detail: &serde_json::Value) -> bool {
+    detail["pinned"].as_bool() == Some(true)
+        || detail["pinned_files"].as_u64().is_some_and(|n| n > 0)
 }
 
 pub(crate) fn file_in_sync(state: Option<CloudState>) -> bool {
@@ -53,6 +60,7 @@ pub fn folder_sync(cloud: &dyn Cloud, dir: &Path) -> FolderSync {
             if !file_in_sync(st) {
                 out.not_in_sync += 1;
             }
+            out.pinned += usize::from(st.is_some_and(|s| s.pinned));
             out.local_bytes += st.map_or(e.alloc, |s| s.local_bytes);
         }
     }
@@ -92,9 +100,14 @@ impl CopyCheck for SyncCheck {
             let f = folder_sync(cx.env.cloud.as_ref(), Path::new(&s.path));
             let detail = json!({
                 "provider": root.provider, "root": root.path, "files": f.files,
-                "not_in_sync": f.not_in_sync, "local_bytes": f.local_bytes,
+                "not_in_sync": f.not_in_sync, "pinned_files": f.pinned, "local_bytes": f.local_bytes,
             });
-            if f.files > 0 && f.not_in_sync == 0 && !f.truncated {
+            if f.truncated {
+                let note =
+                    format!("more than {WALK_CAP} files; each one is checked when it is freed");
+                return Ok(Find::NoCopy(with_note(detail, note)));
+            }
+            if f.files > 0 && f.not_in_sync == 0 {
                 return Ok(Find::Copy(Found {
                     locator: root.provider.clone(),
                     detail,
@@ -125,7 +138,14 @@ impl CopyCheck for SyncCheck {
     }
 
     fn verify(&self, _cx: &Cx<'_>, _s: &Subject, f: Found) -> anyhow::Result<CopyResult> {
-        let note = format!("synced to {}", f.locator);
+        let note = if is_pinned(&f.detail) {
+            format!(
+                "synced to {}, kept on this device by your choice",
+                f.locator
+            )
+        } else {
+            format!("synced to {}", f.locator)
+        };
         Ok(CopyResult::new(
             Self::NAME,
             Some(f.locator),

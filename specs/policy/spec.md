@@ -110,8 +110,10 @@ path is denied. The stored verdict is the LLM verdict raised to the cap; a verdi
 proved another copy relaxes the one cap that is about not knowing (EVID-COPY-CHECK): a current `identical` answer from
 any check but `sync` turns the `review` cap of a path no catalog entry knows into `redownload`, so the item can start
 ticked. A `sync` answer does that only on an online-only card, where the cap becomes `synced`; on any other card a cloud
-copy never relaxes anything, because deleting a synced file deletes the cloud copy too. A shared blob's `review`, a
-catalog cap, and `keep` stay, and no other confidence changes a cap.
+copy never relaxes anything, because deleting a synced file deletes the cloud copy too. The offline checks run again for
+the item first (`copycheck::identical_for`), so a twin deleted or an archive copy gone since the last pass never counts,
+and a copy the same card would remove (a path the card also holds, or one inside it) does not count either. A shared
+blob's `review`, a catalog cap, and `keep` stay, and no other confidence changes a cap.
 
 **Acceptance criteria:**
 - LLM `safe` on an HF hub blob file → verdict `review`, cap `review`; on `disk.vhdx` → `review`/`review`; on an unknown file → `review`/`review`.
@@ -119,6 +121,7 @@ catalog cap, and `keep` stay, and no other confidence changes a cap.
 - LLM `keep` on an unknown file stays `keep` and the item starts unselected.
 - `cap_for_with(.., in_use = true)` and the cap of the profile root are `keep`; every item satisfies verdict ≥ cap.
 - On a delete card, unknown files the model calls `safe`: one with a current `identical` Hugging Face answer shows `redownload`, cap `redownload`, ticked, with the copy note; one with `same-name-and-size` and one with an `identical` `sync` answer show `review`/`review`, unticked; an HF blob file with an `identical` answer stays `review`/`review`. `cap_for_with` gives `redownload` for the first file and `keep` when it is in use. An in-sync file on an online-only card shows `synced`, cap `synced` (`specs/act/tests/online.rs`).
+- Two 101 MiB files in a current duplicate group: one proposed alone shows `redownload`, ticked; both on one card show `review`/`review`, unticked; after the twin is deleted by hand, the first proposed alone shows `review`, unticked.
 
 ### POLICY-DEFAULT-TICK: Only worthwhile safe or redownload items start ticked
 **Applies to:** hoardini
