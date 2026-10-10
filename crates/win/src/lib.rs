@@ -8,6 +8,7 @@ mod enumerate;
 mod fsutil;
 mod killjob;
 mod net;
+mod nofollow;
 mod process;
 mod registry;
 mod rm;
@@ -23,11 +24,12 @@ pub use cloud::{PlaceholderInfo, free_up_space, placeholder_info, provider_displ
 pub use dpapi::{dpapi_protect, dpapi_unprotect};
 pub use enumerate::{alloc_size_by_open, list_dir, list_dir_each};
 pub use fsutil::{
-    create_junction, delete_unless_open, file_id_of, local_offset_ms, set_file_times,
+    create_junction, create_private_dir, file_id_of, local_offset_ms, set_file_times,
     set_sparse_and_zero_range,
 };
 pub use killjob::kill_child_on_exit;
 pub use net::smb_connect;
+pub use nofollow::{NoFollow, Stat, path_inside, set_all_times};
 pub use process::{
     JobGuard, KillOnCloseJob, ProcessMemory, cap_process_memory, current_working_set,
     enter_background_mode, enter_thread_background_mode, kill_with_job, leave_background_mode,

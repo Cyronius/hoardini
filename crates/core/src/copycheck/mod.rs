@@ -662,23 +662,88 @@ pub fn only_copy(conn: &Connection, path: &str) -> bool {
 
 pub fn note_for(conn: &Connection, path: &str) -> Option<String> {
     let s = Subject::load(conn, path)?;
-    let rs = current(conn, &s);
-    let b = best(&rs)?;
-    if b.confidence == Confidence::None {
-        return only_copy_of(conn, &s, &rs).then(|| "only copy we know of".to_string());
+    let (rs, dropped): (Vec<CopyResult>, Vec<CopyResult>) = current(conn, &s)
+        .into_iter()
+        .partition(|r| r.confidence == Confidence::None || copy_stands(conn, &s, r));
+    let b = best(&rs);
+    match b {
+        Some(b) if b.confidence != Confidence::None => Some(b.note()),
+        // A copy that stopped counting does not make this the only one either.
+        _ if !dropped.is_empty() => None,
+        Some(_) => only_copy_of(conn, &s, &rs).then(|| "only copy we know of".to_string()),
+        None => None,
     }
-    Some(b.note())
+}
+
+pub fn is_local_path(p: &str) -> bool {
+    let b = p.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\')
+        || p.starts_with(r"\\")
+}
+
+pub fn in_recycle_bin(path: &str) -> bool {
+    path.split('\\')
+        .any(|c| c.eq_ignore_ascii_case("$Recycle.Bin"))
+}
+
+// Ticked on a live delete or archive card, the path itself or a folder above it; unticked items wait for a tick, which execution re-checks.
+pub fn held_by_live_card(conn: &Connection, path: &str) -> bool {
+    let Ok(mut st) = conn.prepare_cached(
+        "SELECT i.path FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id
+         WHERE p.status IN ('pending', 'approved', 'running') AND p.kind IN ('delete', 'archive')
+           AND i.selected = 1 AND i.status IN ('pending', 'running')",
+    ) else {
+        return true;
+    };
+    let Ok(rows) = st.query_map([], |r| r.get::<_, String>(0)) else {
+        return true;
+    };
+    rows.filter_map(Result::ok)
+        .any(|p| p.eq_ignore_ascii_case(path) || is_ancestor_path(&p, path))
+}
+
+// Temp, cache and build-output folders are emptied as a matter of course, so a copy there may not stand in for another.
+pub fn in_cleared_place(catalog: &crate::catalog::Catalog, path: &str) -> bool {
+    use crate::catalog::Category as C;
+    catalog.lookup(path).is_some_and(|e| {
+        matches!(
+            e.category,
+            C::Temp
+                | C::Cache
+                | C::PackageCache
+                | C::BrowserCache
+                | C::BuildOutput
+                | C::InstallerCache
+                | C::Logs
+                | C::CrashDumps
+                | C::WindowsLeftover
+        )
+    })
+}
+
+// A copy on this PC counts while it is still there unchanged, outside a Recycle Bin, and no live card is set to remove it.
+pub fn copy_stands(conn: &Connection, s: &Subject, r: &CopyResult) -> bool {
+    let Some(loc) = r.locator.as_deref().filter(|l| is_local_path(l)) else {
+        return true;
+    };
+    if in_recycle_bin(loc) || held_by_live_card(conn, loc) {
+        return false;
+    }
+    let env = CheckEnv::offline("", crate::cloud::system());
+    let cx = Cx { conn, env: &env };
+    Registry::standard()
+        .get(&r.check)
+        .is_none_or(|c| c.still_valid(&cx, s, r))
 }
 
 // Offline checks run again first, so a twin deleted or an archive copy gone since the last pass never relaxes a cap.
 pub fn identical_for(
     conn: &Connection,
-    cloud: Arc<dyn Cloud>,
-    profile: &str,
+    policy: &crate::policy::PolicyEnv,
     path: &str,
     sync: bool,
 ) -> Option<CopyResult> {
-    let env = CheckEnv::offline(profile, cloud);
+    let env = CheckEnv::offline(&policy.profile, policy.cloud().clone());
     let s = Subject::load(conn, path)?;
     let fresh = check_subject(&Cx { conn, env: &env }, &Registry::standard(), &s).results;
     let online = current(conn, &s)
@@ -688,6 +753,11 @@ pub fn identical_for(
         r.confidence == Confidence::Identical
             && r.pending().is_none()
             && (r.check == SyncCheck::NAME) == sync
+            && copy_stands(conn, &s, r)
+            && !r
+                .locator
+                .as_deref()
+                .is_some_and(|l| is_local_path(l) && in_cleared_place(policy.catalog(), l))
     })
 }
 

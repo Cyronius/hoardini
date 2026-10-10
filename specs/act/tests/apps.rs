@@ -235,6 +235,58 @@ fn each_app_uninstalls_through_its_own_registration() {
     }
 }
 
+// Traces: ACT-APPS-RARELY-USED, ACT-UNINSTALL
+#[test]
+fn a_bare_uninstaller_name_runs_only_from_the_system_folder() {
+    let inputs = AppInputs {
+        programs: vec![
+            program(
+                "Msi App",
+                Some(r"D:\Apps\Msi"),
+                Some("MsiExec.exe /X{11111111-2222-3333-4444-555555555555}"),
+            ),
+            program("Planted", Some(r"D:\Apps\Planted"), Some("unins000.exe /S")),
+            program("Relative", Some(r"D:\Apps\Rel"), Some(r"bin\uninstall.exe")),
+            program(
+                "Drive Relative",
+                Some(r"D:\Apps\Dr"),
+                Some("D:uninstall.exe"),
+            ),
+            program(
+                "Share",
+                Some(r"D:\Apps\Share"),
+                Some(r"\\server\apps\uninstall.exe /quiet"),
+            ),
+        ],
+        ..AppInputs::default()
+    };
+    let all = apps::installed(&inputs);
+    let by_name = |n: &str| all.iter().find(|a| a.name == n).map(|a| &a.uninstaller);
+    let system = hoardini_win::system_directory().unwrap();
+    assert_eq!(
+        by_name("Msi App"),
+        Some(&Uninstaller::Command {
+            file: system.join("MsiExec.exe").to_string_lossy().into_owned(),
+            params: Some("/X{11111111-2222-3333-4444-555555555555}".into()),
+        })
+    );
+    assert_eq!(
+        by_name("Share"),
+        Some(&Uninstaller::Command {
+            file: r"\\server\apps\uninstall.exe".into(),
+            params: Some("/quiet".into()),
+        })
+    );
+    for refused in ["Planted", "Relative", "Drive Relative"] {
+        assert_eq!(by_name(refused), None, "{refused}");
+    }
+    assert_eq!(
+        apps::program_path(r"C:\x\..\u.exe").as_deref(),
+        Some(r"C:\x\..\u.exe")
+    );
+    assert_eq!(apps::program_path("..\\u.exe"), None);
+}
+
 // Traces: ACT-APPS-RARELY-USED
 #[test]
 fn uninstall_strings_split_into_program_and_arguments() {

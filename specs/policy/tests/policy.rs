@@ -926,14 +926,15 @@ fn a_disposable_answer_is_what_an_unknown_location_lacked() {
         cap_for_with(&conn, &fx.env, &f, None, false).unwrap(),
         Some(Verdict::Review)
     );
-    location(
-        &fx,
-        &fx.work.join("junk"),
-        "user",
-        "You said this folder can go.",
-        Verdict::Safe,
-        Action::ALL.to_vec(),
-    );
+    fx.index_work();
+    memory::location::answer(
+        &conn,
+        &fx.env,
+        &s(&fx.work.join("junk")),
+        memory::location::Answer::Disposable,
+        1,
+    )
+    .unwrap();
     location(
         &fx,
         &fx.work.join(r"junk\deeper"),
@@ -1136,4 +1137,220 @@ fn a_copy_that_is_gone_or_on_the_same_card_relaxes_nothing() {
         (Some(Verdict::Review), false),
         "a twin deleted since the last pass is no copy"
     );
+}
+
+fn index_dir(fx: &Fx, dir: &Path) {
+    let opts = hoardini_core::index::RefreshOptions {
+        threshold: Some(0),
+        hotspots_first: false,
+        ..Default::default()
+    };
+    let conn = fx.db.conn().unwrap();
+    let out =
+        hoardini_core::index::refresh(&conn, &hoardini_core::index::WinLister, &s(dir), &opts)
+            .unwrap();
+    assert!(out.completed);
+}
+
+fn dup_group(fx: &Fx, members: &[&Path]) {
+    let conn = fx.db.conn().unwrap();
+    conn.execute(
+        "INSERT INTO dup_group(id, size, hash, created_ms) VALUES (1, ?1, 'blake', 0)",
+        [101i64 << 20],
+    )
+    .unwrap();
+    for p in members {
+        let sub = Subject::load(&conn, &s(p)).unwrap();
+        conn.execute(
+            "INSERT INTO dup_member(group_id, path, file_id, mtime) VALUES (1, ?1, ?2, ?3)",
+            rusqlite::params![s(p), sub.file_id.unwrap().to_vec(), sub.mtime],
+        )
+        .unwrap();
+    }
+}
+
+fn twins(fx: &Fx) -> (PathBuf, PathBuf) {
+    let a = fx.work.join(r"models\a.bin");
+    let b = fx.work.join(r"backup\a.bin");
+    sparse(&a, 101 << 20);
+    sparse(&b, 101 << 20);
+    fx.index_work();
+    dup_group(fx, &[&a, &b]);
+    (a, b)
+}
+
+// Traces: POLICY-REVALIDATE, POLICY-VERDICT-CAP, EVID-COPY-CHECK
+#[test]
+fn a_twin_deleted_after_the_proposal_stops_the_delete_and_its_note() {
+    let fx = Fx::new();
+    let (a, b) = twins(&fx);
+    let p = fx.propose(ProposalKind::Delete, &[&a], None).unwrap();
+    let it = item(&p, &a);
+    assert_eq!(
+        (it.verdict, it.cap, it.selected),
+        (Some(Verdict::Redownload), Some(Verdict::Redownload), true)
+    );
+    assert_eq!(
+        it.copy_note.as_deref(),
+        Some(format!("identical copy at {}", s(&b)).as_str())
+    );
+
+    std::fs::remove_file(&b).unwrap();
+    assert_eq!(
+        item(&fx.get(&p.id), &a).copy_note,
+        None,
+        "the note never claims a copy that is gone"
+    );
+    let ex = fx.executor();
+    let r = ex.approve(&p.id, &[it.id]).unwrap();
+    assert!(r.items.is_empty(), "{:?}", r.items);
+    wait(&ex, &r.job_id);
+    assert!(
+        a.exists(),
+        "the last copy is never deleted on the strength of a gone twin"
+    );
+    let after = item(&fx.get(&p.id), &a).clone();
+    assert_eq!(after.status, "skipped");
+    assert!(
+        after
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.starts_with("Its copy no longer counts")),
+        "{after:?}"
+    );
+}
+
+// Traces: POLICY-REVALIDATE, POLICY-VERDICT-CAP, EVID-COPY-CHECK
+#[test]
+fn twins_on_two_live_cards_never_both_go() {
+    let fx = Fx::new();
+    let (a, b) = twins(&fx);
+    let p1 = fx.propose(ProposalKind::Delete, &[&a], None).unwrap();
+    let ia = item(&p1, &a).clone();
+    assert_eq!((ia.verdict, ia.selected), (Some(Verdict::Redownload), true));
+
+    let p2 = fx.propose(ProposalKind::Delete, &[&b], None).unwrap();
+    let ib = item(&p2, &b).clone();
+    assert_eq!(
+        (ib.verdict, ib.cap, ib.selected),
+        (Some(Verdict::Review), Some(Verdict::Review), false),
+        "a twin ticked on another live card is no copy"
+    );
+    assert_eq!(ib.copy_note, None);
+
+    proposals::select(&fx.db, &p2.id, &[ib.id]).unwrap();
+    assert_eq!(
+        item(&fx.get(&p1.id), &a).copy_note,
+        None,
+        "once the twin is ticked for removal the note stops naming it"
+    );
+    let ex = fx.executor();
+    let r1 = ex.approve(&p1.id, &[ia.id]).unwrap();
+    assert!(r1.items.is_empty(), "{:?}", r1.items);
+    wait(&ex, &r1.job_id);
+    assert!(a.exists());
+    let r2 = ex.approve(&p2.id, &[ib.id]).unwrap();
+    wait(&ex, &r2.job_id);
+    assert!(
+        !b.exists() && a.exists(),
+        "the review item the user ticked goes; its twin stays"
+    );
+}
+
+// Traces: POLICY-VERDICT-CAP, EVID-COPY-DUP
+#[test]
+fn a_twin_in_a_recycle_bin_or_a_temp_folder_is_no_copy() {
+    let fx = Fx::new();
+    let a = fx.work.join(r"models\a.bin");
+    let binned = fx.work.join(r"$Recycle.Bin\S-1-5-21-1\$RAB12CD.bin");
+    sparse(&a, 101 << 20);
+    sparse(&binned, 101 << 20);
+    fx.index_work();
+    dup_group(&fx, &[&a, &binned]);
+    let p = fx.propose(ProposalKind::Delete, &[&a], None).unwrap();
+    let it = item(&p, &a);
+    assert_eq!(
+        (it.verdict, it.cap, it.selected),
+        (Some(Verdict::Review), Some(Verdict::Review), false),
+        "a file in a Recycle Bin is no twin"
+    );
+    assert!(
+        copycheck::results_for(&fx.db.conn().unwrap(), &s(&a))
+            .iter()
+            .all(|r| r.confidence != Confidence::Identical)
+    );
+
+    let fx = Fx::new();
+    let a = fx.work.join(r"models\a.bin");
+    let temp = fx.profile.join(r"AppData\Local\Temp\unpacked\a.bin");
+    sparse(&a, 101 << 20);
+    sparse(&temp, 101 << 20);
+    fx.index_work();
+    index_dir(&fx, &fx.profile.join(r"AppData\Local\Temp"));
+    dup_group(&fx, &[&a, &temp]);
+    let p = fx.propose(ProposalKind::Delete, &[&a], None).unwrap();
+    let it = item(&p, &a);
+    assert_eq!(
+        (it.verdict, it.cap, it.selected),
+        (Some(Verdict::Review), Some(Verdict::Review), false),
+        "a twin in the temp folder the review empties is no copy"
+    );
+}
+
+fn age_all(paths: &[&Path], days: i64) {
+    let ms = hoardini_core::store::now_ms() - days * 86_400_000;
+    for p in paths {
+        hoardini_win::set_all_times(p, ms).unwrap();
+    }
+}
+
+// Traces: POLICY-REVALIDATE
+#[test]
+fn a_temp_part_with_something_new_deep_inside_is_skipped() {
+    let fx = Fx::new();
+    let temp = fx.profile.join(r"AppData\Local\Temp");
+    let live = temp.join("session-a");
+    let idle = temp.join("session-b");
+    let (la, lb) = (
+        write(&live.join(r"sub\a.bin"), &data(4096, 1)),
+        write(&idle.join(r"sub\b.bin"), &data(4096, 2)),
+    );
+    age_all(&[&la, &lb], 3);
+    age_all(&[&live.join("sub"), &idle.join("sub")], 3);
+    age_all(&[&live, &idle], 3);
+    index_dir(&fx, &temp);
+    let card = proposals::ReviewCard {
+        review_id: "review-1".into(),
+        card: "temp".into(),
+        ticked: true,
+    };
+    let p = proposals::create_review_card(
+        &fx.db,
+        &fx.env,
+        fx.request(ProposalKind::Delete, &[&live, &idle], None),
+        &card,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(p.items.iter().all(|i| i.selected), "{:#?}", p.items);
+
+    let fresh = write(&live.join(r"sub\new.log"), b"written now");
+    let ex = fx.executor();
+    let r = ex.approve(&p.id, &ids(&p)).unwrap();
+    wait(&ex, &r.job_id);
+    let after = fx.get(&p.id);
+    let it = item(&after, &live);
+    assert_eq!(it.status, "skipped");
+    assert_eq!(
+        it.detail.as_deref(),
+        Some(
+            "Changed since the proposal: something in it was written or created in the last 24 hours"
+        )
+    );
+    assert!(
+        fresh.exists() && la.exists(),
+        "nothing in the live part is deleted"
+    );
+    assert!(!idle.exists(), "the part with nothing new in it goes");
+    assert_eq!(after.status, "partial");
 }

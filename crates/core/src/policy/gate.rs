@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use super::{PolicyEnv, Verdict, cap_for_with, deny_reason};
-use crate::catalog::Category;
+use crate::catalog::{Category, UnitKind};
 use crate::index::{self, TopFilesQuery, normalize_path};
 
 pub const IN_USE_FILE_CAP: usize = 500;
@@ -237,6 +237,49 @@ struct TreeScan {
     placeholder: bool,
 }
 
+// The review judged a part by what the index held; anything written or created inside it since must still stop it.
+fn fresh_inside(root: &Path, kind: ItemKind, hours: u32) -> Option<String> {
+    let cutoff_ms = crate::store::now_ms() - i64::from(hours) * 3_600_000;
+    let fresh = || {
+        Some(format!(
+            "Changed since the proposal: something in it was written or created in the last {hours} hours"
+        ))
+    };
+    let unchecked = || Some(UNCHECKED_INSIDE_REASON.to_string());
+    let md = std::fs::symlink_metadata(root).ok()?;
+    let ms = |t: std::io::Result<std::time::SystemTime>| {
+        t.ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(i64::MAX, |d| d.as_millis() as i64)
+    };
+    if ms(md.created()).max(ms(md.modified())) > cutoff_ms {
+        return fresh();
+    }
+    if kind != ItemKind::Dir {
+        return None;
+    }
+    let mut stack = vec![root.to_path_buf()];
+    let mut seen = 0usize;
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = hoardini_win::list_dir(&dir) else {
+            return unchecked();
+        };
+        for e in entries {
+            seen += 1;
+            if seen > SCAN_BUDGET {
+                return unchecked();
+            }
+            if e.ctime_ms.max(e.mtime_ms) > cutoff_ms {
+                return fresh();
+            }
+            if e.is_dir() && (!e.is_reparse() || e.reparse_tag & NAME_SURROGATE == 0) {
+                stack.push(dir.join(&e.name));
+            }
+        }
+    }
+    None
+}
+
 // Name surrogates are links (junctions, symlinks); other reparse folders, like cloud folders, are real.
 fn scan_tree(root: &Path) -> TreeScan {
     let mut out = TreeScan::default();
@@ -382,6 +425,11 @@ fn online_only_block(state: &FsState, alloc: i64) -> Option<String> {
     None
 }
 
+const COPY_GONE_REASON: &str = "Its copy no longer counts: gone, changed, in the Recycle Bin, in a temp or cache folder, or set to be removed too";
+
+const UNCHECKED_INSIDE_REASON: &str =
+    "Too many files inside, or one unreadable, to confirm nothing in it is new";
+
 const PLACEHOLDER_REASON: &str =
     "Cloud-only (online-only) file; archiving or compressing would download it first";
 
@@ -491,6 +539,8 @@ pub fn revalidate(
     action: Action,
     path: &str,
     expected: &FsState,
+    cap: Option<Verdict>,
+    from_review: bool,
 ) -> anyhow::Result<Option<String>> {
     // The open-file check is slow, so every cheap check runs after it, as close to acting as possible.
     if let Some(r) = in_use_reason(conn, path, expected.kind) {
@@ -538,6 +588,23 @@ pub fn revalidate(
     {
         return Ok(Some(PLACEHOLDER_REASON.into()));
     }
+    // A review card's part was old when proposed; a chat request the user made for a new temp file is theirs to make.
+    if from_review
+        && let Some(e) = env.catalog().lookup(path)
+        && e.unit == UnitKind::Contents
+        && let Some(hours) = e.min_age_hours
+        && let Some(r) = fresh_inside(Path::new(path), now.kind, hours)
+    {
+        return Ok(Some(r));
+    }
+    // A `redownload` cap on a path no catalog entry knows came from a copy, which must still count now.
+    if action == Action::Delete
+        && cap == Some(Verdict::Redownload)
+        && env.catalog().lookup(path).is_none()
+        && crate::copycheck::identical_for(conn, env, path, false).is_none()
+    {
+        return Ok(Some(COPY_GONE_REASON.into()));
+    }
     Ok(None)
 }
 
@@ -560,7 +627,7 @@ mod tests {
         let expected = fs_state(&victim).unwrap();
         assert_eq!(expected.kind, ItemKind::Dir);
         assert_eq!(
-            revalidate(&conn, &env, Action::Delete, &path, &expected).unwrap(),
+            revalidate(&conn, &env, Action::Delete, &path, &expected, None, false).unwrap(),
             None
         );
 
@@ -571,7 +638,7 @@ mod tests {
                 hoardini_win::create_junction(&v, &e).unwrap();
             }));
         });
-        let got = revalidate(&conn, &env, Action::Delete, &path, &expected).unwrap();
+        let got = revalidate(&conn, &env, Action::Delete, &path, &expected, None, false).unwrap();
         AFTER_IN_USE.with(|h| *h.borrow_mut() = None);
         let detail = got.expect("swap must be caught");
         assert!(detail.starts_with("Changed since the proposal"), "{detail}");

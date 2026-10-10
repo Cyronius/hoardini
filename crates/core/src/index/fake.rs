@@ -533,6 +533,12 @@ impl FakeFs {
         g.log_change(path, USN_REASON_BASIC_INFO_CHANGE);
     }
 
+    pub fn set_created(&self, path: &str, ctime_ms: i64) {
+        if let Some(n) = self.inner.lock().nodes.get_mut(&key(path)) {
+            n.entry.ctime_ms = ctime_ms;
+        }
+    }
+
     pub fn set_times(&self, path: &str, mtime_ms: i64, atime_ms: i64) {
         if let Some(n) = self.inner.lock().nodes.get_mut(&key(path)) {
             n.entry.mtime_ms = mtime_ms;

@@ -3,14 +3,15 @@ use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
-use windows::Win32::Foundation::{ERROR_SHARING_VIOLATION, FILETIME, GENERIC_WRITE};
+use windows::Win32::Foundation::{FILETIME, GENERIC_WRITE, HLOCAL, LocalFree};
+use windows::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, DELETE, FILE_DISPOSITION_FLAG_DELETE,
-    FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
-    FILE_DISPOSITION_INFO_EX, FILE_DISPOSITION_INFO_EX_FLAGS, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_NONE,
-    FILE_WRITE_ATTRIBUTES, FileDispositionInfoEx, FileIdInfo, FileTimeToLocalFileTime,
-    GetFileInformationByHandleEx, OPEN_EXISTING, SetFileInformationByHandle, SetFileTime,
+    CreateDirectoryW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
+    FILE_READ_ATTRIBUTES, FILE_WRITE_ATTRIBUTES, FileIdInfo, FileTimeToLocalFileTime,
+    GetFileInformationByHandleEx, SetFileTime,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
@@ -18,7 +19,7 @@ use windows::Win32::System::Ioctl::{
 };
 use windows::core::PCWSTR;
 
-use crate::util::{open, owned, raw, werr, wide_path};
+use crate::util::{open, raw, werr, wide_path, wide_str};
 use crate::{IO_REPARSE_TAG_MOUNT_POINT, unix_ms_to_filetime};
 
 fn filetime(ms: i64) -> FILETIME {
@@ -178,41 +179,33 @@ pub fn set_sparse_and_zero_range(path: &Path, offset: u64, len: u64) -> io::Resu
     .map_err(werr)
 }
 
-// Opened with no sharing, so a file anything else holds open is reported and left alone.
-pub fn delete_unless_open(path: &Path) -> io::Result<bool> {
-    let w = wide_path(path)?;
-    // SAFETY: `w` is NUL-terminated and outlives the call.
-    let h = match unsafe {
-        CreateFileW(
-            PCWSTR(w.as_ptr()),
-            DELETE.0,
-            FILE_SHARE_NONE,
-            None,
-            OPEN_EXISTING,
-            FILE_FLAG_OPEN_REPARSE_POINT,
-            None,
-        )
-    } {
-        Ok(h) => h,
-        Err(e) if e.code() == ERROR_SHARING_VIOLATION.to_hresult() => return Ok(false),
-        Err(e) => return Err(werr(e)),
-    };
-    let h = owned(h);
-    let info = FILE_DISPOSITION_INFO_EX {
-        Flags: FILE_DISPOSITION_INFO_EX_FLAGS(
-            FILE_DISPOSITION_FLAG_DELETE.0
-                | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS.0
-                | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE.0,
-        ),
-    };
+// Protected DACL: SYSTEM and Administrators only, and OWNER RIGHTS cut to reading so an unelevated owner cannot rewrite it.
+const PRIVATE_DIR_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FR;;;OW)";
+
+// Fails when anything already has the name, so a folder or junction put there first is never reused.
+pub fn create_private_dir(path: &Path) -> io::Result<()> {
+    let sddl = wide_str(PRIVATE_DIR_SDDL)?;
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: `sddl` is NUL-terminated; the descriptor is freed below with LocalFree.
     unsafe {
-        SetFileInformationByHandle(
-            raw(&h),
-            FileDispositionInfoEx,
-            (&info as *const FILE_DISPOSITION_INFO_EX).cast(),
-            size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            PCWSTR(sddl.as_ptr()),
+            SDDL_REVISION_1,
+            &mut sd,
+            None,
         )
     }
     .map_err(werr)?;
-    Ok(true)
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd.0,
+        bInheritHandle: false.into(),
+    };
+    let created = wide_path(path).and_then(|w| {
+        // SAFETY: `w` is NUL-terminated and `sa` outlives the call.
+        unsafe { CreateDirectoryW(PCWSTR(w.as_ptr()), Some(&sa)) }.map_err(werr)
+    });
+    // SAFETY: `sd` came from ConvertStringSecurityDescriptorToSecurityDescriptorW.
+    unsafe { LocalFree(Some(HLOCAL(sd.0))) };
+    created
 }

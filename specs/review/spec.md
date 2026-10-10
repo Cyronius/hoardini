@@ -15,14 +15,16 @@ folder the walk came from, or the store for `children` units; none for `root` it
 the `parts` past the entry's minimum age. At each folder, in order:
 
 1. A protect note covering it makes it one `kept` unit. A location row of its own from the user with verdict `safe`
-   (the Disposable answer, MEM-LOCATION) makes it one `disposable` unit. A `keep` location (MEM-LOCATION) covering it
+   (the Disposable answer, MEM-LOCATION, while the folder has not grown by half since) makes it one `disposable` unit. A `keep` location (MEM-LOCATION) covering it
    that came from the user, a job or the content mix makes it one `kept` unit. The walk does not go inside any of them.
 2. A catalog entry naming the folder itself (`Catalog::lookup_exact`; an entry matched only through an ancestor does
    not count) whose verdict is not `keep` and whose `unit` is not `container` decides by its `unit`
    (EVID-CATALOG): `self` makes the folder one unit; `children` makes each child one unit (each grandchild when
    `unit_depth = 2`); `contents` makes one unit of the folder whose `parts` are its children, and with `min_age_hours`
    only the children not modified for that long (a child counts as modified when it or any indexed folder or file inside
-   it was); a modified child folder of 1 GiB or more is split the same way, down to three levels, so the old scratch
+   it was written or created since: installers unpack files that keep an old last write, and the index's creation time
+   shows when they arrived; the index holds no change time, so the elevated helper adds that at execution,
+   ACT-WINDOWS-CLEANUP-RUN, and a part is walked again before it is deleted, POLICY-REVALIDATE); a modified child folder of 1 GiB or more is split the same way, down to three levels, so the old scratch
    folders beside a live one still count. A file a `contents` entry names is a `self` unit.
 3. A Windows system area of the deny list (POLICY-DENY: the Windows folder, Program Files, `ProgramData\Microsoft`,
    `System Volume Information`, `$Recycle.Bin`, paging files, Hoardini's data) or a catalog entry with verdict `keep`
@@ -47,6 +49,7 @@ the `parts` past the entry's minimum age. At each folder, in order:
 - `C:\work` goes into `big` (2,000 MiB of 50 MiB files) and `medium` (300 MiB, 12.8% of the folder) and not into `tiny` (50 MiB, 2.1%); both are `leaf` units, since no child is 1 GiB or 10% of them.
 - `%TEMP%` is one `contents` unit with catalog id `temp-user`: a child folder whose file is 3 days old and a 3-day-old file are its `parts`, a child folder holding a file written an hour ago is not, and `size` is 7 GiB, the sum of the parts. A walk of the whole drive reaches the same unit.
 - In `%TEMP%\claude\proj`, where `live` holds a file written an hour ago, the 40 GiB `old` folder beside it is a part and nothing in `live` is.
+- In `%TEMP%`, an `unpacked` folder whose `setup.cab` was created an hour ago with a last write 30 days old is no part; a 3-day-old `old.iso` beside it is.
 - `C:\SteamLibrary\steamapps\common` gives one `children` unit per game (`steam-common`).
 - `%SystemRoot%` is one `kept` unit, and `%SystemRoot%\Temp` inside it is still a `contents` unit (`temp-system`).
 - After the user answers Keep for `C:\code\proj`, a walk of `C:\code` gives that folder as one `kept` unit and not its `target`.

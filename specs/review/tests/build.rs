@@ -486,6 +486,11 @@ fn approving_a_review_card_touches_it_and_its_follow_up_stays_in_the_review() {
     let d = Disk::new();
     let a = d.folder(r"~\AppData\Local\Temp\old-a", "x.bin", 2 * GIB);
     let b = d.folder(r"~\AppData\Local\Temp\old-b", "y.bin", GIB);
+    // The job walks the real folders again (POLICY-REVALIDATE), so they are as old on disk as in the index.
+    for p in [&a, &b] {
+        hoardini_win::set_all_times(Path::new(p), hoardini_core::store::now_ms() - 3 * DAY)
+            .unwrap();
+    }
     let vid = d.index();
     let r = d.review(Scope::Volume(vid), NOW);
     let t = d.card(&r, "temp").unwrap();
@@ -1054,4 +1059,57 @@ fn the_windows_card_holds_the_leftovers_and_what_only_windows_tools_free() {
             .any(|a| a.path.to_lowercase().ends_with(r"\temp")),
         "what a declined card held stays out of Large areas too"
     );
+}
+
+// Traces: MEM-LOCATION, REVIEW-UNITS, POLICY-VERDICT-CAP
+#[test]
+fn a_disposable_answer_stops_counting_once_the_folder_grows_by_half() {
+    let d = Disk::new();
+    let junk = d.folder(r"old\junk", "stuff.dat", 2 * GIB);
+    std::fs::write(format!(r"{junk}\stuff.dat"), b"x").unwrap();
+    d.index();
+    answer(
+        &d.db.conn().unwrap(),
+        &d.env,
+        &junk,
+        Answer::Disposable,
+        NOW - DAY,
+    )
+    .unwrap();
+    let inside = format!(r"{junk}\stuff.dat");
+    let cap = |d: &Disk| {
+        hoardini_core::policy::cap_for_with(
+            &d.db.conn().unwrap(),
+            &d.env,
+            Path::new(&inside),
+            None,
+            false,
+        )
+        .unwrap()
+    };
+
+    d.fs.file(&format!(r"{junk}\more.dat"), 900 * MIB);
+    let vid = d.index();
+    let r = d.review(Scope::Volume(vid), NOW);
+    let dis = d
+        .card(&r, "disposable")
+        .expect("grown by under half, still asked for");
+    assert_eq!(items(&dis), [(junk.clone(), true)]);
+    assert_eq!(cap(&d), None);
+
+    d.fs.file(&format!(r"{junk}\new.dat"), 200 * MIB);
+    let vid = d.index();
+    let r = d.review(Scope::Volume(vid), NOW + HOUR);
+    assert!(
+        d.card(&r, "disposable")
+            .is_none_or(|p| p.items.iter().all(|i| i.path != junk)),
+        "3.1 GB is half again the 2 GB answered for, so nothing is ticked on that answer"
+    );
+    let area = r
+        .areas
+        .iter()
+        .find(|a| a.path == junk)
+        .expect("the folder is an area again");
+    assert!(area.unknown, "{area:?}");
+    assert_eq!(cap(&d), Some(Verdict::Review));
 }

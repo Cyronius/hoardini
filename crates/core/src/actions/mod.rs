@@ -330,7 +330,13 @@ impl Executor {
 
         // The proposal is claimed; from here a failure must not leave it approved with no job running.
         let running = RunningGuard::new(&job.id);
-        let runnable = self.revalidate_chosen(&conn, p.kind.action(), proposal_id, &chosen);
+        let runnable = self.revalidate_chosen(
+            &conn,
+            p.kind.action(),
+            proposal_id,
+            &chosen,
+            p.review_id.is_some(),
+        );
         let cancel = Arc::new(AtomicBool::new(false));
         job.progress.total_items = runnable.len() as i64;
         self.shared.live.lock().insert(
@@ -370,6 +376,7 @@ impl Executor {
         action: policy::Action,
         proposal_id: &str,
         chosen: &[i64],
+        from_review: bool,
     ) -> Vec<i64> {
         // Operations have no file state to compare; the Windows tools check their own preconditions.
         if action == policy::Action::SystemCleanup {
@@ -384,7 +391,15 @@ impl Executor {
         };
         let mut runnable = Vec::new();
         for item in items.into_iter().filter(|i| chosen.contains(&i.id)) {
-            match policy::revalidate(conn, &self.shared.env, action, &item.path, &item.baseline()) {
+            match policy::revalidate(
+                conn,
+                &self.shared.env,
+                action,
+                &item.path,
+                &item.baseline(),
+                item.cap,
+                from_review,
+            ) {
                 Ok(Some(detail)) => {
                     if let Err(e) = proposals::set_item(conn, item.id, "skipped", Some(&detail)) {
                         tracing::warn!(error = %e, "could not mark item skipped");
@@ -660,7 +675,15 @@ fn run_items(
         }
         job.progress.current = Some(it.path.clone());
         ctx.publish(None, job);
-        if let Some(detail) = policy::revalidate(conn, env, action, &it.path, &it.baseline())? {
+        if let Some(detail) = policy::revalidate(
+            conn,
+            env,
+            action,
+            &it.path,
+            &it.baseline(),
+            it.cap,
+            p.review_id.is_some(),
+        )? {
             proposals::set_item(conn, it.id, "skipped", Some(&detail))?;
             job.progress.done_items += 1;
             ctx.publish(Some(conn), job);

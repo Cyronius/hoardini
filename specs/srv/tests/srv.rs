@@ -2357,6 +2357,34 @@ async fn a_what_is_this_answer_is_a_user_row_and_shows_on_the_review() {
                 && r["key"] == r"C:\code\covenant-agent\data"
                 && r["source"] == "user")
     );
+
+    for (path, answer) in [
+        (r"code\covenant-agent", "disposable"),
+        (r"C:\code\..\Windows", "disposable"),
+        (r"C:\", "keep"),
+        (r"C:\", "disposable"),
+        ("~", "disposable"),
+        (r"C:\Users", "keep"),
+        (r"~\AppData\Local", "disposable"),
+        (r"~\.lmstudio", "disposable"),
+        (r"C:\Windows\Temp", "disposable"),
+        (r"C:\Program Files\Contoso", "never-touch"),
+    ] {
+        let (st, e) = f
+            .call(
+                "POST",
+                "/api/locations/answer",
+                Some(json!({"path": path, "answer": answer})),
+            )
+            .await;
+        assert_eq!(st, 400, "{path} {answer}: {e}");
+    }
+    let (_, after) = f.call("GET", "/api/memory", None).await;
+    assert_eq!(
+        after.as_array().unwrap().len(),
+        rows.as_array().unwrap().len(),
+        "a refused answer writes nothing"
+    );
     let _ = f.h.shutdown.send(());
 }
 
@@ -2814,5 +2842,97 @@ async fn explore_focus_is_stored_cleared_and_forgotten_on_restart() {
         .await;
     assert_eq!(st, 400, "{v}");
     assert_eq!(explore::focus(&conn), None);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: AGENT-REDACT, EVID-COPY-CHECK
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cards_copy_note_and_dropped_paths_show_the_profile_as_tilde() {
+    use hoardini_core::copycheck::{self, Confidence, CopyResult, Subject};
+    use hoardini_core::proposals::{self, NewItem, NewProposal, ProposalKind};
+    let f = Fixture::new().await;
+    let work = f.dir.path().join("work");
+    std::fs::create_dir_all(work.join("sub")).unwrap();
+    let a = work.join("a.bin");
+    let copy = f.dir.path().join(r"archive\a.bin");
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    for p in [&a, &copy, &work.join(r"sub\c.bin")] {
+        std::fs::write(p, vec![1u8; 8192]).unwrap();
+    }
+    let s = |p: &Path| hoardini_core::index::normalize_path(&p.to_string_lossy());
+    let profile = hoardini_core::paths::profile_dir()
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        s(&a).to_lowercase().starts_with(&profile.to_lowercase()),
+        "the test needs its files under the profile"
+    );
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    {
+        let conn = db.conn().unwrap();
+        let sub = Subject::load(&conn, &s(&a)).unwrap();
+        let r = CopyResult::new(
+            "archive",
+            Some(s(&copy)),
+            Confidence::Identical,
+            json!({ "note": format!("archived copy at {}", s(&copy)) }),
+        );
+        copycheck::store(&conn, &sub, &r).unwrap();
+    }
+    let p = proposals::create(
+        &db,
+        NewProposal {
+            conversation_id: Some("main".into()),
+            tool_call_id: None,
+            kind: ProposalKind::Delete,
+            destination_id: None,
+            format: None,
+            dedupe: None,
+            summary: "files".into(),
+            items: [a.clone(), work.join("sub"), work.join(r"sub\c.bin")]
+                .iter()
+                .map(|p| NewItem {
+                    path: s(p),
+                    verdict: None,
+                    reason: None,
+                })
+                .collect(),
+        },
+    )
+    .unwrap();
+    assert_eq!(p.dropped.len(), 1, "{:?}", p.dropped);
+
+    let (st, v) = f
+        .call("GET", &format!("/api/proposals/{}", p.id), None)
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let item = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["path"].as_str().is_some_and(|p| p.ends_with("a.bin")))
+        .unwrap();
+    assert_eq!(
+        item["copy_note"].as_str(),
+        Some(
+            format!(
+                "archived copy at {}",
+                hoardini_core::paths::redact(&s(&copy))
+            )
+            .as_str()
+        )
+    );
+    assert!(item["copy_note"].as_str().unwrap().contains(r"at ~\"));
+    let dropped = &v["dropped"][0];
+    assert!(
+        dropped["path"].as_str().unwrap().starts_with(r"~\"),
+        "{dropped}"
+    );
+    assert!(
+        dropped["reason"].as_str().unwrap().contains(r"~\"),
+        "{dropped}"
+    );
+    let escaped = profile.to_lowercase().replace('\\', "\\\\");
+    assert!(!v.to_string().to_lowercase().contains(&escaped), "{v}");
     let _ = f.h.shutdown.send(());
 }

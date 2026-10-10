@@ -6,7 +6,7 @@ use hoardini_core::proposals::{self, NewSystemCleanup, ProposalKind};
 use hoardini_core::store::Db;
 use hoardini_core::syscleanup::{
     self, CleanupCandidate, Cleared, OpResult, SystemFacts, SystemOp, WslDisk, clear_contents,
-    count_shadows, helper_params, leftover_targets, parse_helper_args,
+    count_shadows, diskpart_scripts, helper_params, leftover_targets, parse_helper_args,
 };
 use hoardini_win::RecycleBin;
 
@@ -632,6 +632,27 @@ fn the_elevated_helper_gets_only_known_operations_on_its_command_line() {
 
 // Traces: ACT-WINDOWS-CLEANUP-RUN
 #[test]
+fn diskpart_gets_fixed_scripts_for_one_quoted_disk_path() {
+    let (compact, detach) = diskpart_scripts(r"C:\wsl\Ubuntu Disk\ext4.vhdx").unwrap();
+    assert_eq!(
+        compact,
+        "select vdisk file=\"C:\\wsl\\Ubuntu Disk\\ext4.vhdx\"\nattach vdisk readonly\ncompact vdisk\n"
+    );
+    assert_eq!(
+        detach,
+        "select vdisk file=\"C:\\wsl\\Ubuntu Disk\\ext4.vhdx\"\ndetach vdisk\n"
+    );
+    for bad in [
+        "C:\\x\"\nselect disk 0\nclean\n.vhdx",
+        "C:\\x\r\nclean.vhdx",
+        "C:\\a\"b.vhdx",
+    ] {
+        assert!(diskpart_scripts(bad).is_err(), "{bad:?}");
+    }
+}
+
+// Traces: ACT-WINDOWS-CLEANUP-RUN
+#[test]
 fn restore_points_are_counted_by_their_shadow_device_paths() {
     let listing = "vssadmin 1.1 - Volume Shadow Copy Service administrative command-line tool\r\n\
 (C) Copyright 2001-2013 Microsoft Corp.\r\n\r\n\
@@ -681,7 +702,7 @@ fn the_leftovers_helper_clears_only_the_catalogs_machine_wide_folders() {
 
 fn aged(path: &Path, days: i64) {
     let ms = hoardini_core::store::now_ms() - days * 86_400_000;
-    hoardini_win::set_file_times(path, Some(ms), Some(ms)).unwrap();
+    hoardini_win::set_all_times(path, ms).unwrap();
 }
 
 // Traces: ACT-WINDOWS-CLEANUP-RUN

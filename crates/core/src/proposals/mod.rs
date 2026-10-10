@@ -205,6 +205,7 @@ pub(crate) struct StoredItem {
     pub file_id: Option<[u8; 16]>,
     pub selected: bool,
     pub status: String,
+    pub cap: Option<Verdict>,
 }
 
 impl StoredItem {
@@ -893,7 +894,7 @@ pub(crate) fn stored_items(
     proposal_id: &str,
 ) -> anyhow::Result<Vec<StoredItem>> {
     let mut st = conn.prepare_cached(
-        "SELECT id, path, kind, alloc, logical, mtime, file_id, selected, status
+        "SELECT id, path, kind, alloc, logical, mtime, file_id, selected, status, cap
          FROM proposal_item WHERE proposal_id = ?1 ORDER BY seq",
     )?;
     let rows = st
@@ -909,6 +910,10 @@ pub(crate) fn stored_items(
                 file_id: fid.and_then(|v| <[u8; 16]>::try_from(v.as_slice()).ok()),
                 selected: r.get(7)?,
                 status: r.get(8)?,
+                cap: r
+                    .get::<_, Option<String>>(9)?
+                    .as_deref()
+                    .and_then(Verdict::parse),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

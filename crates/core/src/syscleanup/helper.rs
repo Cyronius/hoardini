@@ -6,6 +6,8 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 
+use hoardini_win::{NoFollow, Stat};
+
 use super::SystemOp;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -192,31 +194,51 @@ fn hibernation() -> anyhow::Result<Option<String>> {
     Ok(None)
 }
 
+// Detach runs on its own, so a failed compact never leaves the disk attached.
+pub fn diskpart_scripts(path: &str) -> anyhow::Result<(String, String)> {
+    if path.chars().any(|c| c == '"' || c.is_control()) {
+        bail!("cannot hand {path:?} to diskpart");
+    }
+    Ok((
+        format!("select vdisk file=\"{path}\"\nattach vdisk readonly\ncompact vdisk\n"),
+        format!("select vdisk file=\"{path}\"\ndetach vdisk\n"),
+    ))
+}
+
+// Users may not rename or delete inside Windows\Temp and only admins may write this folder, so no unelevated process can swap a script.
+fn private_script_dir() -> anyhow::Result<PathBuf> {
+    let dir = hoardini_win::windows_directory()?
+        .join("Temp")
+        .join(format!(
+            "hoardini-diskpart-{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+    hoardini_win::create_private_dir(&dir)
+        .with_context(|| format!("could not create {}", dir.display()))?;
+    Ok(dir)
+}
+
+// diskpart reports a failed command in its exit code only when it runs a script file (/s).
 fn diskpart(script: &str, dir: &Path, name: &str) -> anyhow::Result<std::process::Output> {
     let file = dir.join(name);
-    std::fs::write(&file, script)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&file)?
+        .write_all(script.as_bytes())?;
     let mut c = tool("diskpart.exe")?;
     c.arg("/s").arg(&file);
     run(c, "diskpart")
 }
 
-// Detach runs on its own, so a failed compact never leaves the disk attached.
 fn compact_vhdx(path: &str) -> anyhow::Result<Option<String>> {
     if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
         bail!("{path} is not there anymore");
     }
-    let dir = std::env::temp_dir().join(format!("hoardini-diskpart-{}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
-    let compact = diskpart(
-        &format!("select vdisk file=\"{path}\"\nattach vdisk readonly\ncompact vdisk\n"),
-        &dir,
-        "compact.txt",
-    );
-    let _ = diskpart(
-        &format!("select vdisk file=\"{path}\"\ndetach vdisk\n"),
-        &dir,
-        "detach.txt",
-    );
+    let (compact_script, detach_script) = diskpart_scripts(path)?;
+    let dir = private_script_dir()?;
+    let compact = diskpart(&compact_script, &dir, "compact.txt");
+    let _ = diskpart(&detach_script, &dir, "detach.txt");
     let _ = std::fs::remove_dir_all(&dir);
     let out = compact?;
     if !out.status.success() {
@@ -261,56 +283,94 @@ impl Cleared {
     }
 }
 
-// The same age the review counts parts by: the last write (REVIEW-UNITS).
-fn touched_ms(md: &std::fs::Metadata) -> i64 {
-    md.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(i64::MAX, |d| d.as_millis() as i64)
+// Installers unpack files with an old last write; the creation or change time shows when they arrived.
+fn recent(st: &Stat, cutoff_ms: i64) -> bool {
+    st.newest_ms() > cutoff_ms
 }
 
-fn is_link(md: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    md.file_type().is_symlink()
-        || md.file_attributes() & hoardini_win::FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-fn clear_file(path: &Path, md: &std::fs::Metadata, cutoff_ms: i64, out: &mut Cleared) {
-    if touched_ms(md) > cutoff_ms {
+fn clear_file(file: &NoFollow, root: &str, cutoff_ms: i64, out: &mut Cleared) {
+    let Ok(st) = file.stat() else {
+        out.failed += 1;
+        return;
+    };
+    if st.is_reparse() || st.is_dir() {
+        return;
+    }
+    if recent(&st, cutoff_ms) {
         out.recent += 1;
         return;
     }
-    match hoardini_win::delete_unless_open(path) {
-        Ok(true) => {
+    if !file.is_inside(root) {
+        out.failed += 1;
+        return;
+    }
+    match file.delete() {
+        Ok(()) => {
             out.files += 1;
-            out.bytes += md.len();
+            out.bytes += st.size;
         }
-        Ok(false) => out.in_use += 1,
         Err(_) => out.failed += 1,
     }
 }
 
-fn clear_dir(dir: &Path, cutoff_ms: i64, out: &mut Cleared) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+#[cfg(test)]
+type ListHook = Option<Box<dyn Fn(&str)>>;
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_LIST: std::cell::RefCell<ListHook> = const { std::cell::RefCell::new(None) };
+}
+
+// Every child is opened through its parent's handle, so a folder swapped for a junction mid-walk is held, not followed.
+fn clear_dir(dir: &NoFollow, root: &str, cutoff_ms: i64, out: &mut Cleared) {
+    let mut entries = Vec::new();
+    if dir.list(|e| entries.push(e)).is_err() {
         out.failed += 1;
         return;
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        let Ok(md) = std::fs::symlink_metadata(&p) else {
-            continue;
-        };
-        if is_link(&md) {
+    }
+    #[cfg(test)]
+    AFTER_LIST.with(|h| {
+        if let Some(f) = h.borrow().as_ref() {
+            f(&dir.final_path().unwrap_or_default())
+        }
+    });
+    let gone = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
+    for e in entries {
+        if e.is_reparse() {
             continue;
         }
-        if md.is_dir() {
-            let old = touched_ms(&md) <= cutoff_ms;
-            clear_dir(&p, cutoff_ms, out);
-            if old {
-                let _ = std::fs::remove_dir(&p);
+        if e.is_dir() {
+            let sub = match dir.child_dir(&e.name) {
+                Ok(s) => s,
+                Err(err) if gone(&err) => continue,
+                Err(_) => {
+                    out.failed += 1;
+                    continue;
+                }
+            };
+            let Ok(st) = sub.stat() else {
+                out.failed += 1;
+                continue;
+            };
+            if st.is_reparse() || !st.is_dir() {
+                continue;
             }
-        } else {
-            clear_file(&p, &md, cutoff_ms, out);
+            clear_dir(&sub, root, cutoff_ms, out);
+            if !recent(&st, cutoff_ms) && sub.is_inside(root) {
+                let _ = sub.delete();
+            }
+            continue;
+        }
+        // A fresh file someone holds open counts as recent, not in use.
+        if e.ctime_ms.max(e.mtime_ms) > cutoff_ms {
+            out.recent += 1;
+            continue;
+        }
+        match dir.child_for_delete(&e.name) {
+            Ok(Some(f)) => clear_file(&f, root, cutoff_ms, out),
+            Ok(None) => out.in_use += 1,
+            Err(err) if gone(&err) => {}
+            Err(_) => out.failed += 1,
         }
     }
 }
@@ -318,13 +378,37 @@ fn clear_dir(dir: &Path, cutoff_ms: i64, out: &mut Cleared) {
 // Contents only: the folder itself stays, links inside are never followed or removed.
 pub fn clear_contents(target: &Path, cutoff_ms: i64, out: &mut Cleared) -> std::io::Result<()> {
     let md = std::fs::symlink_metadata(target)?;
-    if is_link(&md) {
+    if md.file_type().is_symlink() {
         return Ok(());
     }
     if md.is_dir() {
-        clear_dir(target, cutoff_ms, out);
-    } else {
-        clear_file(target, &md, cutoff_ms, out);
+        let dir = NoFollow::open_dir(target)?;
+        let st = dir.stat()?;
+        if st.is_reparse() || !st.is_dir() {
+            return Ok(());
+        }
+        clear_dir(&dir, &dir.final_path()?, cutoff_ms, out);
+        return Ok(());
+    }
+    match NoFollow::open_for_delete(target)? {
+        Some(f) => {
+            let st = f.stat()?;
+            if st.is_reparse() || st.is_dir() {
+                return Ok(());
+            }
+            if recent(&st, cutoff_ms) {
+                out.recent += 1;
+                return Ok(());
+            }
+            match f.delete() {
+                Ok(()) => {
+                    out.files += 1;
+                    out.bytes += st.size;
+                }
+                Err(_) => out.failed += 1,
+            }
+        }
+        None => out.in_use += 1,
     }
     Ok(())
 }
@@ -405,4 +489,122 @@ pub fn run_helper(args: &[String]) -> i32 {
         }
     }
     if all_ok { 0 } else { 1 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DAY_MS: i64 = 86_400_000;
+
+    struct Tree {
+        _tmp: tempfile::TempDir,
+        temp: PathBuf,
+        outside: PathBuf,
+    }
+
+    fn write_aged(path: &Path, days: i64) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"data").unwrap();
+        hoardini_win::set_all_times(path, crate::store::now_ms() - days * DAY_MS).unwrap();
+    }
+
+    fn tree() -> Tree {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let root = PathBuf::from(root.to_string_lossy().trim_start_matches(r"\\?\"));
+        let temp = root.join("Temp");
+        let outside = root.join("outside");
+        write_aged(&temp.join(r"a\x.txt"), 3);
+        write_aged(&outside.join("x.txt"), 3);
+        Tree {
+            _tmp: tmp,
+            temp,
+            outside,
+        }
+    }
+
+    fn clear_with_hook(t: &Tree, hook: impl Fn(&str) + 'static) -> Cleared {
+        AFTER_LIST.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+        let mut c = Cleared::default();
+        let r = clear_contents(&t.temp, crate::store::now_ms() - DAY_MS, &mut c);
+        AFTER_LIST.with(|h| *h.borrow_mut() = None);
+        r.unwrap();
+        c
+    }
+
+    fn is_a(listed: &str) -> bool {
+        listed.to_ascii_lowercase().ends_with(r"\temp\a")
+    }
+
+    // Traces: ACT-WINDOWS-CLEANUP-RUN
+    #[test]
+    fn a_folder_swapped_for_a_junction_mid_walk_never_sends_a_delete_outside() {
+        let t = tree();
+        let (a, moved, outside) = (t.temp.join("a"), t.temp.join("a-moved"), t.outside.clone());
+        let c = clear_with_hook(&t, move |listed| {
+            if is_a(listed) {
+                std::fs::rename(&a, &moved).unwrap();
+                hoardini_win::create_junction(&a, &outside).unwrap();
+            }
+        });
+        assert!(
+            t.outside.join("x.txt").exists(),
+            "the junction's target is untouched"
+        );
+        assert!(
+            !t.temp.join(r"a-moved\x.txt").exists(),
+            "the real file, under its new name, is the one deleted"
+        );
+        assert_eq!((c.files, c.failed), (1, 0), "{c:?}");
+        assert!(t.temp.join("a").exists(), "the junction itself stays");
+    }
+
+    // Traces: ACT-WINDOWS-CLEANUP-RUN
+    #[test]
+    fn a_folder_moved_out_of_the_target_mid_walk_keeps_its_files() {
+        let t = tree();
+        let (a, away) = (t.temp.join("a"), t.outside.join("a-away"));
+        let c = clear_with_hook(&t, move |listed| {
+            if is_a(listed) {
+                std::fs::rename(&a, &away).unwrap();
+            }
+        });
+        assert!(
+            t.outside.join(r"a-away\x.txt").exists(),
+            "its final path is no longer under the target, so nothing in it is deleted"
+        );
+        assert!(t.outside.join("x.txt").exists());
+        assert_eq!((c.files, c.failed), (0, 1), "{c:?}");
+    }
+
+    // Traces: ACT-WINDOWS-CLEANUP-RUN
+    #[test]
+    fn a_file_unpacked_today_with_an_old_last_write_is_recent() {
+        let t = tree();
+        let unpacked = t.temp.join("setup.cab");
+        std::fs::write(&unpacked, b"cab").unwrap();
+        let old = crate::store::now_ms() - 30 * DAY_MS;
+        hoardini_win::set_file_times(&unpacked, Some(old), Some(old)).unwrap();
+        let changed = t.temp.join("made-read-only-today.log");
+        write_aged(&changed, 3);
+        std::fs::set_permissions(&changed, {
+            let mut p = std::fs::metadata(&changed).unwrap().permissions();
+            p.set_readonly(true);
+            p
+        })
+        .unwrap();
+        let mut c = Cleared::default();
+        clear_contents(&t.temp, crate::store::now_ms() - DAY_MS, &mut c).unwrap();
+        assert!(
+            unpacked.exists(),
+            "created today, whatever its last write says"
+        );
+        assert!(
+            changed.exists(),
+            "made read-only today, so its change time is today"
+        );
+        assert!(!t.temp.join(r"a\x.txt").exists());
+        assert_eq!((c.files, c.recent), (1, 2), "{c:?}");
+    }
 }

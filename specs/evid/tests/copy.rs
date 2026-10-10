@@ -410,17 +410,25 @@ fn only_copy_needs_every_answer_empty_and_settled() {
     );
 
     copycheck::store(&conn, &sub, &none).unwrap();
+    let copy = fx.data().join(r"arch\own.bin");
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    std::fs::write(&copy, b"mine").unwrap();
+    let note = format!("archived copy at {}", s(&copy));
     let found = CopyResult::new(
         "archive",
-        Some(r"D:\arch\own.bin".into()),
+        Some(s(&copy)),
         Confidence::Identical,
-        json!({"note": "archived copy at D:\\arch\\own.bin"}),
+        json!({ "note": note }),
     );
     copycheck::store(&conn, &sub, &found).unwrap();
     assert!(!copycheck::only_copy(&conn, &path));
+    assert_eq!(copycheck::note_for(&conn, &path), Some(note));
+
+    std::fs::remove_file(&copy).unwrap();
     assert_eq!(
-        copycheck::note_for(&conn, &path).as_deref(),
-        Some(r"archived copy at D:\arch\own.bin")
+        copycheck::note_for(&conn, &path),
+        None,
+        "a copy that is gone is not claimed, and does not make this the only one"
     );
 }
 

@@ -282,11 +282,14 @@ Test: `specs/srv/tests/srv.rs`.
 `POST /api/locations/answer {path, answer}`, with `answer` one of `keep`, `disposable`, `move-elsewhere` and
 `never-touch` and `path` absolute or under `~`, shall record the answer with `location::answer` (MEM-LOCATION) and answer
 the stored memory row. Every stored review area at that path then shows the answer's label, category, verdict, actions
-and text as `why_not`, and is no longer `unknown`. A missing path or an unknown answer answers 400.
+and text as `why_not`, and is no longer `unknown`. A missing path or an unknown answer answers 400, and so does a path `location::answer`
+refuses (MEM-LOCATION: not absolute, a volume root, the profile, a container, a catalog `container` entry, or a system
+area); a refused answer writes nothing.
 
 **Acceptance criteria:**
 - Keep for the unknown `C:\code\covenant-agent` area answers a pinned `user` row keyed `C:\code\covenant-agent` with label `yours`, verdict `keep` and actions `[archive, compress]`; `GET /api/review` then shows that area with label `yours`, `unknown: false`, verdict `keep` and why_not `You keep this folder; it may still be moved or compressed.`
 - `maybe` as the answer, or no path, answers 400; Never touch on `C:\code\covenant-agent\data` leaves a `user` protect note on it.
+- `code\covenant-agent`, `C:\code\..\Windows`, `C:\` (keep or disposable), `~`, `C:\Users`, `~\AppData\Local`, `~\.lmstudio`, `C:\Windows\Temp` and `C:\Program Files\Contoso` answer 400, and the memory list is unchanged.
 
 Test: `specs/srv/tests/srv.rs`.
 

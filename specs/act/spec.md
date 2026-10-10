@@ -71,7 +71,11 @@ SMB UNC path), compress, dedupe, online-only, system_cleanup (operations Windows
 `steam-<appid>` for a Steam game (its folder `<library>\steamapps\common\<installdir>`, uninstalled through
 `steam://uninstall/<appid>`), and `reg-<16 hex of BLAKE3 of the lower-cased uninstall key>` for a registry program,
 uninstalled by its own `UninstallString` split into program and arguments (`apps::split_command`: a quoted program, else
-the text up to the first `.exe` followed by a space or the end, else the first word). A registry program is left out
+the text up to the first `.exe` followed by a space or the end, else the first word). The program must be an absolute
+path (`X:\...` or `\\server\...`) or a bare file name, which is taken from the System folder only
+(`apps::program_path`, `hoardini_win::system_tool`), because the shell would look a bare name up in the working
+directory and on `PATH` first; a bare name that is not there, or a relative path, leaves the program with no uninstaller.
+A registry program is left out
 when it is hidden (`SystemComponent = 1` or an update with `ParentKeyName`), has no `InstallLocation` or
 `UninstallString`, has an install location too broad to mean one app (a drive, `Program Files`, `Windows`, `Users`, ...;
 `evidence::owner`), or shares its folder with a Steam game or an earlier program. Steam libraries come from
@@ -95,6 +99,7 @@ folder within the same minute. An app whose folder is not in the index is not li
 **Acceptance criteria:**
 - With fake registry, UserAssist, and Steam inputs over a fake `D:\`: Old Game (Steam, 5 GiB, played 100 days ago), Never Opened (4 GiB, no run; a `setup.exe` in its folder and a run of `C:\Users\me\Downloads\setup.exe` yesterday do not count), Big Tool (3 GiB, run 200 days ago), and Unplayed (Steam, 2.5 GiB, never) are listed in that order, and nothing else: not a 3 GiB app run 10 days ago, a 1 GiB app, a hidden one, one without an uninstaller, one at `D:\Program Files`, one not in the index, the Steam client (1 GiB once its three games are taken out, though run 300 days ago), New Game (UserAssist 200 days ago, Steam 3 days ago), "Microsoft Visual Studio Code (User)" (app id `Microsoft.VisualStudioCode` 2 days ago), an app holding `WINWORD.EXE` (app id `Microsoft.Office.WINWORD.EXE.15` 12 days ago), or "Shortcut App" (`{Programs}\Shortcut App.lnk` 20 days ago). The registry entry "Steam App 1001" for Old Game's folder is not listed separately; Old Game's id is `steam-1001`, a registry id is `reg-` plus 16 hex digits, and a second call gives the same ids.
 - Old Game uninstalls through `steam://uninstall/1001`; Never Opened through `D:\Apps\Never\Uninstall Never.exe` with `/x`.
+- `MsiExec.exe /X{...}` uninstalls through `<System folder>\MsiExec.exe` with `/X{...}`; `\\server\apps\uninstall.exe /quiet` stays as it is; programs whose uninstaller is `unins000.exe /S` (not in the System folder), `bin\uninstall.exe` or `D:uninstall.exe` are not listed at all.
 - `split_command`: a quoted program keeps its arguments apart; an unquoted `C:\Program Files\My App\Uninstall My App.exe --remove now` splits after `.exe`; `MsiExec.exe /X{...}` splits after `MsiExec.exe`; `C:\Tools\app.exe.old\run.exe` stays whole; blank text and an unterminated quote give nothing.
 - `libraryfolders.vdf` in the current layout gives both library paths with single backslashes; the old layout gives its numbered path; an `appmanifest` gives the app id, name, folder under the library, and `LastPlayed` in ms (0 = none); one without `installdir` gives nothing.
 
@@ -104,7 +109,7 @@ folder within the same minute. An app whose folder is not in the index is not li
 
 `POST /api/apps/{id}/uninstall` (SRV-APPS) shall look the id up among the installed apps (ACT-APPS-RARELY-USED) and start
 that app's registered uninstaller through the shell (`ShellExecuteExW`, so an uninstaller that needs admin rights shows
-its own UAC prompt), or `steam://uninstall/<appid>` for a Steam game, and return at once. The uninstaller asks for its
+its own UAC prompt; a bare program name such as `MsiExec.exe` is only ever the System folder's, ACT-APPS-RARELY-USED), or `steam://uninstall/<appid>` for a Steam game, and return at once. The uninstaller asks for its
 own confirmation. Hoardini never deletes an app's folder or files itself, and the request body is never read.
 
 **Verification (manual):**
@@ -178,12 +183,25 @@ others say there is no undo), or `failed` with the error; the proposal ends `don
 jobs do, and gets no follow-up. Cancel takes effect before the prompt; once the elevated helper runs, the Windows tools
 run to their end. Restore points are counted from `vssadmin list shadows` by their
 `\Device\HarddiskVolumeShadowCopyN` device paths, which are not localized (`syscleanup::count_shadows`).
+Compaction's two diskpart scripts (`syscleanup::diskpart_scripts`: select, attach read-only and compact; then select and
+detach) quote the one disk path and refuse a path holding a quote or a control character. diskpart runs them with `/s`
+(only then does a failed command set its exit code) from files the helper creates new (never reusing an existing file)
+in a folder it creates new under `<Windows>\Temp\hoardini-diskpart-<uuid>` (`hoardini_win::create_private_dir`: refused
+when anything already has the name; a protected DACL giving only SYSTEM and Administrators write access, with owner
+rights cut to reading), where Users may neither delete nor rename, so no unelevated process, the user's own included, can
+rewrite or swap a script between its writing and diskpart reading it; the folder is removed afterwards.
 For `leftovers` the elevated side derives its targets itself, from the catalog compiled into the exe and the Windows and
 ProgramData folders as Windows reports them (`hoardini_win::windows_directory`, `program_data_directory`), never from
 the command line, the proposal or the environment (`leftover_targets`). Inside each target (`syscleanup::clear_contents`)
-it deletes only files whose last write is more than 24 hours old, each opened with no sharing so a file anything holds
-open is left (`hoardini_win::delete_unless_open`, which also clears read-only); it never follows or removes a link or
-junction, removes a subfolder only when it was untouched for 24 hours and is empty afterwards, keeps the targets
+it walks by handle (`hoardini_win::NoFollow`): the target and every folder below it are opened as themselves (never
+through a final link) and listed from that handle, and every child is opened relative to its parent's handle
+(`NtCreateFile` with the parent as root directory), so a folder swapped for a junction after it was listed or while its
+contents are cleared is held as the junction and never walked through. It deletes only files whose creation, last write
+and change time are all more than 24 hours old (installers unpack files that keep an old last write), each opened with no sharing so a file anything holds open is left, and deleted through that same
+handle (POSIX semantics, read-only cleared), the age taken from that handle too; nothing is deleted unless the handle's
+final path (`GetFinalPathNameByHandleW`) is still strictly under the target's own, so a folder moved out of the target
+mid-walk keeps its files. It never follows or removes a link or junction, removes a subfolder (through its own handle)
+only when it was untouched for 24 hours and is empty afterwards, keeps the targets
 themselves, and reports `N files deleted (<size>); left: <n> in use, <n> newer than a day, <n> could not be deleted`.
 `Executor::set_system_runner` replaces `WindowsRunner` in tests. Tests: `specs/act/tests/system.rs`.
 
@@ -194,7 +212,11 @@ themselves, and reports `N files deleted (<size>); left: <n> in use, <n> newer t
 - The helper command line for five operations is exactly `system-cleanup --result "<file>" "component-store" "restore-points=D:" "hibernation-reduced" "compact-vhdx=C:\wsl\Ubuntu Disk\ext4.vhdx" "leftovers"` and parses back to the same operations; the Recycle Bin cannot be put on it; `recycle-bin`, `format-c`, `restore-points=C:\`, a non-`.vhdx` path, a relative path, a UNC path, `leftovers=C:\Users\me\Documents`, `leftovers:C:\Users`, `clear-folder=C:\Users`, and a relative result file are refused.
 - Approving a review card's `leftovers` with a fake runner hands the elevated side exactly `[leftovers]`, and the item ends `done` with the helper's detail and freed bytes.
 - `clear_contents` of a scratch `Temp` deletes the three files written 3 days ago (one read-only, one in an old subfolder, which goes too) and reports `3 files deleted (8 B); left: 1 in use, 1 newer than a day`; a file this test holds open with no sharing, a file written now, the folder itself, and a junction inside and the file it points to are all still there. A 5-day-old `MEMORY.DMP` target is deleted on its own.
+- With a test-only hook after a folder is listed (`crates/core/src/syscleanup/helper.rs`): when `Temp\a` is renamed to `Temp\a-moved` and a junction `Temp\a` to an outside folder takes its place, the outside folder's 3-day-old `x.txt` is still there and `Temp\a-moved\x.txt` is the one deleted (1 file, 0 failed); when `Temp\a` is instead moved outside the target, its `x.txt` is still there and counts as could not be deleted.
+- A `setup.cab` written now but given a 30-day-old last write, and a 3-day-old log made read-only now (its change time), are both left as newer than a day, while a 3-day-old file beside them is deleted (`crates/core/src/syscleanup/helper.rs`).
+- `NoFollow` (`crates/win/src/nofollow.rs`): a junction opened through its parent's handle reports itself as a reparse point and its own listing never shows the target's files; a file's handle reports the creation, write and change times set on it, a final path under its folder's, and `None` for a second no-sharing open; `path_inside` holds only strictly below a folder on a component boundary.
 - A `vssadmin` listing with two shadow device paths (one under a German label) counts 2; "No items found" counts 0.
+- `diskpart_scripts(C:\wsl\Ubuntu Disk\ext4.vhdx)` is exactly `select vdisk file="<path>"`, `attach vdisk readonly`, `compact vdisk` and `select vdisk file="<path>"`, `detach vdisk`, one command per line; a path with a quote, a newline or a carriage return is refused. `create_private_dir` on a name a folder or a junction already holds fails, and this unelevated test process cannot write a file into one it created (`crates/win/tests/fs.rs`).
 
 ### ACT-WINDOWS-CLEANUP: Windows' own tools free the space, behind one admin prompt
 **Applies to:** hoardini

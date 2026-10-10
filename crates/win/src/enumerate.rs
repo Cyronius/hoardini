@@ -1,5 +1,6 @@
 use std::io;
 use std::mem::{offset_of, size_of};
+use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 
 use windows::Win32::Foundation::{
@@ -56,19 +57,23 @@ impl Class {
 }
 
 // Same listing as list_dir, handed out one entry at a time so callers need not hold the whole dir.
-pub fn list_dir_each(path: &Path, mut f: impl FnMut(DirEntry)) -> io::Result<()> {
+pub fn list_dir_each(path: &Path, f: impl FnMut(DirEntry)) -> io::Result<()> {
     let h = open(
         path,
         FILE_LIST_DIRECTORY.0 | SYNCHRONIZE.0,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
     )?;
+    list_handle_each(&h, f)
+}
+
+pub(crate) fn list_handle_each(h: &OwnedHandle, mut f: impl FnMut(DirEntry)) -> io::Result<()> {
     let mut buf = new_buf();
     let mut class = Class::Extd;
     let mut info_class = class.restart();
     loop {
         let r = unsafe {
             GetFileInformationByHandleEx(
-                raw(&h),
+                raw(h),
                 info_class,
                 buf.as_mut_ptr().cast(),
                 LIST_BUF_BYTES as u32,

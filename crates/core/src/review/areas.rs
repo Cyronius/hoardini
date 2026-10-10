@@ -213,9 +213,12 @@ fn is_project(cx: &Cx, path: &str) -> bool {
 }
 
 fn describe(cx: &Cx, r: &Row, volume: &str) -> anyhow::Result<Area> {
+    // A Disposable answer the folder has outgrown says nothing any more, so the area is asked about again.
+    let loc = r.loc.filter(|m| {
+        !(location::is_disposable_answer(m) && location::answer_outgrown(cx.conn, cx.env, m))
+    });
     // The user's or a job's word beats the catalog entry; classifier rows only restate it.
-    let told = r
-        .loc
+    let told = loc
         .filter(|m| !location_classifier(&m.source))
         .and_then(|m| m.detail.as_ref().map(|d| (m, d)));
     let entry = r.entry.filter(|e| e.unit != UnitKind::Container);
@@ -243,7 +246,7 @@ fn describe(cx: &Cx, r: &Row, volume: &str) -> anyhow::Result<Area> {
             knowledge(e),
         )
     } else if let Some((m, d)) =
-        told.or_else(|| r.loc.and_then(|m| m.detail.as_ref().map(|d| (m, d))))
+        told.or_else(|| loc.and_then(|m| m.detail.as_ref().map(|d| (m, d))))
     {
         (
             d.label.clone().unwrap_or_else(|| d.category.clone()),
