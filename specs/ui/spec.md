@@ -611,7 +611,7 @@ Test: `specs/ui/tests/treemap-layout.test.ts`.
 
 `LearnedChip` (`ui/src/components/LearnedChip.tsx`; props `text`, optional `url`, `onUndo`, optional `onPin`, optional `onConfirm`) shall show one line: "learned", the text (the full text as its tooltip), the source link's host when there is a `url`, and its buttons. Undo turns it into "undone" with the text struck through and no buttons; Confirm turns the label into "learned · confirmed"; Pin toggles "learned · pinned" and Unpin. A failed call shows its error inline and keeps the buttons.
 - **After a job:** a finished proposal card (collapsed or opened, UI-PROPOSAL-COLLAPSE) shows one chip per entry of the proposal's `learned` (SRV-LEARNED) directly under it, above any follow-up card, with Pin (`PUT /api/memory/{id}` `pinned`) and Undo (`DELETE /api/proposals/{id}/learned/{memory_id}`).
-- **After a web search:** a `web_search` call whose `data` is `{kind: "learned"}` (AGENT-WEB-LEARN; live from `tool_data`, after a reload from the thread) shows its chip under the search's tool chip, with the source link, Confirm (`POST /api/memory/{id}/confirm`) and Undo (`DELETE /api/memory/{id}`).
+- **After a web search:** a `web_search` call whose `data` is `{kind: "learned"}` (AGENT-WEB-LEARN; live from `tool_data`, after a reload from the thread) shows its chip under the search's tool chip, with the source link, Confirm (`POST /api/memory/{id}/confirm`) and Undo (`DELETE /api/learned/web/{memory_id}` with the item's `key` and `text`, SRV-LEARNED, so a reused id is never deleted).
 
 **Verification (manual):**
 1. In `ui/`, run `MOCK_PORT=72xx MOCK_IDLE=1 bun run mock` and Vite with its `/api` proxy pointed at it; open it at 1000 × 900.

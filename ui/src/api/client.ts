@@ -99,6 +99,7 @@ export const routes = {
   addMemory: (m: Required<Omit<T.MemoryInput, "pinned">>) => api<T.Memory>("/api/memory", { body: m }),
   updateMemory: (id: number, m: T.MemoryInput) => put<T.Memory>(`/api/memory/${id}`, m),
   deleteMemory: (id: number) => del(`/api/memory/${id}`),
+  undoWebLearned: (l: T.Learned) => api(`/api/learned/web/${l.memory_id}`, { method: "DELETE", body: { key: l.key, text: l.text } }),
   restoreMemory: (id: number) => api<T.Memory>(`/api/memory/${id}/restore`, { body: {} }),
   confirmMemory: (id: number) => api<T.Memory>(`/api/memory/${id}/confirm`, { body: {} }),
   memoryLimit: () => api<{ limit: number }>("/api/memory/limit"),

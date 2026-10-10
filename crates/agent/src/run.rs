@@ -778,7 +778,7 @@ impl Run {
         })
         .await??;
         Ok(m.map(|m| {
-            json!({"memory_id": m.id, "text": m.text, "url": url, "confirmed": m.source == "user"})
+            json!({"memory_id": m.id, "key": m.key, "text": m.text, "url": url, "confirmed": m.source == "user"})
         }))
     }
 

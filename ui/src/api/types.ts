@@ -110,7 +110,7 @@ export type Proposal = {
   card?: string | null;
   touched?: boolean;
 };
-export type Learned = { memory_id: number; text: string; url?: string };
+export type Learned = { memory_id: number; text: string; url?: string; key?: string };
 
 // Review (REVIEW-BUILD, REVIEW-AREAS, REVIEW-TRIGGER): POST /api/review/open, POST /api/review/run, GET /api/review.
 export type ReviewArea = {

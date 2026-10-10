@@ -2800,3 +2800,66 @@ async fn explore_focus_is_stored_cleared_and_forgotten_on_restart() {
     assert_eq!(explore::focus(&conn), None);
     let _ = f.h.shutdown.send(());
 }
+
+// Traces: SRV-LEARNED, AGENT-WEB-LEARN
+#[tokio::test(flavor = "multi_thread")]
+async fn a_web_learned_chips_undo_deletes_only_the_row_it_names() {
+    use hoardini_core::memory::knowledge::{Detail, remember_filetype};
+    let f = Fixture::new().await;
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let text = ".q4nx: NPU model weights (FastFlowLM).";
+    let (ty, _) = remember_filetype(
+        &db.conn().unwrap(),
+        "q4nx",
+        text,
+        "web:https://example.test/flm",
+        Detail {
+            category: "model-weights".into(),
+            ..Detail::default()
+        },
+        1,
+    )
+    .unwrap();
+    let path = format!("/api/learned/web/{}", ty.id);
+    let wrong = f
+        .call(
+            "DELETE",
+            &path,
+            Some(json!({"key": r"**\*.zzq", "text": text})),
+        )
+        .await;
+    assert_eq!(wrong.0, 404, "{}", wrong.1);
+    let (st, _) = f
+        .call("DELETE", &path, Some(json!({"key": ty.key, "text": text})))
+        .await;
+    assert_eq!(st, 200);
+    assert_eq!(
+        f.call("DELETE", &path, Some(json!({"key": ty.key, "text": text})))
+            .await
+            .0,
+        404
+    );
+
+    let (st, note) = f
+        .call(
+            "POST",
+            "/api/memory",
+            Some(json!({"scope": "path", "key": r"C:\tax", "kind": "protect", "text": "Never touch my tax files"})),
+        )
+        .await;
+    assert_eq!(st, 200);
+    assert_eq!(note["id"].as_i64(), Some(ty.id), "the id was reused");
+    assert_eq!(
+        f.call("DELETE", &path, Some(json!({"key": ty.key, "text": text})))
+            .await
+            .0,
+        404,
+        "the chip's Undo never reaches the protect note"
+    );
+    assert!(
+        hoardini_core::memory::get(&db.conn().unwrap(), ty.id)
+            .unwrap()
+            .is_some()
+    );
+    let _ = f.h.shutdown.send(());
+}

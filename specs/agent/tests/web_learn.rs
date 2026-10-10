@@ -121,7 +121,7 @@ async fn a_search_about_a_type_ends_in_one_small_request_and_an_identity_row() {
     );
 
     let payload = json!({"v": 1, "kind": "learned", "items": [
-        {"memory_id": row.id, "text": ".q4nx: NPU model weights (FastFlowLM).", "url": FLM, "confirmed": false}
+        {"memory_id": row.id, "key": r"**\*.q4nx", "text": ".q4nx: NPU model weights (FastFlowLM).", "url": FLM, "confirmed": false}
     ]});
     let data = custom(&ev, "tool_data");
     assert_eq!(data.len(), 1);
@@ -303,4 +303,96 @@ async fn a_remember_on_the_same_key_or_an_unreadable_reply_stores_nothing() {
     assert_eq!(web_rows, 0);
     let notes = tool_content(&mock.requests()[2], "r1");
     assert!(notes.starts_with("Noted as memory"), "{notes}");
+}
+
+// Traces: AGENT-WEB-LEARN
+#[test]
+fn a_learned_chip_whose_row_is_gone_is_dropped_and_never_reaches_a_reused_id() {
+    use hoardini_agent::provider::{ChatMessage, ToolCallMsg};
+    use hoardini_agent::thread::Stored;
+    use hoardini_core::memory::knowledge::forget_learned;
+    let h = Harness::new(Some(FAKE_PROFILE));
+    thread::ingest(
+        &h.db,
+        "t-gone",
+        None,
+        &[msg("u1", "user", "What are .q4nx files?")],
+        1,
+    )
+    .unwrap();
+    let mut a = ChatMessage::text("assistant", "");
+    a.tool_calls = Some(vec![ToolCallMsg::new(
+        "s1",
+        "web_search",
+        r#"{"query":"q4nx","about":"*.q4nx"}"#,
+    )]);
+    let mut conn = h.db.conn().unwrap();
+    thread::append_all_at(
+        &mut conn,
+        "t-gone",
+        &[
+            Stored {
+                id: "a1".into(),
+                msg: a,
+            },
+            Stored {
+                id: "r1".into(),
+                msg: thread::tool_msg("s1", "results"),
+            },
+        ],
+        2,
+    )
+    .unwrap();
+    let (m, _) = remember_filetype(
+        &conn,
+        "q4nx",
+        ".q4nx: NPU model weights (FastFlowLM).",
+        &format!("web:{FLM}"),
+        Detail {
+            category: "model-weights".into(),
+            ..Detail::default()
+        },
+        3,
+    )
+    .unwrap();
+    let item =
+        json!({"memory_id": m.id, "key": m.key, "text": m.text, "url": FLM, "confirmed": false});
+    thread::set_ui(
+        &conn,
+        "r1",
+        &json!({"v": 1, "kind": "learned", "items": [item]}),
+    )
+    .unwrap();
+    let items = |h: &Harness| {
+        thread::agui_messages(&h.db, "t-gone", Some(FAKE_PROFILE))
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == "r1")
+            .and_then(|x| x.data)
+            .unwrap()["items"]
+            .clone()
+    };
+    assert_eq!(items(&h).as_array().unwrap().len(), 1);
+
+    assert!(memory::delete(&conn, m.id).unwrap());
+    let protect = memory::remember_with(
+        &conn,
+        NewMemory::new(
+            Scope::Path,
+            r"C:\Users\zq_owner\Documents\tax",
+            MemKind::Protect,
+            "Never touch my tax files",
+            "user",
+        ),
+        4,
+        FAKE_PROFILE,
+    )
+    .unwrap();
+    assert_eq!(protect.id, m.id, "the id was reused");
+    assert_eq!(items(&h), json!([]), "the chip is gone after a reload");
+    assert!(
+        !forget_learned(&conn, m.id, Some(&m.key), &m.text, FAKE_PROFILE).unwrap(),
+        "its Undo cannot delete the protect note"
+    );
+    assert!(memory::get(&conn, protect.id).unwrap().is_some());
 }

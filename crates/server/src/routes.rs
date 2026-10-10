@@ -118,6 +118,7 @@ fn entries() -> Vec<Entry> {
         post_("/api/memory/{id}/restore", memory_restore),
         post_("/api/memory/{id}/confirm", memory_confirm),
         delete_("/api/memory/{id}", memory_delete),
+        delete_("/api/learned/web/{memory_id}", learned_web_undo),
         get_("/api/providers", providers::list),
         post_("/api/providers", providers::create),
         get_("/api/providers/presets", providers::preset_list),
@@ -506,10 +507,44 @@ async fn memory_confirm(State(s): State<AppState>, Path(id): Path<i64>) -> ApiRe
         let profile = hoardini_core::paths::profile_dir()
             .to_string_lossy()
             .into_owned();
-        let m = memory::knowledge::confirm(&s.db.conn()?, id, now_ms(), &profile)
-            .map_err(|e| ApiError::bad(format!("{e:#}")))?
+        let conn = s.db.conn()?;
+        let found = memory::get(&conn, id)?.ok_or_else(|| ApiError::not_found("memory"))?;
+        if found.detail.is_none() {
+            return Err(ApiError::bad(format!(
+                "memory {id} is a note; only location and file-type rows can be confirmed"
+            )));
+        }
+        let m = memory::knowledge::confirm(&conn, id, now_ms(), &profile)?
             .ok_or_else(|| ApiError::not_found("memory"))?;
         Ok(Json(json!(m)))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct LearnedChip {
+    key: Option<String>,
+    text: String,
+}
+
+// A web search's Learned chip: only the row it names, so a reused id never deletes another memory.
+async fn learned_web_undo(
+    State(s): State<AppState>,
+    Path(memory_id): Path<i64>,
+    body: Bytes,
+) -> ApiResult {
+    let b: LearnedChip = parse(&body)?;
+    blocking(move || {
+        let profile = hoardini_core::paths::profile_dir()
+            .to_string_lossy()
+            .into_owned();
+        let conn = s.db.conn()?;
+        if memory::knowledge::forget_learned(&conn, memory_id, b.key.as_deref(), &b.text, &profile)?
+        {
+            Ok(Json(json!({"ok": true})))
+        } else {
+            Err(ApiError::not_found("learned entry"))
+        }
     })
     .await
 }

@@ -210,6 +210,40 @@ pub fn confirm(
     upsert_with(conn, k, now, profile).map(|(m, _)| Some(m))
 }
 
+// What a web search's Learned chip names, so its Undo and a reload never act on a row whose id was reused.
+pub fn learned_row(
+    conn: &Connection,
+    id: i64,
+    key: Option<&str>,
+    text: &str,
+    profile: &str,
+) -> anyhow::Result<Option<Memory>> {
+    let Some(m) = get(conn, id)? else {
+        return Ok(None);
+    };
+    let same_key = key.is_none_or(|k| {
+        super::normalize_key_with(m.scope, k, profile).eq_ignore_ascii_case(&m.key)
+    });
+    let same_text = m.text == text || paths::redact_with(&m.text, profile) == text;
+    // A user row at the key is the chip's own row only while it reads as confirmed, not as a later answer.
+    let ours = (m.source.starts_with("web:") && (key.is_some() || same_text))
+        || (m.source == "user" && same_text);
+    Ok((m.detail.is_some() && same_key && ours).then_some(m))
+}
+
+pub fn forget_learned(
+    conn: &Connection,
+    id: i64,
+    key: Option<&str>,
+    text: &str,
+    profile: &str,
+) -> anyhow::Result<bool> {
+    match learned_row(conn, id, key, text, profile)? {
+        Some(m) => super::delete(conn, m.id),
+        None => Ok(false),
+    }
+}
+
 pub(crate) fn set_detail(conn: &Connection, id: i64, detail: &Detail) -> anyhow::Result<()> {
     conn.execute(
         "UPDATE memory SET detail_json = ?1 WHERE id = ?2",
