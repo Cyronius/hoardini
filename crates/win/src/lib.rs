@@ -23,7 +23,8 @@ pub use cloud::{PlaceholderInfo, free_up_space, placeholder_info, provider_displ
 pub use dpapi::{dpapi_protect, dpapi_unprotect};
 pub use enumerate::{alloc_size_by_open, list_dir, list_dir_each};
 pub use fsutil::{
-    create_junction, file_id_of, local_offset_ms, set_file_times, set_sparse_and_zero_range,
+    create_junction, delete_unless_open, file_id_of, local_offset_ms, set_file_times,
+    set_sparse_and_zero_range,
 };
 pub use killjob::kill_child_on_exit;
 pub use net::smb_connect;
@@ -40,7 +41,7 @@ pub use rm::processes_using;
 pub use shell::{
     RecycleBin, empty_recycle_bin, physical_memory, recycle_bin, run_elevated, shell_open,
 };
-pub use sysdir::{system_directory, system_tool};
+pub use sysdir::{program_data_directory, system_directory, system_tool, windows_directory};
 pub use usn::{path_by_file_id, usn_query, usn_read};
 pub use volume::{fixed_volumes, is_subst, volume_info, volume_root_of};
 

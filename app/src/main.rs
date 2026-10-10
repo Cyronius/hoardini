@@ -110,6 +110,7 @@ fn main() {
                 dialogs: Some(Arc::new(TauriDialogs(app.handle().clone()))),
                 refresh_on_start: true,
                 indexer_exe: None,
+                system_facts: None,
             };
             let server = match rt_handle.block_on(hoardini_server::start(opts)) {
                 Ok(s) => s,

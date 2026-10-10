@@ -5,12 +5,14 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use hoardini_agent::agui::{AgMessage, RunAgentInput};
 use hoardini_agent::thread;
+use hoardini_core::apps;
+use hoardini_core::copycheck::{self, consent};
 use hoardini_core::index::{self, WinLister};
 use hoardini_core::memory::location::{self, Answer};
 use hoardini_core::paths::redact;
 use hoardini_core::policy::PolicyEnv;
 use hoardini_core::proposals;
-use hoardini_core::review::{self, Review, Scope};
+use hoardini_core::review::{self, Opened, Review, Scope};
 use hoardini_core::store::now_ms;
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -25,6 +27,54 @@ fn focus(conn: &Connection) -> Result<(i64, String), ApiError> {
         .filter(|s| s.last_refresh_ms.is_some())
         .map(|s| (s.volume_id, s.volume))
         .ok_or_else(|| ApiError::not_found("index"))
+}
+
+pub fn env(s: &AppState) -> PolicyEnv {
+    match &s.facts {
+        Some(f) => PolicyEnv::system().with_facts(f.clone()),
+        None => PolicyEnv::system(),
+    }
+}
+
+fn same_or_under(a: &str, p: &str) -> bool {
+    a.eq_ignore_ascii_case(p) || index::is_ancestor_path(a, p)
+}
+
+// The review's own scope only, so a folder review lists the apps inside it.
+fn apps_under(conn: &Connection, root: &str) -> Vec<Value> {
+    let list = match apps::list_rarely_used(conn, now_ms()) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::debug!(error = %e, "rarely used apps not listed");
+            Vec::new()
+        }
+    };
+    list.into_iter()
+        .filter(|a| same_or_under(root, &a.path))
+        .map(|mut a| {
+            a.path = redact(&a.path);
+            a.last_run_from = a.last_run_from.as_deref().map(redact);
+            json!(a)
+        })
+        .collect()
+}
+
+fn extras(s: &AppState, conn: &Connection, root: &str) -> Value {
+    json!({
+        "building": s.reviews.building(),
+        "apps": apps_under(conn, root),
+        "online": {
+            "asked": consent::load(conn).asked,
+            "waiting": copycheck::online_waiting(conn),
+        },
+    })
+}
+
+fn merged(mut base: Value, more: Value) -> Value {
+    if let (Some(b), Value::Object(m)) = (base.as_object_mut(), more) {
+        b.extend(m);
+    }
+    base
 }
 
 pub fn view(s: &AppState, r: &Review) -> anyhow::Result<Value> {
@@ -46,7 +96,7 @@ pub fn view(s: &AppState, r: &Review) -> anyhow::Result<Value> {
             serde_json::to_value(a).unwrap_or(Value::Null)
         })
         .collect();
-    Ok(json!({
+    let base = json!({
         "review": {
             "id": r.id,
             "created_ms": r.created_ms,
@@ -62,25 +112,77 @@ pub fn view(s: &AppState, r: &Review) -> anyhow::Result<Value> {
         "cards": r.cards,
         "areas": areas,
         "proposals": props,
-    }))
+    });
+    Ok(merged(base, extras(s, &conn, r.root())))
 }
 
-// One build at a time: two opens at app start must not make two reviews.
-fn locked<T>(s: &AppState, f: impl FnOnce() -> Result<T, ApiError>) -> Result<T, ApiError> {
-    let _g = s
-        .reviews
-        .lock()
-        .map_err(|_| ApiError::from(anyhow::anyhow!("review lock poisoned")))?;
-    f()
+// Before the drive's first review is built there is only the drive to show.
+fn first_view(s: &AppState, volume: &str) -> anyhow::Result<Value> {
+    let conn = s.db.conn()?;
+    let st = index::index_status(&conn, Some(volume))?;
+    let base = json!({
+        "review": Value::Null,
+        "header": {
+            "root": volume,
+            "used_bytes": st.as_ref().and_then(|x| x.used_bytes),
+            "free_bytes": st.as_ref().and_then(|x| x.free_bytes),
+            "ready_bytes": 0,
+        },
+        "cards": [],
+        "areas": [],
+        "proposals": {},
+    });
+    Ok(merged(base, extras(s, &conn, volume)))
+}
+
+// Estimates fill in after a build; a folder they make worth compressing rebuilds an untouched review.
+fn after_build(s: &AppState, r: &Review) {
+    let (st, r) = (s.clone(), r.clone());
+    let spawned = std::thread::Builder::new()
+        .name("hoardini-compress-estimates".into())
+        .spawn(move || {
+            let _ = hoardini_win::enter_thread_background_mode();
+            let env = env(&st);
+            match review::compress_estimates(&st.db, &env, &r, now_ms()) {
+                Ok(true) => {
+                    let rebuilt = st.reviews.exclusive(|now| {
+                        review::rebuild_if_current(&st.db, &env, &WinLister, &r.id, now)
+                    });
+                    match rebuilt {
+                        Ok(Some(n)) => {
+                            tracing::info!(review = %n.id, "review rebuilt with compression estimates")
+                        }
+                        Ok(None) => {}
+                        Err(e) => tracing::warn!(error = %e, "review not rebuilt after estimates"),
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => tracing::debug!(error = %e, "compression estimates failed"),
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::debug!(error = %e, "compression estimates did not start");
+    }
+}
+
+fn build_volume(s: &AppState, volume_id: i64, now: i64) -> anyhow::Result<()> {
+    let r = review::build(&s.db, &env(s), &WinLister, Scope::Volume(volume_id), now)?;
+    after_build(s, &r);
+    Ok(())
 }
 
 pub async fn open(State(s): State<AppState>) -> ApiResult {
     let st = s.clone();
     let out = blocking(move || {
-        locked(&st, || {
-            let (vid, _) = focus(&st.db.conn()?)?;
-            let r = review::open(&st.db, &PolicyEnv::system(), &WinLister, vid, now_ms())?;
-            Ok(view(&st, &r)?)
+        let conn = st.db.conn()?;
+        let (vid, volume) = focus(&conn)?;
+        let job = st.clone();
+        let opened = st
+            .reviews
+            .open(&conn, vid, move |now| build_volume(&job, vid, now))?;
+        Ok(match opened {
+            Opened::Ready(r) | Opened::Building(Some(r)) => view(&st, &r)?,
+            Opened::Building(None) => first_view(&st, &volume)?,
         })
     })
     .await?;
@@ -97,21 +199,22 @@ pub async fn run(State(s): State<AppState>, body: Bytes) -> ApiResult {
     let b: RunBody = parse(&body)?;
     let st = s.clone();
     let out = blocking(move || {
-        locked(&st, || {
-            let env = PolicyEnv::system();
-            let scope = match b.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-                Some(p) => {
-                    let p = index::normalize_path(&env.expand(p));
-                    if index::node_id_by_path(&st.db.conn()?, &p)?.is_none() {
-                        return Err(ApiError::not_found("folder in the index"));
-                    }
-                    Scope::Folder(p)
+        let env = env(&st);
+        let scope = match b.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) => {
+                let p = index::normalize_path(&env.expand(p));
+                if index::node_id_by_path(&st.db.conn()?, &p)?.is_none() {
+                    return Err(ApiError::not_found("folder in the index"));
                 }
-                None => Scope::Volume(focus(&st.db.conn()?)?.0),
-            };
-            let r = review::build(&st.db, &env, &WinLister, scope, now_ms())?;
-            Ok(view(&st, &r)?)
-        })
+                Scope::Folder(p)
+            }
+            None => Scope::Volume(focus(&st.db.conn()?)?.0),
+        };
+        let r = st
+            .reviews
+            .exclusive(|now| review::build(&st.db, &env, &WinLister, scope, now))?;
+        after_build(&st, &r);
+        Ok(view(&st, &r)?)
     })
     .await?;
     s.bump();
@@ -149,15 +252,17 @@ pub fn status_ref(s: &AppState) -> Value {
 }
 
 pub fn rebuild_after_launch(s: &AppState) -> anyhow::Result<bool> {
-    let _g = s
-        .reviews
-        .lock()
-        .map_err(|_| anyhow::anyhow!("review lock poisoned"))?;
     let conn = s.db.conn()?;
     let Ok((vid, _)) = focus(&conn) else {
         return Ok(false);
     };
-    let r = review::rebuild_if_untouched(&s.db, &PolicyEnv::system(), &WinLister, vid, now_ms())?;
+    let env = env(s);
+    let r = s
+        .reviews
+        .exclusive(|now| review::rebuild_if_untouched(&s.db, &env, &WinLister, vid, now))?;
+    if let Some(r) = &r {
+        after_build(s, r);
+    }
     Ok(r.is_some())
 }
 
@@ -171,7 +276,7 @@ pub async fn answer(State(s): State<AppState>, body: Bytes) -> ApiResult {
     let b: AnswerBody = parse(&body)?;
     let st = s.clone();
     let out = blocking(move || {
-        let env = PolicyEnv::system();
+        let env = env(&st);
         let path = index::normalize_path(&env.expand(b.path.trim()));
         if path.is_empty() {
             return Err(ApiError::bad("path is required"));

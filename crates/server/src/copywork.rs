@@ -126,6 +126,7 @@ impl CopyWorker {
                     waiting += r.online_waiting;
                     tracing::info!(
                         volume = %root,
+                        pruned = r.pruned,
                         candidates = r.candidates,
                         checked = r.checked,
                         hashed = r.hashed,

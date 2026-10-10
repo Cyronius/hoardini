@@ -5,8 +5,8 @@ use hoardini_core::index::{FakeFs, RefreshOptions, index_status, refresh};
 use hoardini_core::proposals::{self, NewSystemCleanup, ProposalKind};
 use hoardini_core::store::Db;
 use hoardini_core::syscleanup::{
-    self, CleanupCandidate, OpResult, SystemFacts, SystemOp, WslDisk, count_shadows, helper_params,
-    parse_helper_args,
+    self, CleanupCandidate, Cleared, OpResult, SystemFacts, SystemOp, WslDisk, clear_contents,
+    count_shadows, helper_params, leftover_targets, parse_helper_args,
 };
 use hoardini_win::RecycleBin;
 
@@ -326,6 +326,7 @@ fn five_ops(fx: &Fx) -> (proposals::Proposal, PathBuf) {
         estimate: est,
         size: None,
         note: String::new(),
+        parts: Vec::new(),
     };
     let p = proposals::create_system_cleanup(
         &fx.db,
@@ -509,6 +510,73 @@ fn a_job_with_only_the_recycle_bin_never_asks_for_admin_rights() {
     assert_eq!(fx.get(&p.id).status, "done");
 }
 
+// Traces: ACT-WINDOWS-CLEANUP-RUN, REVIEW-BUILD
+#[test]
+fn a_review_cards_leftovers_go_to_the_helper_by_name_not_by_path() {
+    let fx = Fx::new();
+    let parts = vec![
+        syscleanup::OpPart {
+            path: r"C:\Windows\Temp\setup".into(),
+            size: 2 * GIB,
+        },
+        syscleanup::OpPart {
+            path: r"C:\Windows\SoftwareDistribution\Download\abc".into(),
+            size: 3 * GIB,
+        },
+    ];
+    let leftovers = syscleanup::leftovers_candidate(parts).unwrap();
+    assert_eq!(
+        leftovers.target,
+        r"C:\Windows\SoftwareDistribution\Download\abc"
+    );
+    let card = proposals::ReviewCard {
+        review_id: "r1".into(),
+        card: "windows".into(),
+        ticked: true,
+    };
+    let p = proposals::create_system_cleanup_card(
+        &fx.db,
+        NewSystemCleanup {
+            conversation_id: Some("review".into()),
+            tool_call_id: None,
+            summary: "Cleanups only Windows can do".into(),
+            ops: vec![leftovers],
+            dropped: Vec::new(),
+        },
+        Some(&card),
+    )
+    .unwrap();
+    assert_eq!(
+        (p.review_id.as_deref(), p.card.as_deref()),
+        (Some("r1"), Some("windows"))
+    );
+    let it = &p.items[0];
+    assert!(it.selected, "safe, so it starts ticked");
+    assert_eq!(it.alloc, (5 * GIB) as i64);
+    assert_eq!(it.op.as_ref().unwrap().parts.len(), 2);
+    let ex = fx.executor();
+    let runner = Arc::new(FakeRunner::default());
+    *runner.results.lock().unwrap() = Some(Ok(vec![ok(
+        4 * GIB,
+        Some("12 files deleted (4.0 GB); left: 3 in use"),
+    )]));
+    ex.set_system_runner(Some(runner.clone()));
+    let job = wait(&ex, &ex.approve(&p.id, &ids(&p)).unwrap().job_id);
+    assert_eq!(
+        *runner.elevated.lock().unwrap(),
+        vec![vec![SystemOp::Leftovers]]
+    );
+    assert_eq!(job.freed_bytes, (4 * GIB) as i64);
+    let done = fx.get(&p.id);
+    assert_eq!(done.status, "done");
+    assert_eq!(
+        done.items[0].detail.as_deref(),
+        Some("12 files deleted (4.0 GB); left: 3 in use")
+    );
+    let line = helper_params(Path::new(r"C:\r.jsonl"), &[SystemOp::Leftovers]).unwrap();
+    assert_eq!(line, r#"system-cleanup --result "C:\r.jsonl" "leftovers""#);
+}
+
 // Traces: ACT-WINDOWS-CLEANUP-RUN
 #[test]
 fn the_elevated_helper_gets_only_known_operations_on_its_command_line() {
@@ -522,11 +590,12 @@ fn the_elevated_helper_gets_only_known_operations_on_its_command_line() {
         SystemOp::CompactVhdx {
             path: r"C:\wsl\Ubuntu Disk\ext4.vhdx".into(),
         },
+        SystemOp::Leftovers,
     ];
     let line = helper_params(result, &ops).unwrap();
     assert_eq!(
         line,
-        r#"system-cleanup --result "C:\Users\me\AppData\Local\Temp\hoardini-cleanup-1.jsonl" "component-store" "restore-points=D:" "hibernation-reduced" "compact-vhdx=C:\wsl\Ubuntu Disk\ext4.vhdx""#
+        r#"system-cleanup --result "C:\Users\me\AppData\Local\Temp\hoardini-cleanup-1.jsonl" "component-store" "restore-points=D:" "hibernation-reduced" "compact-vhdx=C:\wsl\Ubuntu Disk\ext4.vhdx" "leftovers""#
     );
     assert!(helper_params(result, &[SystemOp::RecycleBin]).is_err());
     let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -537,6 +606,7 @@ fn the_elevated_helper_gets_only_known_operations_on_its_command_line() {
         "restore-points=D:",
         "hibernation-reduced",
         r"compact-vhdx=C:\wsl\Ubuntu Disk\ext4.vhdx",
+        "leftovers",
     ]))
     .unwrap();
     assert_eq!(r, result);
@@ -548,6 +618,9 @@ fn the_elevated_helper_gets_only_known_operations_on_its_command_line() {
         r"compact-vhdx=C:\wsl\notes.txt",
         r"compact-vhdx=..\x.vhdx",
         r"compact-vhdx=\\server\share\x.vhdx",
+        r"leftovers=C:\Users\me\Documents",
+        r"leftovers:C:\Users",
+        "clear-folder=C:\\Users",
     ] {
         assert!(
             parse_helper_args(&args(&["--result", r"C:\r.jsonl", bad])).is_err(),
@@ -574,4 +647,100 @@ Contents of shadow copy set ID: {d}\r\n\
         count_shadows("No items found that satisfy the query.\r\n"),
         0
     );
+}
+
+// Traces: ACT-WINDOWS-CLEANUP-RUN
+#[test]
+fn the_leftovers_helper_clears_only_the_catalogs_machine_wide_folders() {
+    assert_eq!(
+        leftover_targets(r"X:\Windows", r"X:\ProgramData"),
+        [
+            r"X:\Windows\Temp",
+            r"X:\Windows\SoftwareDistribution\Download",
+            r"X:\Windows\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache",
+            r"X:\Windows\SoftwareDistribution\DeliveryOptimization",
+            r"X:\ProgramData\Microsoft\Windows\WER",
+            r"X:\Windows\Minidump",
+            r"X:\Windows\MEMORY.DMP",
+            r"X:\Windows\LiveKernelReports",
+            r"X:\Windows\Logs\CBS",
+            r"X:\Windows\Logs\DISM",
+            r"X:\Windows\Panther",
+        ],
+        "the user's own CrashDumps and WER folders are cleared as the user, not here"
+    );
+    let op = SystemOp::Leftovers;
+    assert!(op.elevated());
+    assert!(!op.irreversible());
+    assert_eq!(op.name(), "leftovers");
+    assert_eq!(
+        serde_json::to_value(&op).unwrap(),
+        serde_json::json!({"op": "leftovers"})
+    );
+}
+
+fn aged(path: &Path, days: i64) {
+    let ms = hoardini_core::store::now_ms() - days * 86_400_000;
+    hoardini_win::set_file_times(path, Some(ms), Some(ms)).unwrap();
+}
+
+// Traces: ACT-WINDOWS-CLEANUP-RUN
+#[test]
+fn clearing_a_leftover_folder_keeps_it_new_and_open_files_and_never_follows_a_link() {
+    let fx = Fx::new();
+    let temp = fx.work.join("Temp");
+    let old = fx.file(r"Temp\old.tmp", b"old");
+    let fresh = fx.file(r"Temp\fresh.tmp", b"fresh");
+    let open = fx.file(r"Temp\open.tmp", b"open");
+    let nested = fx.file(r"Temp\setup\inner.cab", b"cab");
+    let readonly = fx.file(r"Temp\ro.tmp", b"ro");
+    let outside = fx.file(r"elsewhere\keep.txt", b"keep");
+    hoardini_win::create_junction(&temp.join("link"), &fx.work.join("elsewhere")).unwrap();
+    let mut perms = std::fs::metadata(&readonly).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&readonly, perms).unwrap();
+    for p in [&old, &open, &nested, &readonly, &outside] {
+        aged(p, 3);
+    }
+    aged(&temp.join("setup"), 3);
+    use std::os::windows::fs::OpenOptionsExt;
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&open)
+        .unwrap();
+
+    let cutoff = hoardini_core::store::now_ms() - 86_400_000;
+    let mut c = Cleared::default();
+    clear_contents(&temp, cutoff, &mut c).unwrap();
+    assert_eq!(
+        (c.files, c.in_use, c.recent, c.failed),
+        (3, 1, 1, 0),
+        "{c:?}"
+    );
+    assert_eq!(c.bytes, 3 + 3 + 2);
+    assert!(temp.is_dir(), "the folder itself stays");
+    for gone in [&old, &nested, &readonly] {
+        assert!(!gone.exists(), "{}", gone.display());
+    }
+    assert!(
+        !temp.join("setup").exists(),
+        "an emptied old folder goes too"
+    );
+    assert!(fresh.exists() && open.exists());
+    assert!(outside.exists(), "a junction inside is never followed");
+    assert!(temp.join("link").exists(), "nor removed");
+    assert_eq!(
+        c.summary(),
+        "3 files deleted (8 B); left: 1 in use, 1 newer than a day"
+    );
+    drop(held);
+
+    let mut m = Cleared::default();
+    clear_contents(&old, cutoff, &mut m).unwrap_err();
+    let dump = fx.file("MEMORY.DMP", b"dump");
+    aged(&dump, 5);
+    clear_contents(&dump, cutoff, &mut m).unwrap();
+    assert_eq!(m.files, 1, "a file the catalog names is cleared on its own");
+    assert!(!dump.exists());
 }

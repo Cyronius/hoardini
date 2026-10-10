@@ -1,14 +1,22 @@
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use hoardini_core::actions::Executor;
+use hoardini_core::cloud::{Cloud, CloudState, SyncRoot};
+use hoardini_core::compress;
+use hoardini_core::copycheck::{self, Confidence, CopyResult, Subject};
 use hoardini_core::destinations::{self, NewDestination};
-use hoardini_core::index::{FakeFs, RefreshOptions, normalize_path, refresh};
+use hoardini_core::index::{FakeFs, RefreshOptions, WinLister, normalize_path, refresh};
+use hoardini_core::memory::knowledge::upsert_with;
+use hoardini_core::memory::location::{Answer, answer};
+use hoardini_core::memory::{Detail, Kind, Knowledge, Scope as MemScope};
 use hoardini_core::policy::{PolicyEnv, Verdict};
 use hoardini_core::proposals::{self, NewItem, NewProposal, Proposal, ProposalKind};
-use hoardini_core::review::{self, Review, Scope};
+use hoardini_core::review::{self, Builds, Opened, Review, Scope};
 use hoardini_core::store::Db;
+use hoardini_core::syscleanup::{self, SystemFacts};
 use hoardini_core::vault::DpapiVault;
 use serde_json::json;
 
@@ -368,10 +376,62 @@ fn a_new_review_replaces_untouched_cards_and_keeps_touched_ones() {
     assert_eq!(d.status(&b1.id), "pending");
     let t2 = d.card(&second, "temp").unwrap();
     assert_eq!(items(&t2), [(temp.clone(), true)]);
-    assert!(d.card(&second, "build").is_none());
-
+    let build = second
+        .cards
+        .iter()
+        .find(|c| c.card == "build")
+        .expect("the touched card is still listed");
+    assert_eq!(
+        (
+            build.proposal_id.as_str(),
+            build.title.as_str(),
+            build.carried
+        ),
+        (b1.id.as_str(), "Build output", true),
+        "carried over, not made again"
+    );
+    assert_eq!(second.cards.len(), 2);
+    let conn = d.db.conn().unwrap();
+    assert!(
+        review::proposal_ids(&conn, &second.id)
+            .unwrap()
+            .contains(&b1.id)
+    );
+    assert_eq!(
+        review::ready_bytes(&conn, &second.id).unwrap(),
+        (5 * GIB) as i64,
+        "the new temp card and the target still ticked on the carried one"
+    );
+    assert!(
+        review::untouched(&conn, &second.id).unwrap(),
+        "a carried card does not make the new review touched"
+    );
     let declined = proposals::decline(&d.db, &t2.id).unwrap();
     assert!(declined.touched);
+    let third = d.review(Scope::Volume(vid), NOW + 2 * HOUR);
+    assert!(
+        third
+            .cards
+            .iter()
+            .any(|c| c.proposal_id == b1.id && c.carried),
+        "still listed a review later"
+    );
+    assert!(
+        !review::get(&conn, &first.id)
+            .unwrap()
+            .unwrap()
+            .cards
+            .iter()
+            .any(|c| c.carried),
+        "nothing is carried back into an older review"
+    );
+
+    proposals::decline(&d.db, &b1.id).unwrap();
+    let fourth = d.review(Scope::Volume(vid), NOW + 3 * HOUR);
+    assert!(
+        !fourth.cards.iter().any(|c| c.proposal_id == b1.id),
+        "a declined card is no longer live"
+    );
 }
 
 // Traces: REVIEW-SUPERSEDE, REVIEW-TRIGGER
@@ -457,4 +517,541 @@ fn approving_a_review_card_touches_it_and_its_follow_up_stays_in_the_review() {
     let again = review::get(&conn, &r.id).unwrap().unwrap();
     assert_eq!(again.cards.len(), 1, "a follow-up is no card of its own");
     assert_eq!(review::proposal_ids(&conn, &r.id).unwrap().len(), 2);
+}
+
+// A sync root stand-in: in-sync state is set per path, nothing is ever freed.
+struct FakeCloud {
+    root: String,
+    synced: Mutex<Vec<String>>,
+}
+
+impl Cloud for FakeCloud {
+    fn roots(&self) -> Vec<SyncRoot> {
+        vec![SyncRoot {
+            path: self.root.clone(),
+            provider: "OneDrive".into(),
+        }]
+    }
+
+    fn state(&self, path: &Path) -> std::io::Result<Option<CloudState>> {
+        let p = normalize_path(&path.to_string_lossy()).to_lowercase();
+        Ok(self
+            .synced
+            .lock()
+            .unwrap()
+            .contains(&p)
+            .then_some(CloudState {
+                in_sync: true,
+                pinned: false,
+                local_bytes: 1,
+            }))
+    }
+
+    fn free(&self, _path: &Path) -> std::io::Result<u64> {
+        Err(std::io::Error::other("never freed in a review test"))
+    }
+}
+
+fn store_copy(d: &Disk, path: &str, check: &str, confidence: Confidence, note: &str) {
+    let conn = d.db.conn().unwrap();
+    let s = Subject::load(&conn, path).expect("a real file");
+    copycheck::store(
+        &conn,
+        &s,
+        &CopyResult::new(
+            check,
+            Some("somewhere".into()),
+            confidence,
+            json!({"note": note}),
+        ),
+    )
+    .unwrap();
+}
+
+fn job_row(d: &Disk, dir: &str, detail: Detail) {
+    upsert_with(
+        &d.db.conn().unwrap(),
+        Knowledge {
+            scope: MemScope::Path,
+            key: dir.to_string(),
+            kind: Kind::Verdict,
+            text: "You cleaned 1 item here.".into(),
+            source: "job:p1".into(),
+            detail,
+        },
+        NOW - 30 * DAY,
+        &d.profile,
+    )
+    .unwrap();
+}
+
+// Traces: REVIEW-BUILD, REVIEW-UNITS, MEM-LEARN-JOB, POLICY-ITEM-MEMORY
+#[test]
+fn verified_copies_disposable_answers_and_learned_entries_shape_the_cards() {
+    let d = Disk::new();
+    let tool = d.file(r"work\setup\tool-2.1.exe", 900 * MIB);
+    let twin = d.file(r"work\copy\image.iso", 2 * GIB);
+    let junk = d.folder(r"old\junk", "stuff.dat", 2 * GIB);
+    let kept = d.folder(r"code\a\node_modules", "x.js", 1200 * MIB);
+    let grown = d.folder(r"code\b\node_modules", "x.js", 1600 * MIB);
+    let vid = d.index();
+    store_copy(
+        &d,
+        &tool,
+        "winget",
+        Confidence::Identical,
+        "in winget as Contoso.Tool 2.1",
+    );
+    store_copy(
+        &d,
+        &twin,
+        "dup",
+        Confidence::Identical,
+        r"identical copy at D:\iso\image.iso",
+    );
+    answer(
+        &d.db.conn().unwrap(),
+        &d.env,
+        &junk,
+        Answer::Disposable,
+        NOW - DAY,
+    )
+    .unwrap();
+    // 2024-01-15 12:00 UTC.
+    let cleaned_ms = 1_705_320_000_000i64;
+    job_row(
+        &d,
+        &d.path("code"),
+        Detail {
+            category: "unknown".into(),
+            by: Some("job".into()),
+            kept: vec![
+                json!({"ms": NOW - 30 * DAY, "path": kept, "size": 1200 * MIB, "job": "p1"}),
+                json!({"ms": NOW - 30 * DAY, "path": grown, "size": 1000 * MIB, "job": "p1"}),
+            ],
+            cleaned: vec![json!({
+                "ms": cleaned_ms, "bytes": 28 * GIB, "path": grown, "rule": grown,
+                "job": "p0", "kind": "delete"
+            })],
+            ..Detail::default()
+        },
+    );
+
+    let r = d.review(Scope::Volume(vid), NOW);
+    let re = d.card(&r, "redownload").expect("a verified card");
+    assert_eq!(re.kind, ProposalKind::Delete);
+    assert_eq!(items(&re), [(tool.clone(), true)]);
+    assert_eq!(
+        re.items[0].reason.as_deref(),
+        Some("In winget as Contoso.Tool 2.1.")
+    );
+    assert_eq!(re.items[0].verdict, Some(Verdict::Redownload));
+    assert!(
+        !r.cards
+            .iter()
+            .filter_map(|c| d.card(&r, &c.card))
+            .any(|p| p.items.iter().any(|i| i.path == twin)),
+        "a duplicate elsewhere is no re-download"
+    );
+
+    let title = r.cards.iter().find(|c| c.card == "disposable").unwrap();
+    assert_eq!(title.title, "Folders you said can go");
+    let dis = d.card(&r, "disposable").unwrap();
+    assert_eq!(items(&dis), [(junk.clone(), true)]);
+    assert_eq!(
+        dis.items[0].reason.as_deref(),
+        Some("You said this folder can go.")
+    );
+
+    let b = d.card(&r, "build").expect("the build card");
+    assert_eq!(
+        items(&b),
+        [(grown.clone(), true)],
+        "a folder left unticked stays out until it grows by half"
+    );
+    assert_eq!(
+        b.items[0].reason.as_deref(),
+        Some(
+            "node_modules: Installed JavaScript dependencies. You cleaned this on 01-15 (28.0 GB)."
+        )
+    );
+    assert_eq!(b.items[0].memory_note, None, "the reason already says it");
+}
+
+// Traces: REVIEW-BUILD, ACT-ONLINE-ONLY
+#[test]
+fn cold_synced_files_go_online_only_and_never_to_a_delete_card() {
+    let mut d = Disk::new();
+    let root = d.path(r"~\OneDrive");
+    let cloud = Arc::new(FakeCloud {
+        root: root.clone(),
+        synced: Mutex::new(Vec::new()),
+    });
+    d.env = d.env.clone().with_cloud(cloud.clone());
+    let old = d.file(r"~\OneDrive\Videos\2019.mp4", 3 * GIB);
+    let new = d.file(r"~\OneDrive\Videos\2026.mp4", 3 * GIB);
+    d.fresh(&new, DAY);
+    let modules = d.folder(r"~\OneDrive\code\app\node_modules", "x.js", 1536 * MIB);
+    let unsynced = d.file(r"~\OneDrive\Videos\raw.mov", 2 * GIB);
+    for p in [&old, &new] {
+        cloud
+            .synced
+            .lock()
+            .unwrap()
+            .push(normalize_path(p).to_lowercase());
+    }
+    let vid = d.index();
+
+    let r = d.review(Scope::Volume(vid), NOW);
+    let o = d.card(&r, "online_only").expect("an online-only card");
+    assert_eq!(o.kind, ProposalKind::OnlineOnly);
+    assert_eq!(items(&o), [(old.clone(), true)]);
+    assert_eq!(o.items[0].verdict, Some(Verdict::Synced));
+    assert_eq!(
+        o.items[0].reason.as_deref(),
+        Some("Synced to OneDrive; nothing in it opened or changed for 400 days.")
+    );
+    for c in &r.cards {
+        let p = d.card(&r, &c.card).unwrap();
+        if p.kind != ProposalKind::OnlineOnly {
+            assert!(
+                !p.items.iter().any(|i| i.path.starts_with(&root)),
+                "{} holds a synced file: {:?}",
+                c.card,
+                p.items
+            );
+        }
+    }
+    assert!(
+        d.card(&r, "build").is_none(),
+        "{modules} is in a sync folder"
+    );
+    assert!(
+        !o.items.iter().any(|i| i.path == unsynced || i.path == new),
+        "not in sync, or opened yesterday"
+    );
+}
+
+fn compress_fixture(d: &Disk) -> String {
+    let corpus = d.path(r"data\corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    for i in 0..3 {
+        d.fs.file(&format!(r"{corpus}\part{i}.txt"), GIB);
+    }
+    corpus
+}
+
+// Traces: REVIEW-BUILD, ACT-COMPRESS-CANDIDATES
+#[test]
+fn a_folder_worth_compressing_is_a_compress_card_once_its_estimate_is_in() {
+    let d = Disk::new();
+    let corpus = compress_fixture(&d);
+    let vid = d.index();
+    let first = d.review(Scope::Volume(vid), NOW);
+    assert!(d.card(&first, "compress").is_none(), "no estimate yet");
+
+    let conn = d.db.conn().unwrap();
+    let c = compress::candidates(&conn, &d.env, &d.root, NOW).unwrap();
+    assert_eq!(c[0].path, corpus);
+    conn.execute(
+        "INSERT INTO compress_estimate(path, size, newest_ms, logical, saved_bytes, ratio, estimated_ms) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 0.6, 0)",
+        rusqlite::params![
+            corpus,
+            c[0].size as i64,
+            c[0].newest_ms,
+            (3 * GIB) as i64,
+            (1229 * MIB) as i64
+        ],
+    )
+    .unwrap();
+    let r = d.review(Scope::Volume(vid), NOW + HOUR);
+    let k = d.card(&r, "compress").expect("a compress card");
+    assert_eq!(k.kind, ProposalKind::Compress);
+    assert_eq!(k.format.as_deref(), Some("lzx"));
+    assert_eq!(items(&k), [(corpus.clone(), false)]);
+    assert_eq!(
+        k.items[0].reason.as_deref(),
+        Some("Windows compression would save about 1.2 GB (40% of it); the files stay usable.")
+    );
+}
+
+fn sparse(path: &str, len: u64) {
+    std::fs::File::create(path).unwrap();
+    hoardini_win::set_sparse_and_zero_range(Path::new(path), 0, 0).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_len(len)
+        .unwrap();
+}
+
+// Traces: REVIEW-TRIGGER, ACT-COMPRESS-CANDIDATES
+#[test]
+fn estimates_that_make_a_folder_worth_compressing_rebuild_an_untouched_review() {
+    let d = Disk::new();
+    let corpus = compress_fixture(&d);
+    for i in 0..3 {
+        sparse(&format!(r"{corpus}\part{i}.txt"), GIB);
+    }
+    let vid = d.index();
+    let r = d.review(Scope::Volume(vid), NOW);
+    assert!(d.card(&r, "compress").is_none());
+
+    assert!(
+        review::compress_estimates(&d.db, &d.env, &r, NOW).unwrap(),
+        "zeros compress to almost nothing"
+    );
+    let again = review::rebuild_if_current(&d.db, &d.env, &d.fs, &r.id, NOW + HOUR)
+        .unwrap()
+        .expect("untouched and still the latest");
+    let k = d
+        .card(&again, "compress")
+        .expect("the new review has the card");
+    assert_eq!(items(&k), [(corpus.clone(), false)]);
+    assert!(
+        !review::compress_estimates(&d.db, &d.env, &again, NOW).unwrap(),
+        "nothing new to estimate"
+    );
+    assert!(
+        review::rebuild_if_current(&d.db, &d.env, &d.fs, &r.id, NOW + 2 * HOUR)
+            .unwrap()
+            .is_none(),
+        "a newer review replaced it"
+    );
+    proposals::select(&d.db, &k.id, &[]).unwrap();
+    assert!(
+        review::rebuild_if_current(&d.db, &d.env, &d.fs, &again.id, NOW + 2 * HOUR)
+            .unwrap()
+            .is_none(),
+        "the user touched it"
+    );
+}
+
+// Traces: REVIEW-TRIGGER
+#[test]
+fn open_answers_at_once_while_one_build_runs_in_the_background() {
+    let d = Disk::new();
+    d.folder(r"~\AppData\Local\Temp\old", "x.bin", 2 * GIB);
+    let vid = d.index();
+    let clock = Arc::new(AtomicI64::new(NOW));
+    let announced = Arc::new(AtomicUsize::new(0));
+    let builds = {
+        let (c, a) = (clock.clone(), announced.clone());
+        Builds::new(
+            move || c.load(Ordering::SeqCst),
+            move || {
+                a.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+    };
+    let started = Arc::new(AtomicUsize::new(0));
+    let (go, gate) = std::sync::mpsc::channel::<()>();
+    let gate = Arc::new(Mutex::new(gate));
+    let job = || {
+        let (db, env, started, gate) = (d.db.clone(), d.env.clone(), started.clone(), gate.clone());
+        move |now: i64| -> anyhow::Result<()> {
+            started.fetch_add(1, Ordering::SeqCst);
+            gate.lock().unwrap().recv()?;
+            review::build(&db, &env, &WinLister, Scope::Volume(vid), now)?;
+            Ok(())
+        }
+    };
+    let conn = d.db.conn().unwrap();
+
+    assert!(matches!(
+        builds.open(&conn, vid, job()).unwrap(),
+        Opened::Building(None)
+    ));
+    assert!(builds.building());
+    assert!(matches!(
+        builds.open(&conn, vid, job()).unwrap(),
+        Opened::Building(None)
+    ));
+    let key = format!("volume:{vid}");
+    assert!(
+        !builds.start(&key, job()),
+        "one build at a time for a drive"
+    );
+    go.send(()).unwrap();
+    builds.wait();
+    assert_eq!(started.load(Ordering::SeqCst), 1);
+    assert_eq!(announced.load(Ordering::SeqCst), 1);
+    let Opened::Ready(first) = builds.open(&conn, vid, job()).unwrap() else {
+        panic!("built just now");
+    };
+    assert_eq!(first.created_ms, NOW);
+
+    clock.store(NOW + 5 * HOUR, Ordering::SeqCst);
+    let Opened::Ready(same) = builds.open(&conn, vid, job()).unwrap() else {
+        panic!("5 hours is fresh");
+    };
+    assert_eq!(same.id, first.id);
+
+    clock.store(NOW + 6 * HOUR + 1, Ordering::SeqCst);
+    let Opened::Building(Some(shown)) = builds.open(&conn, vid, job()).unwrap() else {
+        panic!("stale after 6 hours");
+    };
+    assert_eq!(shown.id, first.id, "the last review shows meanwhile");
+    go.send(()).unwrap();
+    builds.wait();
+    assert_eq!(announced.load(Ordering::SeqCst), 2);
+    let Opened::Ready(second) = builds.open(&conn, vid, job()).unwrap() else {
+        panic!("built");
+    };
+    assert_ne!(second.id, first.id);
+    assert_eq!(second.created_ms, NOW + 6 * HOUR + 1);
+
+    assert!(builds.start("x", |_| anyhow::bail!("the index is locked")));
+    builds.wait();
+    assert!(!builds.building(), "a failed build ends too");
+    assert_eq!(announced.load(Ordering::SeqCst), 3);
+    assert_eq!(builds.exclusive(|now| now), NOW + 6 * HOUR + 1);
+    assert_eq!(announced.load(Ordering::SeqCst), 4);
+
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let step = |name: &'static str| {
+        let (order, gate) = (order.clone(), gate.clone());
+        move |_now: i64| -> anyhow::Result<()> {
+            if name == "a" {
+                gate.lock().unwrap().recv()?;
+            }
+            order.lock().unwrap().push(name);
+            Ok(())
+        }
+    };
+    assert!(builds.start("volume:a", step("a")));
+    assert!(
+        builds.start("volume:b", step("b")),
+        "another drive waits its turn"
+    );
+    assert!(!builds.start("volume:b", step("b")), "once");
+    go.send(()).unwrap();
+    builds.wait();
+    assert_eq!(*order.lock().unwrap(), ["a", "b"]);
+    assert!(!builds.building());
+    assert_eq!(announced.load(Ordering::SeqCst), 6);
+}
+
+// Traces: REVIEW-AREAS, EVID-COPY-CHECK
+#[test]
+fn a_big_file_every_check_missed_is_an_only_copy_area_of_its_own() {
+    let d = Disk::new();
+    d.file(r"proj\.git\HEAD", 1024);
+    let own = d.file(r"proj\weights\mine.bin", 3 * GIB);
+    d.file(r"proj\data\x.dat", 2 * GIB);
+    let disk = d.file(r"vm\disk.vhdx", 4 * GIB);
+    let vid = d.index();
+    for p in [&own, &disk] {
+        store_copy(
+            &d,
+            p,
+            "dup",
+            Confidence::None,
+            "no other file of this size on the indexed drives",
+        );
+    }
+    let r = d.review(Scope::Volume(vid), NOW);
+    let a = r
+        .areas
+        .iter()
+        .find(|a| a.path == own)
+        .expect("a row of its own");
+    assert!(a.only_copy);
+    assert_eq!(a.size, 3 * GIB);
+    assert_eq!(
+        a.why_not,
+        "Only copy we know of: no other file of this size on the indexed drives."
+    );
+    let p = r
+        .areas
+        .iter()
+        .find(|a| a.path == d.path("proj"))
+        .expect("the project keeps the rest");
+    assert!(!p.only_copy);
+    assert_eq!(p.size, 2 * GIB);
+    let vm = r.areas.iter().find(|a| a.path == disk).unwrap();
+    assert!(!vm.only_copy, "a virtual disk says what it is instead");
+    assert!(vm.why_not.starts_with("A virtual machine's disk"));
+}
+
+// Traces: REVIEW-BUILD, ACT-WINDOWS-CLEANUP-DETECT
+#[test]
+fn the_windows_card_holds_the_leftovers_and_what_only_windows_tools_free() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("h.db")).unwrap();
+    let base = PolicyEnv::with_paths(
+        Path::new(r"C:\Users\tester"),
+        Path::new(r"C:\ProgramData\hoardini-test"),
+    );
+    let win = base.system_root.clone();
+    let facts = SystemFacts {
+        system_drive: r"C:\".into(),
+        windows_dir: win.clone(),
+        ram_bytes: Some(64 * GIB),
+        hibernate_enabled: Some(true),
+        ..SystemFacts::default()
+    };
+    let env = base.with_facts(facts.clone());
+    let fs = FakeFs::new(r"C:\");
+    fs.set_volume(1000 * GIB, 1000 * GIB - 33 * GIB);
+    fs.file(&format!(r"{win}\WinSxS\pack.dat"), 6 * GIB);
+    fs.file(&format!(r"{win}\Temp\old\x.tmp"), 2 * GIB);
+    fs.file(r"C:\hiberfil.sys", 25 * GIB);
+    let out = refresh(&db.conn().unwrap(), &fs, r"C:\", &RefreshOptions::default()).unwrap();
+    assert!(out.completed);
+    let vid: i64 = db
+        .conn()
+        .unwrap()
+        .query_row("SELECT id FROM volume", [], |r| r.get(0))
+        .unwrap();
+    let ops = |r: &Review| -> Vec<String> {
+        r.cards
+            .iter()
+            .filter(|c| c.card == "windows")
+            .flat_map(|c| proposals::get(&db, &c.proposal_id).unwrap().unwrap().items)
+            .map(|i| i.op.unwrap().op.name().to_string())
+            .collect()
+    };
+
+    let first = review::build(&db, &env, &fs, Scope::Volume(vid), NOW).unwrap();
+    assert_eq!(
+        ops(&first),
+        ["leftovers", "component_store", "hibernation"],
+        "the leftovers first, then the detected operations in their own order"
+    );
+    let card = first.cards.iter().find(|c| c.card == "windows").unwrap();
+    assert_eq!(card.title, "Cleanups only Windows can do");
+    let p = proposals::get(&db, &card.proposal_id).unwrap().unwrap();
+    assert_eq!(p.review_id.as_deref(), Some(first.id.as_str()));
+    assert_eq!(p.conversation_id.as_deref(), Some("review"));
+
+    syscleanup::propose(&db, &facts, &["hibernation"], Some("main".into()), None).unwrap();
+    let second = review::build(&db, &env, &fs, Scope::Volume(vid), NOW + HOUR).unwrap();
+    assert_eq!(
+        ops(&second),
+        ["leftovers", "component_store"],
+        "a pending chat card already holds hibernation"
+    );
+    let status: String = db
+        .conn()
+        .unwrap()
+        .query_row("SELECT status FROM proposal WHERE id = ?1", [&p.id], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(status, "superseded");
+
+    let w = second.cards.iter().find(|c| c.card == "windows").unwrap();
+    proposals::decline(&db, &w.proposal_id).unwrap();
+    let third = review::build(&db, &env, &fs, Scope::Volume(vid), NOW + 2 * HOUR).unwrap();
+    assert!(ops(&third).is_empty(), "declined in the last 30 days");
+    assert!(
+        !third
+            .areas
+            .iter()
+            .any(|a| a.path.to_lowercase().ends_with(r"\temp")),
+        "what a declined card held stays out of Large areas too"
+    );
 }

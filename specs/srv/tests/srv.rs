@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use hoardini_core::syscleanup::SystemFacts;
 use hoardini_core::vault::SecretStore;
 use hoardini_server::{ServerHandle, ServerOptions, journal_wait, route_list, start_with};
 use secrecy::{ExposeSecret, SecretString};
@@ -72,6 +73,7 @@ impl Fixture {
                 indexer_exe: Some(
                     indexer.unwrap_or_else(|| dir.path().join("no-such-indexer.exe")),
                 ),
+                system_facts: Some(SystemFacts::default()),
             },
             Some(Arc::new(MemStore::default())),
         )
@@ -848,6 +850,7 @@ async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
             dialogs: None,
             refresh_on_start: true,
             indexer_exe: Some(journal_fake_indexer(dir.path())),
+            system_facts: Some(SystemFacts::default()),
         },
         Some(Arc::new(MemStore::default())),
     )
@@ -1860,6 +1863,26 @@ async fn rarely_used_apps_list_as_json_and_uninstall_runs_only_the_registered_co
             "last_run_from": r"last run of d:\apps\big\big.exe",
         }])
     );
+    let (st, review) = f
+        .call("POST", "/api/review/run", Some(json!({"path": r"D:\Apps"})))
+        .await;
+    assert_eq!(st, 200, "{review}");
+    assert_eq!(
+        review["apps"], list,
+        "the review carries the list, so the UI needs no second call"
+    );
+    let (_, busy) = f
+        .call(
+            "POST",
+            "/api/review/run",
+            Some(json!({"path": r"D:\Apps\Busy"})),
+        )
+        .await;
+    assert_eq!(
+        busy["apps"],
+        json!([]),
+        "only apps inside the review's scope"
+    );
 
     let (st, r) = f
         .call(
@@ -1965,8 +1988,20 @@ async fn a_finished_job_lists_what_it_learned_and_the_chip_routes_undo_and_confi
         "{text}"
     );
     let memory_id = learned[0]["memory_id"].as_i64().unwrap();
+    assert_eq!(learned[0]["confirmed"], false);
     let (_, t) = f.call("GET", "/api/thread", None).await;
     assert_eq!(t["proposals"][&p.id]["learned"], done["learned"]);
+    let (st, _) = f
+        .call("POST", &format!("/api/memory/{memory_id}/confirm"), None)
+        .await;
+    assert_eq!(st, 200);
+    let (_, confirmed) = f
+        .call("GET", &format!("/api/proposals/{}", p.id), None)
+        .await;
+    assert_eq!(
+        confirmed["learned"][0]["confirmed"], true,
+        "a reload after Confirm offers no Confirm"
+    );
 
     let undo = format!("/api/proposals/{}/learned/{memory_id}", p.id);
     let (st, v) = f.call("DELETE", &undo, None).await;
@@ -2039,6 +2074,24 @@ fn seed_drive(db_path: &Path) {
     assert!(out.completed);
 }
 
+// The build open starts runs in the background; the status says when it is done.
+async fn settled_review(f: &Fixture) -> Value {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let (_, status) = f.call("GET", "/api/status", None).await;
+        if status["review_building"] == json!(false) {
+            let (st, v) = f.call("GET", "/api/review", None).await;
+            assert_eq!(st, 200, "{v}");
+            return v;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the review build did not end: {status}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 // Traces: REVIEW-TRIGGER
 #[tokio::test(flavor = "multi_thread")]
 async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart() {
@@ -2048,8 +2101,14 @@ async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart
     let dbp = f.dir.path().join("h.db");
     seed_drive(&dbp);
 
-    let (st, a) = f.call("POST", "/api/review/open", None).await;
-    assert_eq!(st, 200, "{a}");
+    let (st, first) = f.call("POST", "/api/review/open", None).await;
+    assert_eq!(st, 200, "{first}");
+    assert_eq!(first["review"], Value::Null, "nothing built yet: {first}");
+    assert_eq!(first["building"], true);
+    assert_eq!(first["header"]["root"], r"C:\");
+    assert_eq!(first["cards"], json!([]));
+    let a = settled_review(&f).await;
+    assert_eq!(a["building"], false);
     let id = a["review"]["id"].as_str().unwrap().to_string();
     assert_eq!(a["review"]["volume"], r"C:\");
     assert_eq!(a["review"]["scope_path"], Value::Null);
@@ -2088,10 +2147,33 @@ async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart
 
     let (_, again) = f.call("POST", "/api/review/open", None).await;
     assert_eq!(again["review"]["id"], id.as_str());
+    assert_eq!(again["building"], false, "fresh, so nothing is rebuilt");
     let (_, got) = f.call("GET", "/api/review", None).await;
     assert_eq!(got["review"]["id"], id.as_str());
     let (_, status) = f.call("GET", "/api/status", None).await;
     assert_eq!(status["review"]["id"], id.as_str());
+    assert_eq!(status["review_building"], false);
+    assert_eq!(a["apps"], json!([]));
+    assert_eq!(a["online"], json!({"asked": false, "waiting": 0}));
+    let (st, _) = f
+        .call(
+            "PUT",
+            "/api/settings",
+            Some(json!({"online_checks": {"asked": true}})),
+        )
+        .await;
+    assert_eq!(st, 200);
+    hoardini_core::store::set_meta(
+        &hoardini_core::store::Db::open(&dbp)
+            .unwrap()
+            .conn()
+            .unwrap(),
+        "copy_online_waiting",
+        "3",
+    )
+    .unwrap();
+    let (_, got) = f.call("GET", "/api/review", None).await;
+    assert_eq!(got["online"], json!({"asked": true, "waiting": 3}));
 
     let (st, folder) = f
         .call("POST", "/api/review/run", Some(json!({"path": r"C:\code"})))
@@ -2109,7 +2191,14 @@ async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart
     assert_eq!(st, 404);
 
     seed_drive(&dbp);
-    let (_, b) = f.call("POST", "/api/review/open", None).await;
+    let (_, stale) = f.call("POST", "/api/review/open", None).await;
+    assert_eq!(
+        stale["review"]["id"],
+        id.as_str(),
+        "the last review shows while the new one builds"
+    );
+    assert_eq!(stale["building"], true);
+    let b = settled_review(&f).await;
     let bid = b["review"]["id"].as_str().unwrap().to_string();
     assert_ne!(bid, id, "a refresh finished since");
     hoardini_core::store::Db::open(&dbp)
@@ -2121,7 +2210,8 @@ async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart
             [&bid],
         )
         .unwrap();
-    let (_, c) = f.call("POST", "/api/review/open", None).await;
+    f.call("POST", "/api/review/open", None).await;
+    let c = settled_review(&f).await;
     assert_ne!(c["review"]["id"], bid.as_str(), "older than 6 hours");
     let (_, d) = f.call("POST", "/api/review/run", None).await;
     assert_ne!(d["review"]["id"], c["review"]["id"]);
@@ -2181,6 +2271,7 @@ async fn a_what_is_this_answer_is_a_user_row_and_shows_on_the_review() {
     seed_drive(&f.dir.path().join("h.db"));
     let (st, _) = f.call("POST", "/api/review/open", None).await;
     assert_eq!(st, 200);
+    settled_review(&f).await;
 
     let (st, m) = f
         .call(

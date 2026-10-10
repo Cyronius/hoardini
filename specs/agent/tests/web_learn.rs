@@ -121,7 +121,7 @@ async fn a_search_about_a_type_ends_in_one_small_request_and_an_identity_row() {
     );
 
     let payload = json!({"v": 1, "kind": "learned", "items": [
-        {"memory_id": row.id, "text": ".q4nx: NPU model weights (FastFlowLM).", "url": FLM}
+        {"memory_id": row.id, "text": ".q4nx: NPU model weights (FastFlowLM).", "url": FLM, "confirmed": false}
     ]});
     let data = custom(&ev, "tool_data");
     assert_eq!(data.len(), 1);
@@ -142,6 +142,18 @@ async fn a_search_about_a_type_ends_in_one_small_request_and_an_identity_row() {
         .find(|m| m.tool_call_id.as_deref() == Some("s1"))
         .unwrap();
     assert_eq!(tool.data.as_ref(), Some(&payload));
+
+    memory::knowledge::confirm(&conn, row.id, 2, FAKE_PROFILE).unwrap();
+    let again = thread::agui_messages(&h.db, "t-wl", Some(FAKE_PROFILE)).unwrap();
+    let tool = again
+        .iter()
+        .find(|m| m.tool_call_id.as_deref() == Some("s1"))
+        .unwrap();
+    assert_eq!(
+        tool.data.as_ref().unwrap()["items"][0]["confirmed"],
+        json!(true),
+        "a reload after Confirm offers no Confirm"
+    );
 }
 
 // Traces: AGENT-WEB-SEARCH, AGENT-WEB-LEARN

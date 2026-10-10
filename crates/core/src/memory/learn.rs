@@ -22,6 +22,9 @@ pub const MAX_ENTRIES: usize = 100;
 pub struct Learned {
     pub memory_id: i64,
     pub text: String,
+    // The user confirmed the row (its source is `user`), so the chip offers no Confirm.
+    #[serde(default)]
+    pub confirmed: bool,
 }
 
 fn same_or_under(a: &str, p: &str) -> bool {
@@ -408,6 +411,7 @@ pub fn learned_for(conn: &Connection, proposal_id: &str) -> anyhow::Result<Vec<L
             (!c.is_empty() || !k.is_empty()).then(|| Learned {
                 memory_id: m.id,
                 text: learned_text(&m.key, &c, &k),
+                confirmed: m.source == "user",
             })
         })
         .collect())

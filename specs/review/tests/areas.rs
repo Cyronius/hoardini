@@ -2,9 +2,11 @@ use std::path::Path;
 
 use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
 use hoardini_core::policy::{Action, PolicyEnv, Verdict};
+use hoardini_core::proposals::{self, ProposalKind};
 use hoardini_core::review::areas::ADMIN_HINT;
 use hoardini_core::review::{self, Scope};
 use hoardini_core::store::Db;
+use hoardini_core::syscleanup::{OpPart, SystemOp};
 
 const MIB: u64 = 1 << 20;
 const GIB: u64 = 1 << 30;
@@ -44,6 +46,15 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
     fs.file(r"C:\vm\disk.vhdx", 30 * GIB);
     fs.file(r"C:\small\s.dat", 512 * MIB);
     fs.file(r"C:\code\small-proj\.git\objects\pack\p.pack", 2560 * MIB);
+    let pd = env.program_data.clone();
+    fs.file(
+        &format!(r"{pd}\Microsoft\Windows\WER\ReportArchive\r1\big.dmp"),
+        1536 * MIB,
+    );
+    fs.file(
+        &format!(r"{pd}\Microsoft\VisualStudio\Packages\pkg\a.vsix"),
+        2 * GIB,
+    );
     let out = refresh(&db.conn().unwrap(), &fs, r"C:\", &RefreshOptions::default()).unwrap();
     assert!(out.completed);
     let vid: i64 = db
@@ -53,7 +64,35 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
         .unwrap();
 
     let r = review::build(&db, &env, &fs, Scope::Volume(vid), NOW).unwrap();
-    assert!(r.cards.is_empty(), "{:?}", r.cards);
+    let cards: Vec<&str> = r.cards.iter().map(|c| c.card.as_str()).collect();
+    assert_eq!(cards, ["windows"], "only what needs an administrator");
+    let w = proposals::get(&db, &r.cards[0].proposal_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(w.kind, ProposalKind::SystemCleanup);
+    assert_eq!(w.items.len(), 1);
+    let op = w.items[0].op.as_ref().unwrap();
+    assert_eq!(op.op, SystemOp::Leftovers);
+    assert!(op.elevated);
+    let w_ = win.to_lowercase();
+    let parts: Vec<(String, u64)> = op
+        .parts
+        .iter()
+        .map(|OpPart { path, size }| (path.to_lowercase(), size / MIB))
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            (format!(r"{w_}\softwaredistribution\download\abc"), 3072),
+            (format!(r"{w_}\temp\setup"), 2048),
+            (
+                format!(r"{}\microsoft\windows\wer\reportarchive", pd.to_lowercase()),
+                1536
+            ),
+        ]
+    );
+    assert_eq!(w.items[0].alloc, (6656 * MIB) as i64);
+    assert!(w.items[0].selected, "safe, so it starts ticked");
     let got: Vec<(String, u64, Option<&str>)> = r
         .areas
         .iter()
@@ -88,15 +127,15 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
                 Some("Windows can trim this itself.")
             ),
             (r"c:\program files".to_string(), 5, None),
+            (r"c:\code\small-proj".to_string(), 2, None),
             (
-                format!(r"{w}\softwaredistribution\download"),
-                3,
+                format!(r"{}\microsoft\visualstudio\packages", pd.to_lowercase()),
+                2,
                 Some(ADMIN_HINT)
             ),
-            (r"c:\code\small-proj".to_string(), 2, None),
-            (format!(r"{w}\temp"), 2, Some(ADMIN_HINT)),
         ]
     );
+    assert_eq!(ADMIN_HINT, "Needs admin.");
 
     let agent = &r.areas[0];
     assert!(agent.unknown);
@@ -137,8 +176,8 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
             .contains("Hoardini never deletes anything here")
     );
     assert!(r.areas[7].why_not.starts_with("WinSxS component store: "));
-    assert!(r.areas[10].unknown, "a pack file is shown as its project");
-    assert!(r.areas[11].why_not.starts_with("System temp folder: "));
+    assert!(r.areas[9].unknown, "a pack file is shown as its project");
+    assert!(r.areas.iter().all(|a| !a.only_copy));
 
     let stored = review::get(&db.conn().unwrap(), &r.id).unwrap().unwrap();
     assert_eq!(stored.areas, r.areas);

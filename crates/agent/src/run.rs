@@ -777,7 +777,9 @@ impl Run {
             remember_identity(&db.conn()?, &about, id, &link, now, &profile)
         })
         .await??;
-        Ok(m.map(|m| json!({"memory_id": m.id, "text": m.text, "url": url})))
+        Ok(m.map(|m| {
+            json!({"memory_id": m.id, "text": m.text, "url": url, "confirmed": m.source == "user"})
+        }))
     }
 
     async fn emit_call(

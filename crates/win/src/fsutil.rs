@@ -3,18 +3,22 @@ use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
-use windows::Win32::Foundation::{FILETIME, GENERIC_WRITE};
+use windows::Win32::Foundation::{ERROR_SHARING_VIOLATION, FILETIME, GENERIC_WRITE};
 use windows::Win32::Storage::FileSystem::{
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES,
-    FILE_WRITE_ATTRIBUTES, FileIdInfo, FileTimeToLocalFileTime, GetFileInformationByHandleEx,
-    SetFileTime,
+    CreateFileW, DELETE, FILE_DISPOSITION_FLAG_DELETE,
+    FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+    FILE_DISPOSITION_INFO_EX, FILE_DISPOSITION_INFO_EX_FLAGS, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES, FILE_SHARE_NONE,
+    FILE_WRITE_ATTRIBUTES, FileDispositionInfoEx, FileIdInfo, FileTimeToLocalFileTime,
+    GetFileInformationByHandleEx, OPEN_EXISTING, SetFileInformationByHandle, SetFileTime,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
     FILE_ZERO_DATA_INFORMATION, FSCTL_SET_REPARSE_POINT, FSCTL_SET_SPARSE, FSCTL_SET_ZERO_DATA,
 };
+use windows::core::PCWSTR;
 
-use crate::util::{open, raw, werr};
+use crate::util::{open, owned, raw, werr, wide_path};
 use crate::{IO_REPARSE_TAG_MOUNT_POINT, unix_ms_to_filetime};
 
 fn filetime(ms: i64) -> FILETIME {
@@ -172,4 +176,43 @@ pub fn set_sparse_and_zero_range(path: &Path, offset: u64, len: u64) -> io::Resu
         )
     }
     .map_err(werr)
+}
+
+// Opened with no sharing, so a file anything else holds open is reported and left alone.
+pub fn delete_unless_open(path: &Path) -> io::Result<bool> {
+    let w = wide_path(path)?;
+    // SAFETY: `w` is NUL-terminated and outlives the call.
+    let h = match unsafe {
+        CreateFileW(
+            PCWSTR(w.as_ptr()),
+            DELETE.0,
+            FILE_SHARE_NONE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    } {
+        Ok(h) => h,
+        Err(e) if e.code() == ERROR_SHARING_VIOLATION.to_hresult() => return Ok(false),
+        Err(e) => return Err(werr(e)),
+    };
+    let h = owned(h);
+    let info = FILE_DISPOSITION_INFO_EX {
+        Flags: FILE_DISPOSITION_INFO_EX_FLAGS(
+            FILE_DISPOSITION_FLAG_DELETE.0
+                | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS.0
+                | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE.0,
+        ),
+    };
+    unsafe {
+        SetFileInformationByHandle(
+            raw(&h),
+            FileDispositionInfoEx,
+            (&info as *const FILE_DISPOSITION_INFO_EX).cast(),
+            size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
+        )
+    }
+    .map_err(werr)?;
+    Ok(true)
 }

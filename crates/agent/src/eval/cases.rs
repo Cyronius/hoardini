@@ -195,7 +195,8 @@ pub fn cases(sz: &Sizes) -> Vec<CaseSpec> {
         .never("proposed the gemma model", &[], r"gemma")
         .done(),
         C::new("remember-asked", r"Remember that D:\scratch is disposable.")
-            .needs(&["remember"], &[r"scratch", r#""user_asked"\s*:\s*true"#])
+            .needs(&["remember"], &[r"scratch"])
+            .needs_arg(&["remember"], "user_asked", &[r"^true$"])
             .may_remember()
             .fact("acknowledges", r"noted|remember|saved|recorded|stored|got it|all set|okay|\bok\b|\bdone\b")
             .done(),

@@ -258,7 +258,8 @@ Reading them back:
   `path` or whose rule matches `path` or a folder above it. `Cleaned::reason()` reads
   `you cleaned this on 10-09 (28.0 GB)` (`archived`, `compressed` by kind; the date in UTC).
 
-`memory::learn::learned_for(conn, proposal_id)` lists, per row holding entries of that job, `{memory_id, text}`:
+`memory::learn::learned_for(conn, proposal_id)` lists, per row holding entries of that job, `{memory_id, text,
+confirmed}` (`confirmed`: the row's source is `user`, so the chip offers no Confirm):
 `target folders in C:\code — cleaned 28.0 GB on 10-09`, then `; 1 item you left unticked is kept` when there are
 kept entries (`2 items you left unticked in C:\code are kept` when there are only those). The text names the shared
 rule (`.log files`, `target folders`), else the one item's name, else `N items`. The proposal JSON carries it as

@@ -6,6 +6,7 @@ use crate::catalog::{Catalog, Env};
 use crate::cloud::{Cloud, CloudState, SyncRoot};
 use crate::index::normalize_path;
 use crate::paths;
+use crate::syscleanup::SystemFacts;
 
 // Every location the gate treats as special, so tests can point the profile and data dir at temp folders.
 #[derive(Clone)]
@@ -17,6 +18,8 @@ pub struct PolicyEnv {
     pub vars: HashMap<String, String>,
     catalog: Option<Arc<Catalog>>,
     cloud: Arc<dyn Cloud>,
+    // None reads this PC's facts when asked; tests fix them so the review never sees the real machine.
+    facts: Option<Arc<SystemFacts>>,
 }
 
 // Tests start with no sync roots, so the real OneDrive or Dropbox never leaks in.
@@ -76,6 +79,7 @@ impl PolicyEnv {
             vars,
             catalog: None,
             cloud: crate::cloud::system(),
+            facts: None,
         }
     }
 
@@ -103,7 +107,20 @@ impl PolicyEnv {
         }
         env.catalog = Catalog::with_env(&cat_env).ok().map(Arc::new);
         env.cloud = Arc::new(NoCloud);
+        env.facts = Some(Arc::new(SystemFacts::default()));
         env
+    }
+
+    pub fn with_facts(mut self, facts: SystemFacts) -> PolicyEnv {
+        self.facts = Some(Arc::new(facts));
+        self
+    }
+
+    pub fn facts(&self) -> SystemFacts {
+        match &self.facts {
+            Some(f) => (**f).clone(),
+            None => SystemFacts::gather(),
+        }
     }
 
     pub fn with_cloud(mut self, cloud: Arc<dyn Cloud>) -> PolicyEnv {

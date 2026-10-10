@@ -27,6 +27,7 @@ pub enum Why {
     ModelStore,
     Leaf,
     Kept,
+    Disposable,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -55,6 +56,7 @@ struct Walker<'a> {
     lister: &'a dyn DirLister,
     now: i64,
     kept_locations: Vec<String>,
+    disposable: Vec<String>,
     weight_sub: HashMap<i64, u64>,
     weight_direct: HashMap<i64, u64>,
     seen: HashSet<String>,
@@ -77,6 +79,7 @@ pub fn resolve(
         lister,
         now,
         kept_locations: Vec::new(),
+        disposable: Vec::new(),
         weight_sub: HashMap::new(),
         weight_direct: HashMap::new(),
         seen: HashSet::new(),
@@ -84,12 +87,11 @@ pub fn resolve(
     };
     // Keep rows from the deny list or the catalog are re-derived by the walk itself, so only the others stop it.
     for m in location::locations(conn)? {
-        if m.detail
-            .as_ref()
-            .is_some_and(|d| d.verdict == Some(Verdict::Keep))
-            && !matches!(m.source.as_str(), "deny" | "catalog")
-        {
+        let verdict = m.detail.as_ref().and_then(|d| d.verdict);
+        if verdict == Some(Verdict::Keep) && !matches!(m.source.as_str(), "deny" | "catalog") {
             w.kept_locations.push(location::expanded(env, &m.key));
+        } else if verdict == Some(Verdict::Safe) && m.source == "user" {
+            w.disposable.push(location::expanded(env, &m.key));
         }
     }
     w.index_weights(node.id)?;
@@ -185,15 +187,14 @@ impl Walker<'_> {
             && direct * 100 >= sub * STORE_WEIGHT_PCT
     }
 
-    fn hard_kept(&self, path: &str) -> anyhow::Result<bool> {
-        if self
-            .kept_locations
+    fn protected(&self, path: &str) -> anyhow::Result<bool> {
+        Ok(memory::protect_covering_quiet(self.conn, path, &self.env.profile)?.is_some())
+    }
+
+    fn kept(&self, path: &str) -> bool {
+        self.kept_locations
             .iter()
             .any(|k| k.eq_ignore_ascii_case(path) || is_ancestor_path(k, path))
-        {
-            return Ok(true);
-        }
-        Ok(memory::protect_covering_quiet(self.conn, path, &self.env.profile)?.is_some())
     }
 
     fn push(
@@ -223,7 +224,20 @@ impl Walker<'_> {
         }
         let catalog = self.env.catalog();
         let exact = catalog.lookup_exact(&node.path);
-        if self.hard_kept(&node.path)? {
+        if self.protected(&node.path)? {
+            self.push(node, UnitKind::Whole, Why::Kept, exact, container);
+            return Ok(());
+        }
+        if node.kind == NodeKind::Dir
+            && self
+                .disposable
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(&node.path))
+        {
+            self.push(node, UnitKind::Whole, Why::Disposable, exact, container);
+            return Ok(());
+        }
+        if self.kept(&node.path) {
             self.push(node, UnitKind::Whole, Why::Kept, exact, container);
             return Ok(());
         }

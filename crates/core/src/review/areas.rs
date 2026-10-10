@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::cards::{Cx, knowledge, last_change};
 use super::units::{Unit, Why};
 use crate::catalog::{Category, Entry, UnitKind};
+use crate::copycheck;
 use crate::index::{self, is_ancestor_path};
 use crate::memory::Memory;
 use crate::memory::knowledge::is_classifier as location_classifier;
@@ -16,7 +17,7 @@ const DAY_MS: i64 = 86_400_000;
 pub const AREA_MIN_BYTES: u64 = 1 << 30;
 pub const MAX_AREAS: usize = 30;
 pub const RECENT_DAYS: i64 = 30;
-pub const ADMIN_HINT: &str = "Needs admin; Hoardini will offer this with Windows cleanups.";
+pub const ADMIN_HINT: &str = "Needs admin.";
 const PROJECT_MARKERS: &[&str] = &[
     ".git",
     "Cargo.toml",
@@ -39,6 +40,8 @@ pub struct Area {
     pub hint: Option<String>,
     pub unknown: bool,
     pub actions: Vec<Action>,
+    #[serde(default)]
+    pub only_copy: bool,
 }
 
 pub struct Left<'a> {
@@ -56,6 +59,7 @@ struct Row<'a> {
     loc: Option<&'a Memory>,
     admin: bool,
     not_build: bool,
+    only_copy: bool,
 }
 
 fn same_or_under(a: &str, p: &str) -> bool {
@@ -99,13 +103,24 @@ pub fn collect<'a>(
                         entry: Some(e),
                         admin: false,
                         not_build: false,
+                        only_copy: false,
                     });
                 }
             }
         }
         let system = matches!(area_of(cx.env, &u.path), Some(PolicyArea::System { .. }));
-        let own_row =
-            l.admin || l.not_build || (u.why == Why::Kept && (l.entry.is_some() || system));
+        // Every check that applies came up empty, so it is listed as it is, not folded into its project.
+        // A virtual disk or an installed game is always its own only copy; the catalog says more about it.
+        let only_copy = !l.admin
+            && u.why != Why::Kept
+            && own >= AREA_MIN_BYTES
+            && l.entry
+                .is_none_or(|e| !matches!(e.category, Category::VmDisk | Category::GameLibrary))
+            && copycheck::only_copy(cx.conn, &u.path);
+        let own_row = l.admin
+            || l.not_build
+            || only_copy
+            || (u.why == Why::Kept && (l.entry.is_some() || system));
         let rows_above: Vec<&(String, Memory)> = if own_row {
             Vec::new()
         } else {
@@ -154,6 +169,7 @@ pub fn collect<'a>(
                 loc,
                 admin: l.admin,
                 not_build: l.not_build,
+                only_copy,
             }),
         }
     }
@@ -251,7 +267,14 @@ fn describe(cx: &Cx, r: &Row, volume: &str) -> anyhow::Result<Area> {
     } else {
         text
     };
-    if unknown && last_change(cx.conn, &r.path)?.is_some_and(|t| cx.now - t < RECENT_DAYS * DAY_MS)
+    if r.only_copy {
+        let notes: Vec<String> = copycheck::results_for(cx.conn, &r.path)
+            .iter()
+            .map(|c| c.note())
+            .collect();
+        why_not = format!("Only copy we know of: {}.", notes.join("; "));
+    } else if unknown
+        && last_change(cx.conn, &r.path)?.is_some_and(|t| cx.now - t < RECENT_DAYS * DAY_MS)
     {
         why_not.push_str(" Something in it changed in the last 30 days.");
     }
@@ -265,22 +288,13 @@ fn describe(cx: &Cx, r: &Row, volume: &str) -> anyhow::Result<Area> {
         why_not,
         unknown,
         actions,
+        only_copy: r.only_copy,
     })
 }
 
 fn hint(cx: &Cx, r: &Row, category: &str, volume: &str) -> Option<String> {
     if r.admin {
-        let windows = r.entry.is_some_and(|e| {
-            matches!(
-                e.category,
-                Category::Temp | Category::CrashDumps | Category::Logs | Category::WindowsLeftover
-            )
-        });
-        return Some(if windows {
-            ADMIN_HINT.into()
-        } else {
-            "Needs admin.".into()
-        });
+        return Some(ADMIN_HINT.into());
     }
     match r.entry.map(|e| e.id.as_str()) {
         Some("pagefile") => return Some("Windows manages its size.".into()),

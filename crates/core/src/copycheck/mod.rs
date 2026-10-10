@@ -784,12 +784,34 @@ pub fn candidates(
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct RunReport {
+    pub pruned: usize,
     pub candidates: usize,
     pub checked: usize,
     pub hashed: usize,
     pub hashed_bytes: u64,
     pub online_waiting: usize,
     pub stopped: bool,
+}
+
+// Answers for paths that are gone would otherwise stay in the table for good.
+pub fn prune(conn: &Connection, volume_root: &str) -> anyhow::Result<usize> {
+    let root = index::normalize_path(volume_root);
+    let mut st = conn.prepare(
+        "SELECT DISTINCT c.path FROM copy_check c JOIN volume v ON v.id = c.volume_id          WHERE v.root = ?1 COLLATE NOCASE",
+    )?;
+    let paths = st
+        .query_map([&root], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut n = 0;
+    for p in paths {
+        if std::fs::symlink_metadata(&p).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+            n += conn.execute(
+                "DELETE FROM copy_check WHERE path = ?1 COLLATE NOCASE                  AND volume_id IN (SELECT id FROM volume WHERE root = ?2 COLLATE NOCASE)",
+                params![p, root],
+            )?;
+        }
+    }
+    Ok(n)
 }
 
 // Checks before hashes, so a pass stopped early has still answered everything that needs no hash.
@@ -802,8 +824,10 @@ pub fn run_volume(
 ) -> anyhow::Result<RunReport> {
     let conn = db.conn()?;
     let cx = Cx { conn: &conn, env };
+    let pruned = prune(&conn, volume_root)?;
     let list = candidates(&cx, reg, volume_root)?;
     let mut report = RunReport {
+        pruned,
         candidates: list.len(),
         ..RunReport::default()
     };

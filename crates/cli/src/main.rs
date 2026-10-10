@@ -275,6 +275,7 @@ fn serve(db: Option<PathBuf>, a: ServeArgs) -> Result<()> {
             dialogs: None,
             refresh_on_start: !a.no_refresh,
             indexer_exe: None,
+            system_facts: None,
         })
         .await?;
         println!("{}", handle.url());

@@ -413,6 +413,33 @@ fn fixture_disk_has_the_shape_the_cases_ask_about() {
     assert_eq!(dest, "NAS");
 }
 
+// Traces: AGENT-EVAL-SCORING
+#[test]
+fn remember_asked_needs_user_asked_as_its_own_argument() {
+    let c = case("remember-asked");
+    let remember = |args: &str| vec![turn("Noted.", vec![call("remember", args, Some("ok"))])];
+    let asked = remember(
+        r#"{"scope":"D:\\scratch","kind":"preference","text":"D:\\scratch is disposable","user_asked":true}"#,
+    );
+    let s = score(&c, &asked, None, PROFILE);
+    assert_eq!(
+        (s.tool_score, s.answer_score),
+        (1.0, Some(1.0)),
+        "{:?}",
+        s.missing
+    );
+    let unasked = remember(
+        r#"{"scope":"D:\\scratch","kind":"preference","text":"D:\\scratch is disposable"}"#,
+    );
+    let s = score(&c, &unasked, None, PROFILE);
+    assert_eq!(s.tool_score, 0.5);
+    assert_eq!(s.missing, vec!["remember ~ user_asked: ^true$"]);
+    let in_text = remember(
+        r#"{"scope":"D:\\scratch","kind":"preference","text":"user_asked: true","user_asked":false}"#,
+    );
+    assert_eq!(score(&c, &in_text, None, PROFILE).tool_score, 0.5);
+}
+
 // Traces: AGENT-EVAL-SCORING, AGENT-WEB-LEARN
 #[test]
 fn q4nx_needs_about_on_the_search_and_a_type_row_left_behind() {
