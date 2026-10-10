@@ -1,6 +1,6 @@
 import type { StandardTool } from "@itkennel/lm-ag-ui";
 
-export const PROPOSE_TOOLS = ["propose_delete", "propose_archive", "propose_compress", "propose_dedupe"] as const;
+export const PROPOSE_TOOLS = ["propose_delete", "propose_archive", "propose_compress", "propose_dedupe", "propose_system_cleanup"] as const;
 export const isProposeTool = (name: string | undefined): boolean => !!name && (PROPOSE_TOOLS as readonly string[]).includes(name);
 
 const strArray = { type: "array", items: { type: "string" } };
@@ -22,11 +22,11 @@ export const proposeToolDefs: Record<(typeof PROPOSE_TOOLS)[number], StandardToo
   },
   propose_compress: {
     name: "propose_compress",
-    description: "Propose compressing a path (zip, 7z, tar.zst, or in-place WOF / LZNT1).",
+    description: "Propose compressing paths (zip, 7z, tar.zst, or in-place WOF / LZNT1).",
     parameters: {
       type: "object",
-      properties: { path: { type: "string" }, format: { type: "string" } },
-      required: ["path", "format"],
+      properties: { paths: strArray, format: { type: "string" } },
+      required: ["paths", "format"],
     },
   },
   propose_dedupe: {
@@ -37,5 +37,10 @@ export const proposeToolDefs: Record<(typeof PROPOSE_TOOLS)[number], StandardToo
       properties: { group: { type: "string" }, keep: { type: "string" }, mode: { type: "string" } },
       required: ["group", "keep", "mode"],
     },
+  },
+  propose_system_cleanup: {
+    name: "propose_system_cleanup",
+    description: "Propose cleanups only Windows can do; one administrator prompt when approved.",
+    parameters: { type: "object", properties: { operations: strArray }, required: [] },
   },
 };

@@ -9,6 +9,7 @@ mod net;
 mod process;
 mod registry;
 mod rm;
+mod shell;
 mod sysdir;
 mod usn;
 mod util;
@@ -26,8 +27,14 @@ pub use process::{
     JobGuard, KillOnCloseJob, ProcessMemory, cap_process_memory, current_working_set,
     enter_background_mode, kill_with_job, leave_background_mode, physical_cores, process_memory,
 };
-pub use registry::{installed_programs, last_access_setting, user_assist};
+pub use registry::{
+    hibernate_enabled, installed_programs, last_access_setting, steam_path, user_assist,
+    wsl_distros,
+};
 pub use rm::processes_using;
+pub use shell::{
+    RecycleBin, empty_recycle_bin, physical_memory, recycle_bin, run_elevated, shell_open,
+};
 pub use sysdir::{system_directory, system_tool};
 pub use usn::{path_by_file_id, usn_query, usn_read};
 pub use volume::{fixed_volumes, is_subst, volume_info, volume_root_of};
@@ -128,6 +135,17 @@ pub struct InstalledProgram {
     pub version: Option<String>,
     pub install_location: Option<String>,
     pub uninstall_key: String,
+    pub uninstall_string: Option<String>,
+    // Not listed in Installed apps: a SystemComponent, or an update with a ParentKeyName.
+    pub hidden: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WslDistro {
+    pub name: String,
+    pub base_path: String,
+    pub vhd_file: Option<String>,
+    pub version: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

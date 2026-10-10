@@ -1,9 +1,12 @@
+mod apps;
+mod candidates;
 mod fake_rc;
 mod follow_up;
 mod rclone;
 mod safety;
 #[path = "../../policy/tests/support.rs"]
 mod support;
+mod system;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

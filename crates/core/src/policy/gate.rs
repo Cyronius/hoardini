@@ -56,6 +56,8 @@ pub enum Action {
     Archive,
     Compress,
     Dedupe,
+    #[serde(rename = "system_cleanup")]
+    SystemCleanup,
 }
 
 impl Action {
@@ -72,6 +74,7 @@ impl Action {
             Action::Archive => "archive",
             Action::Compress => "compress",
             Action::Dedupe => "dedupe",
+            Action::SystemCleanup => "system_cleanup",
         }
     }
 

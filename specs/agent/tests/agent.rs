@@ -126,10 +126,17 @@ fn every_tool_leaves_the_filesystem_unchanged_and_propose_tools_only_create_pend
             "propose_archive",
             json!({"paths": [file], "destination": "nas"}),
         ),
-        ("propose_compress", json!({"path": blob, "format": "zip"})),
+        (
+            "propose_compress",
+            json!({"paths": [blob], "format": "zip"}),
+        ),
         (
             "propose_dedupe",
             json!({"group": 1, "keep": blob, "mode": "hardlink"}),
+        ),
+        (
+            "propose_system_cleanup",
+            json!({"operations": ["recycle_bin", "component_store"]}),
         ),
     ];
     let reg = Registry::full();
@@ -175,6 +182,41 @@ fn every_tool_leaves_the_filesystem_unchanged_and_propose_tools_only_create_pend
         h.index.refreshes.lock().unwrap().len(),
         1,
         "refresh only asks the supervisor"
+    );
+}
+
+// Traces: AGENT-SYSTEM-CLEANUP
+#[test]
+fn the_system_cleanup_tool_takes_only_known_operations_and_stays_out_of_the_small_set() {
+    let h = Harness::new(None);
+    let reg = Registry::full();
+    let tool = reg.get("propose_system_cleanup").expect("registered");
+    assert_eq!(tool.kind(), Kind::Propose);
+    assert!(!tool.small());
+    assert!(Registry::small().get("propose_system_cleanup").is_none());
+    let out = reg.call(
+        &ctx(&h, &real_profile(), "call_sys"),
+        "propose_system_cleanup",
+        &json!({"operations": ["hibernation", "defragment"]}).to_string(),
+    );
+    match out {
+        Err(ToolError::BadArgs(m)) => {
+            assert!(m.contains("\"defragment\""), "{m}");
+            assert!(
+                m.contains(
+                    "component_store, restore_points, hibernation, compact_vhdx, recycle_bin"
+                ),
+                "{m}"
+            );
+        }
+        other => panic!("expected invalid arguments, got {other:?}"),
+    }
+    assert_eq!(
+        h.db.conn()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM proposal", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
     );
 }
 

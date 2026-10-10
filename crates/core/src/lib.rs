@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod apps;
 pub mod catalog;
 pub mod compress;
 pub mod destinations;
@@ -13,4 +14,5 @@ pub mod proposals;
 pub mod review;
 pub mod runtime;
 pub mod store;
+pub mod syscleanup;
 pub mod vault;

@@ -6,6 +6,7 @@ use crate::index::is_ancestor_path;
 use crate::memory;
 use crate::policy::{self, Action, FsState, ItemKind, PolicyEnv, Verdict};
 use crate::store::{Db, now_ms};
+use crate::syscleanup::{CleanupCandidate, OpView, SystemOp};
 
 pub const SMALL_BYTES: i64 = 50 * 1024 * 1024;
 
@@ -19,12 +20,13 @@ pub fn default_tick(blocked: bool, verdict: Option<Verdict>, small: bool) -> boo
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ProposalKind {
     Delete,
     Archive,
     Compress,
     Dedupe,
+    SystemCleanup,
 }
 
 impl ProposalKind {
@@ -34,6 +36,7 @@ impl ProposalKind {
             ProposalKind::Archive => "archive",
             ProposalKind::Compress => "compress",
             ProposalKind::Dedupe => "dedupe",
+            ProposalKind::SystemCleanup => "system_cleanup",
         }
     }
 
@@ -43,6 +46,7 @@ impl ProposalKind {
             "archive" => Some(ProposalKind::Archive),
             "compress" => Some(ProposalKind::Compress),
             "dedupe" => Some(ProposalKind::Dedupe),
+            "system_cleanup" => Some(ProposalKind::SystemCleanup),
             _ => None,
         }
     }
@@ -53,6 +57,7 @@ impl ProposalKind {
             ProposalKind::Archive => Action::Archive,
             ProposalKind::Compress => Action::Compress,
             ProposalKind::Dedupe => Action::Dedupe,
+            ProposalKind::SystemCleanup => Action::SystemCleanup,
         }
     }
 }
@@ -104,6 +109,8 @@ pub struct ProposalItem {
     pub detail: Option<String>,
     pub small: bool,
     pub memory_note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<OpView>,
 }
 
 // A requested path the gate refused outright (deny list, protect memory, not absolute, nested).
@@ -143,6 +150,9 @@ struct Params {
     summary: String,
     #[serde(default)]
     dropped: Vec<DroppedItem>,
+    // One per item, in item order (system_cleanup only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ops: Vec<OpView>,
 }
 
 // The executor's view of an item: the public fields plus the fs state it was proposed against.
@@ -201,6 +211,108 @@ pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result
     build(db, env, req, None)?.map_err(|dropped| nothing_left(&dropped))
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NewSystemCleanup {
+    pub conversation_id: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub summary: String,
+    pub ops: Vec<CleanupCandidate>,
+    pub dropped: Vec<DroppedItem>,
+}
+
+fn op_refusal(c: &CleanupCandidate) -> Option<String> {
+    match &c.op {
+        SystemOp::CompactVhdx { path }
+            if !path.to_ascii_lowercase().ends_with(".vhdx")
+                || !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) =>
+        {
+            Some(format!("{path} is not a virtual disk file"))
+        }
+        SystemOp::RestorePoints { volume }
+            if !(volume.len() == 2
+                && volume.ends_with(':')
+                && volume.as_bytes()[0].is_ascii_alphabetic()) =>
+        {
+            Some(format!("{volume} is not a drive"))
+        }
+        _ => None,
+    }
+}
+
+// Items are operations: the path is what each one works on, alloc its estimate (0 when unknown).
+pub fn create_system_cleanup(db: &Db, req: NewSystemCleanup) -> anyhow::Result<Proposal> {
+    let mut dropped = req.dropped;
+    let mut ops: Vec<CleanupCandidate> = Vec::new();
+    for c in req.ops {
+        if ops.iter().any(|o| o.op == c.op) {
+            continue;
+        }
+        match op_refusal(&c) {
+            Some(reason) => dropped.push(DroppedItem {
+                path: c.target,
+                reason,
+            }),
+            None => ops.push(c),
+        }
+    }
+    if ops.is_empty() {
+        let why = dropped
+            .iter()
+            .map(|d| format!("{}: {}", d.path, d.reason))
+            .collect::<Vec<_>>()
+            .join("; ");
+        anyhow::bail!("No proposal created; there is nothing Windows can clean up here. {why}");
+    }
+    let id = uuid::Uuid::now_v7().to_string();
+    let to_i64 = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+    let total: i64 = ops.iter().map(|c| to_i64(c.estimate.unwrap_or(0))).sum();
+    let params = Params {
+        summary: req.summary,
+        dropped,
+        ops: ops.iter().map(CleanupCandidate::view).collect(),
+        ..Params::default()
+    };
+    let mut conn = db.conn()?;
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO proposal(id, conversation_id, tool_call_id, kind, params_json, status, total_alloc, created_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7)",
+        params![
+            id,
+            req.conversation_id,
+            req.tool_call_id,
+            ProposalKind::SystemCleanup.as_str(),
+            serde_json::to_string(&params)?,
+            total,
+            now_ms(),
+        ],
+    )?;
+    for (seq, c) in ops.iter().enumerate() {
+        let kind = match c.op {
+            SystemOp::Hibernation | SystemOp::CompactVhdx { .. } => ItemKind::File,
+            _ => ItemKind::Dir,
+        };
+        let verdict = c.op.verdict();
+        tx.execute(
+            "INSERT INTO proposal_item(proposal_id, seq, path, kind, alloc, logical, verdict, reason, selected, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending')",
+            params![
+                id,
+                seq as i64,
+                c.target,
+                kind.to_db(),
+                to_i64(c.estimate.unwrap_or(0)),
+                to_i64(c.size.unwrap_or(0)),
+                verdict.as_str(),
+                c.note,
+                default_tick(false, Some(verdict), false),
+            ],
+        )?;
+    }
+    tx.commit()?;
+    load(&conn, &id)?.ok_or_else(|| anyhow::anyhow!("proposal vanished"))
+}
+
 // A follow-up keeps each item's approved tick (aligned with the request's items) instead of the default.
 struct Carry {
     parent_id: String,
@@ -215,7 +327,7 @@ pub(crate) fn create_follow_up(
     let Some(p) = load(&db.conn()?, parent_id)? else {
         return Ok(None);
     };
-    if p.kind == ProposalKind::Dedupe {
+    if matches!(p.kind, ProposalKind::Dedupe | ProposalKind::SystemCleanup) {
         return Ok(None);
     }
     let (items, ticks): (Vec<NewItem>, Vec<bool>) = p
@@ -263,6 +375,9 @@ fn build(
     }
     if !crate::actions::supports(req.kind) {
         anyhow::bail!("{} proposals are not available yet", req.kind.as_str());
+    }
+    if req.kind == ProposalKind::SystemCleanup {
+        anyhow::bail!("system_cleanup proposals hold detected operations, not paths");
     }
     let mut conn = db.conn()?;
     let mut dest_root: Option<String> = None;
@@ -361,6 +476,7 @@ fn build(
         dedupe: req.dedupe.clone(),
         summary: req.summary.clone(),
         dropped,
+        ops: Vec::new(),
     };
     let tx = conn.transaction()?;
     tx.execute(
@@ -534,9 +650,17 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
                 detail: r.get(10)?,
                 small: is_small(alloc, total_alloc),
                 memory_note: r.get(11)?,
+                op: None,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut items = items;
+    if kind == ProposalKind::SystemCleanup {
+        for (it, op) in items.iter_mut().zip(&params.ops) {
+            it.op = Some(op.clone());
+            it.small = false;
+        }
+    }
     Ok(Some(Proposal {
         id: id.to_string(),
         kind,

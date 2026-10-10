@@ -83,6 +83,9 @@ export const routes = {
   approve: (id: string, item_ids: number[]) =>
     api<T.ApproveResponse>(`/api/proposals/${enc(id)}/approve`, { body: { item_ids } }),
   decline: (id: string) => api<T.DeclineResponse>(`/api/proposals/${enc(id)}/decline`, { body: {} }),
+  rarelyUsedApps: () => api<T.RarelyUsedApp[]>("/api/apps/rarely-used"),
+  uninstallApp: (id: string) =>
+    api<{ started: true; id: string; name: string }>(`/api/apps/${enc(id)}/uninstall`, { method: "POST", body: {} }),
   jobs: () => api<T.Job[]>("/api/jobs"),
   cancelJob: (id: string) => api<{ ok: true }>(`/api/jobs/${enc(id)}/cancel`, { body: {} }),
 

@@ -157,7 +157,7 @@ fn a_v1_index_upgrades_in_place() {
 
     let db = Db::open(&old_path).unwrap();
     let conn = db.conn().unwrap();
-    assert_eq!(count(&conn, "PRAGMA user_version"), 5);
+    assert_eq!(count(&conn, "PRAGMA user_version"), 6);
     assert_same(&snapshot(&conn, r"C:\").unwrap(), &want);
     assert_eq!(
         count(

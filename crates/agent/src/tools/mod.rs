@@ -124,7 +124,7 @@ registry! {
     estimate_compression => [EstimateCompression],
     web_search => [WebSearch],
     suggest_next => [SuggestNext],
-    propose => [ProposeDelete, ProposeArchive, ProposeCompress, ProposeDedupe],
+    propose => [ProposeDelete, ProposeArchive, ProposeCompress, ProposeDedupe, ProposeSystemCleanup],
 }
 
 pub use index_status::refresh_note;

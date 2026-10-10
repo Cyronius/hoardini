@@ -146,6 +146,37 @@ function ItemRow({
   );
 }
 
+function OpRow({ item, checked, locked, onToggle }: { item: ProposalItem; checked: boolean; locked: boolean; onToggle: () => void }) {
+  const op = item.op!;
+  return (
+    <li className="py-1.5" data-op={op.op}>
+      <label className={`flex items-start gap-2 ${locked ? "opacity-80" : "cursor-pointer"}`}>
+        <input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-brass)]" checked={checked} disabled={locked} onChange={onToggle} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-baseline gap-2">
+            <span className="min-w-0 truncate font-semibold" title={item.path}>
+              {op.label}
+            </span>
+            <span className="ml-auto shrink-0 tabular-nums text-muted">{op.estimate_known ? humanBytes(item.alloc) : "size unknown"}</span>
+            {op.irreversible && (
+              <span className="shrink-0 rounded-full border border-err/40 px-2 py-px text-[length:var(--fs-xs)] font-bold text-err">cannot be undone</span>
+            )}
+          </span>
+          <span className="block text-[length:var(--fs-xs)] text-muted">{op.explain}</span>
+          {item.reason && <span className="block text-[length:var(--fs-xs)] text-faint">{item.reason}</span>}
+          {item.status === "failed" && item.detail && <span className="block text-[length:var(--fs-xs)] text-err">{item.detail}</span>}
+          {(item.status === "done" || item.status === "skipped") && (
+            <span className="block text-[length:var(--fs-xs)] text-ok">
+              {item.status === "done" ? "done" : "skipped"}
+              {item.detail ? `: ${item.detail}` : ""}
+            </span>
+          )}
+        </span>
+      </label>
+    </li>
+  );
+}
+
 function JobProgress({ job }: { job: Job }) {
   const p = job.progress;
   const frac = p.total_bytes > 0 ? Math.min(1, p.done_bytes / p.total_bytes) : 0;
@@ -179,7 +210,13 @@ function outcomeLine(p: Proposal, job: Job | undefined): { text: string; tone: s
   }
 }
 
-const VERB: Record<Proposal["kind"], string> = { delete: "Deleted", archive: "Archived", compress: "Compressed", dedupe: "Deduplicated" };
+const VERB: Record<Proposal["kind"], string> = {
+  delete: "Deleted",
+  archive: "Archived",
+  compress: "Compressed",
+  dedupe: "Deduplicated",
+  system_cleanup: "Cleaned up",
+};
 const ENDED: Proposal["status"][] = ["declined", "done", "partial", "failed"];
 
 function collapsedLine(p: Proposal, job: Job | undefined): string {
@@ -266,6 +303,7 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
   };
 
   const dest = proposal.destination?.name ?? "destination";
+  const system = proposal.kind === "system_cleanup";
   const heading =
     proposal.kind === "delete"
       ? "Delete"
@@ -273,12 +311,17 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
         ? `Archive to ${dest}`
         : proposal.kind === "compress"
           ? `Compress${proposal.format ? ` (${proposal.format})` : ""}`
-          : "Remove duplicates";
+          : system
+            ? "Clean up with Windows"
+            : "Remove duplicates";
   const outcome = outcomeLine(proposal, job);
   const compressNote = proposal.kind === "compress" ? compressNoteFor(proposal.format) : null;
   const dedupe = proposal.kind === "dedupe" ? proposal.dedupe : null;
   const ended = ENDED.includes(proposal.status) || (!!job && ["done", "failed", "cancelled"].includes(job.status));
-  const permanentDelete = proposal.kind === "delete" || dedupe?.mode === "delete";
+  const pickedOps = proposal.items.filter((i) => selected.has(i.id) && i.op).map((i) => i.op!);
+  const unknownSize = pickedOps.some((o) => !o.estimate_known);
+  const irreversible = pickedOps.filter((o) => o.irreversible);
+  const permanentDelete = proposal.kind === "delete" || dedupe?.mode === "delete" || irreversible.length > 0;
 
   const marks = { "data-proposal-id": proposalId, "data-status": proposal.status, "data-follow-up": proposal.follow_up_id ?? undefined };
   if (ended && !open) {
@@ -300,7 +343,8 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
     <div className="fade-up my-2 rounded-2xl border border-brass/40 bg-ink-850 p-3 shadow-sm" {...marks}>
       <div className="flex items-baseline gap-2">
         <span className="font-[family-name:var(--font-display)] text-[length:var(--fs-md)] font-bold">
-          {heading} · {proposal.kind === "compress" ? "up to" : "free"} {humanBytes(pending ? total : proposal.total_alloc)}
+          {heading} · {proposal.kind === "compress" ? "up to" : system && unknownSize ? "free at least" : "free"}{" "}
+          {humanBytes(pending ? total : proposal.total_alloc)}
         </span>
         {ended ? (
           <button type="button" className="ml-auto text-[length:var(--fs-xs)] text-faint hover:text-paper" onClick={() => setOpen(false)}>
@@ -320,9 +364,13 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
       {compressNote && <p className="mt-1 text-[length:var(--fs-sm)] text-muted">{compressNote}</p>}
 
       <ul className="mt-2 divide-y divide-line-soft rounded-xl border border-line-soft bg-ink-900 px-2.5">
-        {proposal.items.map((it) => (
-          <ItemRow key={it.id} item={it} checked={selected.has(it.id)} locked={!pending || busy} onToggle={() => toggle(it.id)} />
-        ))}
+        {proposal.items.map((it) =>
+          it.op ? (
+            <OpRow key={it.id} item={it} checked={selected.has(it.id)} locked={!pending || busy} onToggle={() => toggle(it.id)} />
+          ) : (
+            <ItemRow key={it.id} item={it} checked={selected.has(it.id)} locked={!pending || busy} onToggle={() => toggle(it.id)} />
+          ),
+        )}
       </ul>
 
       <div data-proposal-foot="">
@@ -331,15 +379,24 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
           <div className="mt-2 text-[length:var(--fs-sm)] text-muted tabular-nums">
             {selected.size} of {proposal.items.length} selected · {humanBytes(total)}
           </div>
-          {permanentDelete && (
+          {permanentDelete && !system && (
             <p className="mt-1 text-[length:var(--fs-sm)] font-semibold text-err">Deleting is permanent and cannot be undone. Nothing goes to the Recycle Bin.</p>
+          )}
+          {irreversible.some((o) => o.op === "restore_points") && (
+            <p className="mt-1 text-[length:var(--fs-sm)] font-semibold text-err">Deleted restore points cannot be brought back.</p>
+          )}
+          {irreversible.some((o) => o.op === "recycle_bin") && (
+            <p className="mt-1 text-[length:var(--fs-sm)] font-semibold text-err">Emptying the Recycle Bin is permanent; its files cannot be restored.</p>
+          )}
+          {pickedOps.some((o) => o.elevated) && (
+            <p className="mt-1 text-[length:var(--fs-sm)] text-muted">Windows asks for administrator permission once, then runs its own tools. The space freed is measured as free space before and after.</p>
           )}
           {proposal.kind === "archive" && (
             <p className="mt-1 text-[length:var(--fs-sm)] text-muted">Copies to {dest}, verifies the copy, then deletes the originals.</p>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {permanentDelete ? (
-              <HoldButton label="Hold to delete" disabled={busy || selected.size === 0} onConfirm={() => void approve()} />
+              <HoldButton label={system ? "Hold to clean up" : "Hold to delete"} disabled={busy || selected.size === 0} onConfirm={() => void approve()} />
             ) : (
               <button
                 type="button"
@@ -347,7 +404,13 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
                 disabled={busy || selected.size === 0}
                 onClick={() => void approve()}
               >
-                {proposal.kind === "archive" ? `Archive to ${dest}, then delete` : proposal.kind === "compress" ? "Compress" : "Remove duplicates"}
+                {proposal.kind === "archive"
+                  ? `Archive to ${dest}, then delete`
+                  : proposal.kind === "compress"
+                    ? "Compress"
+                    : system
+                      ? "Clean up"
+                      : "Remove duplicates"}
               </button>
             )}
             <button

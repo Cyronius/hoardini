@@ -182,7 +182,7 @@ He then climbs back up, deflating on the way if space was freed, and in the head
 **Verification:** manual
 **Depends on:** ACT-FOLLOW-UP (server side; the follow-up proposal and `parent_id` / `follow_up_id`)
 
-A proposal card whose proposal was declined, or whose job ended (done, partial, failed, or cancelled), collapses to one line: the kind's verb (Deleted, Archived, Compressed, Deduplicated), the item count, and the bytes freed, e.g. "Deleted 12 items · freed 3.4 GB · details ▸"; a decline reads "Declined · N items". Clicking it expands the read-only item list with each item's outcome, and "hide ▴" collapses it again. Pending and running cards stay full size. When the proposal has a `follow_up_id`, the follow-up's full card renders directly under the collapsed card in the same chat slot; chains repeat. The UI refetches the proposal when its job reaches a terminal state, and a reloaded thread renders the same chain. Item rows show a muted "small" tag when `small` is true and a muted "Noted: ..." line from `memory_note`; the initial ticks are the server's `selected` values. Approving or declining a follow-up card does not report back to the model; the model sees it through the open-proposals line.
+A proposal card whose proposal was declined, or whose job ended (done, partial, failed, or cancelled), collapses to one line: the kind's verb (Deleted, Archived, Compressed, Deduplicated, Cleaned up), the item count, and the bytes freed, e.g. "Deleted 12 items · freed 3.4 GB · details ▸"; a decline reads "Declined · N items". Clicking it expands the read-only item list with each item's outcome, and "hide ▴" collapses it again. Pending and running cards stay full size. When the proposal has a `follow_up_id`, the follow-up's full card renders directly under the collapsed card in the same chat slot; chains repeat. The UI refetches the proposal when its job reaches a terminal state, and a reloaded thread renders the same chain. Item rows show a muted "small" tag when `small` is true and a muted "Noted: ..." line from `memory_note`; the initial ticks are the server's `selected` values. Approving or declining a follow-up card does not report back to the model; the model sees it through the open-proposals line.
 
 **Verification (manual):**
 1. In `ui/`, run `MOCK_PORT=7261 MOCK_IDLE=1 bun run mock` and Vite with its `/api` proxy pointed at it; ask "what is in lmstudio".
@@ -192,6 +192,30 @@ A proposal card whose proposal was declined, or whose job ended (done, partial, 
 5. Reload the page: the same collapsed card and follow-up are shown.
 6. On a fresh mock, post `{"next_job":{"outcome":"failed"}}` and approve: the card collapses as "Deleted nothing · failed: Access is denied"; the follow-up holds the 12 failed items ticked plus the 3 unticked ones.
 7. Decline a pending card: it collapses to "Declined · N items".
+8. Ask "windows cleanup" and approve the ticked operations: the card collapses to "Cleaned up 3 items · freed 12.6 GB · details ▸" and no follow-up card appears (system cleanups get none, ACT-FOLLOW-UP).
+(2026-10-09: step 8 checked against the mock in headless Chromium through Playwright.)
+
+### UI-SYSTEM-CLEANUP-CARD: The Windows cleanup card says what Windows will do and warns before what cannot be undone
+**Applies to:** hoardini
+**Verification:** manual
+**Depends on:** ACT-WINDOWS-CLEANUP-DETECT (the `op` view of each item)
+
+A `system_cleanup` card ("Clean up with Windows") shows one row per operation instead of a path row: a tick, the
+operation's label, its estimated saving or "size unknown", a red "cannot be undone" tag for restore points and the
+Recycle Bin, the server's explanation of what Windows will do, and the detection note. The header reads "free at least
+X" while a ticked operation has no estimate. Under the list it says Windows asks for administrator permission once when
+a ticked operation needs it; when restore points are ticked it says "Deleted restore points cannot be brought back.", and
+when the Recycle Bin is ticked that emptying it is permanent; with either ticked, approving needs "Hold to clean up"
+(the `HoldButton` of ACT-DELETE-CONFIRM), otherwise one click on "Clean up". The `propose_system_cleanup` tool call
+renders this card in the chat like the other `propose_*` tools.
+
+**Verification (manual):**
+1. In `ui/`, run the mock (`MOCK_IDLE=1 bun run mock`) and Vite with its `/api` proxy pointed at it; ask "windows cleanup".
+2. The card reads "Clean up with Windows · free at least 12.6 GB" and lists five operations; component store, hibernation, and compaction are ticked; restore points and the Recycle Bin are unticked and tagged "cannot be undone"; hibernation shows 12.6 GB, the others "size unknown" except the Recycle Bin (3.1 GB); each row shows its explanation and note.
+3. The footer says Windows asks for administrator permission once, and the button is "Clean up".
+4. Tick restore points: the footer adds "Deleted restore points cannot be brought back." and the button becomes "Hold to clean up"; a click leaves the card pending.
+5. Untick it and click "Clean up": the job runs and the card collapses to "Cleaned up 3 items · freed 12.6 GB · details ▸"; "details ▸" shows "done" on the three approved rows.
+(2026-10-09: steps 1–5 checked against the mock in headless Chromium through Playwright; ticking the Recycle Bin was not checked.)
 
 ### UI-SETTINGS-AUTOSAVE: Settings save themselves; one Rescan now control
 **Applies to:** hoardini

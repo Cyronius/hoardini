@@ -69,9 +69,11 @@ pub(crate) fn handler_for(kind: ProposalKind) -> Option<Box<dyn Handler>> {
         ProposalKind::Archive => Some(Box::new(archive::ArchiveHandler)),
         ProposalKind::Compress => Some(Box::new(compress::CompressHandler)),
         ProposalKind::Dedupe => Some(Box::new(dedupe::DedupeHandler)),
+        // Runs as one batch behind one admin prompt (actions::system), not item by item.
+        ProposalKind::SystemCleanup => None,
     }
 }
 
 pub fn supports(kind: ProposalKind) -> bool {
-    handler_for(kind).is_some()
+    kind == ProposalKind::SystemCleanup || handler_for(kind).is_some()
 }

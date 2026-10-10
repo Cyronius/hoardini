@@ -552,6 +552,8 @@ pub fn keep_block(
         let blocked = match action {
             Action::Delete | Action::Dedupe => true,
             Action::Archive | Action::Compress => !d.actions.contains(&action),
+            // Windows' own tools act on system areas, which no location row may hold back.
+            Action::SystemCleanup => false,
         };
         if d.verdict != Some(Verdict::Keep) || !blocked {
             continue;

@@ -83,6 +83,10 @@ fn main() {
     if args.get(1).map(String::as_str) == Some("index") {
         std::process::exit(hoardini_core::index::run_child(&args[2..]));
     }
+    // The executor relaunches this exe elevated for system_cleanup jobs (ACT-WINDOWS-CLEANUP).
+    if args.get(1).map(String::as_str) == Some("system-cleanup") {
+        std::process::exit(hoardini_core::syscleanup::run_helper(&args[2..]));
+    }
     // Release builds have no console (windows_subsystem), so stderr only helps in debug runs.
     let _log =
         hoardini_server::init_logging(&hoardini_server::default_log_dir(), cfg!(debug_assertions))

@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::routing::{MethodRouter, delete, get, post, put};
 use hoardini_agent::thread;
 use hoardini_core::actions::Job;
+use hoardini_core::apps;
 use hoardini_core::destinations::{self, NewDestination};
 use hoardini_core::history::{self, Since};
 use hoardini_core::index;
@@ -14,6 +15,7 @@ use hoardini_core::memory::{self, Kind, MemoryPatch, NewMemory, Scope};
 use hoardini_core::paths::redact;
 use hoardini_core::proposals::{self, Proposal};
 use hoardini_core::store::{get_meta, now_ms, set_meta};
+use hoardini_core::syscleanup::SystemOp;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -142,6 +144,8 @@ fn entries() -> Vec<Entry> {
         get_("/api/builtin", builtin_get),
         post_("/api/builtin/install", builtin_install),
         delete_("/api/builtin", builtin_delete),
+        get_("/api/apps/rarely-used", apps_rarely_used),
+        post_("/api/apps/{id}/uninstall", app_uninstall),
     ]
 }
 
@@ -231,6 +235,9 @@ fn display_proposal(mut p: Proposal) -> Value {
         it.reason = it.reason.as_deref().map(redact);
         it.block_reason = it.block_reason.as_deref().map(redact);
         it.memory_note = it.memory_note.as_deref().map(redact);
+        if let Some(SystemOp::CompactVhdx { path }) = it.op.as_mut().map(|o| &mut o.op) {
+            *path = redact(path);
+        }
     }
     let mut v = serde_json::to_value(&p).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
@@ -706,4 +713,28 @@ async fn builtin_install(State(s): State<AppState>, body: Bytes) -> ApiResult {
 
 async fn builtin_delete(State(s): State<AppState>) -> ApiResult {
     Ok(Json(builtin::remove(&s).await?))
+}
+
+async fn apps_rarely_used(State(s): State<AppState>) -> ApiResult {
+    blocking(move || {
+        let mut list = apps::list_rarely_used(&s.db.conn()?, now_ms())?;
+        for a in &mut list {
+            a.path = redact(&a.path);
+            a.last_run_from = a.last_run_from.as_deref().map(redact);
+        }
+        Ok(Json(json!(list)))
+    })
+    .await
+}
+
+// The body is never read: the command comes only from the app's own registration.
+async fn app_uninstall(Path(id): Path<String>) -> ApiResult {
+    let app = blocking(move || {
+        apps::uninstall(&id).map_err(|e| ApiError::new(StatusCode::CONFLICT, format!("{e:#}")))
+    })
+    .await?
+    .ok_or_else(|| ApiError::not_found("app"))?;
+    Ok(Json(
+        json!({"started": true, "id": app.id, "name": app.name}),
+    ))
 }

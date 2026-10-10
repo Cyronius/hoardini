@@ -1,7 +1,7 @@
 # Actions, destinations, journal (prefix ACT)
 
 The executor runs approved proposals as background jobs. Canonical design: `.claude/plans/hoardini-design.md` §5.6.
-Code: `crates/core/src/{actions,destinations}`. Tests: `specs/act/tests/act.rs`.
+Code: `crates/core/src/{actions,destinations,compress}`. Tests: `specs/act/tests/act.rs` and its modules.
 
 ## Model
 
@@ -10,7 +10,7 @@ proposal and a subset of its selectable item ids, revalidates them (POLICY-REVAL
 starts a job on its own thread, and returns `{approved, items, job_id}`. Jobs run one at a time (`queued` → `running` →
 `done` | `failed` | `cancelled`); progress (bytes, items, current path) goes to `Executor::subscribe()` and the `job`
 table; cancel takes effect between files and between 1 MiB copy chunks. Kinds: delete, archive (local folder,
-SMB UNC path), compress, dedupe.
+SMB UNC path), compress, dedupe, system_cleanup (operations Windows' own tools carry out; ACT-WINDOWS-CLEANUP).
 
 - **Delete**: `remove_file` (read-only cleared); a folder is first renamed to a temporary sibling name (Windows refuses
   while anything inside is open, so nothing is deleted then), then `remove_dir_all` (never follows links inside); a link
@@ -31,6 +31,7 @@ SMB UNC path), compress, dedupe.
   (`compact /c /exe:lzx`, for data that is not written to again) and `lznt1` (`compact /c`) run `compact.exe` in place with
   no console window (undo = `compact /u`); a folder holding a link, reparse point, or cloud-only file fails up front too,
   because `compact /s` would follow the link. Freed bytes = allocation before minus after (WOF files measured by handle).
+  One card may hold several files or folders (`propose_compress` takes `paths`); each item runs and is journaled on its own.
 - **Dedupe**: items are the extra copies; `keep` (from the proposal) is never listed, opened for write, or changed.
   `hardlink` (same volume only) hashes keep and extra in full at execution, creates the link under a temp name beside
   the extra, then renames it over the extra; `delete` removes the extra. Candidates come from `core::dupes`: same
@@ -57,6 +58,145 @@ SMB UNC path), compress, dedupe.
   `<path>/<yyyy-mm-dd>/<original path without the drive colon>` and `archive_entry.dest_uri` is
   `rclone:<remote>:<path>`. Server routes: `GET /api/runtime/rclone`, `POST /api/runtime/rclone/install` (a job),
   `POST /api/destinations/rclone/authorize`.
+
+### ACT-APPS-RARELY-USED: Big apps not run for 90 days are listed
+**Applies to:** hoardini
+**Verification:** test
+
+`apps::installed(inputs)` shall turn the uninstall registry and Steam's app manifests into apps with a stable id:
+`steam-<appid>` for a Steam game (its folder `<library>\steamapps\common\<installdir>`, uninstalled through
+`steam://uninstall/<appid>`), and `reg-<16 hex of BLAKE3 of the lower-cased uninstall key>` for a registry program,
+uninstalled by its own `UninstallString` split into program and arguments (`apps::split_command`: a quoted program, else
+the text up to the first `.exe` followed by a space or the end, else the first word). A registry program is left out
+when it is hidden (`SystemComponent = 1` or an update with `ParentKeyName`), has no `InstallLocation` or
+`UninstallString`, has an install location too broad to mean one app (a drive, `Program Files`, `Windows`, `Users`, ...;
+`evidence::owner`), or shares its folder with a Steam game or an earlier program. Steam libraries come from
+`libraryfolders.vdf` (current and old layouts) under the Steam folder in `HKCU\Software\Valve\Steam\SteamPath`, and
+games from each library's `appmanifest_*.acf` (`appid`, `name`, `installdir`, `LastPlayed` in seconds, 0 = never).
+
+`apps::rarely_used(conn, inputs, now)` shall size each app from the index (the allocated size of its folder, minus the
+folders of other apps installed inside it, so a launcher is not charged for its games), take its last run as the latest
+of Steam's `LastPlayed` and every UserAssist entry that is a run of it, and list, biggest first, the apps of at least
+2 GiB (`MIN_APP_BYTES`) whose last run is more than 90 days ago (`IDLE_DAYS`) or unknown, each with `id`, `name`,
+`publisher`, `source` (`registry` or `steam`), `path` (as the index spells it), `size`, `last_run_ms`, and
+`last_run_from` (`last run of <entry>` or `Steam LastPlayed`). Launches from the taskbar or Start are recorded as a
+shortcut or an app id rather than the exe path, so a UserAssist entry is a run of an app when it is an exe in the app's
+folder; or its last name (without `.lnk` or `.exe`, letters and digits only, lower case) is at least 5 characters and
+is contained in the app's display name squashed the same way, or contains it (`Microsoft.VisualStudioCode` for
+"Microsoft Visual Studio Code (User)"); or it is an app id (no backslash) that names one of the `.exe` files the index
+holds in the app's folder (`Microsoft.Office.WINWORD.EXE.15`). A path entry outside the folder never counts by its exe
+name. Access times are not used: on a measured PC (2026-10-09) a scanner had touched every exe in the Visual Studio
+folder within the same minute. An app whose folder is not in the index is not listed. Tests: `specs/act/tests/apps.rs`.
+
+**Acceptance criteria:**
+- With fake registry, UserAssist, and Steam inputs over a fake `D:\`: Old Game (Steam, 5 GiB, played 100 days ago), Never Opened (4 GiB, no run; a `setup.exe` in its folder and a run of `C:\Users\me\Downloads\setup.exe` yesterday do not count), Big Tool (3 GiB, run 200 days ago), and Unplayed (Steam, 2.5 GiB, never) are listed in that order, and nothing else: not a 3 GiB app run 10 days ago, a 1 GiB app, a hidden one, one without an uninstaller, one at `D:\Program Files`, one not in the index, the Steam client (1 GiB once its three games are taken out, though run 300 days ago), New Game (UserAssist 200 days ago, Steam 3 days ago), "Microsoft Visual Studio Code (User)" (app id `Microsoft.VisualStudioCode` 2 days ago), an app holding `WINWORD.EXE` (app id `Microsoft.Office.WINWORD.EXE.15` 12 days ago), or "Shortcut App" (`{Programs}\Shortcut App.lnk` 20 days ago). The registry entry "Steam App 1001" for Old Game's folder is not listed separately; Old Game's id is `steam-1001`, a registry id is `reg-` plus 16 hex digits, and a second call gives the same ids.
+- Old Game uninstalls through `steam://uninstall/1001`; Never Opened through `D:\Apps\Never\Uninstall Never.exe` with `/x`.
+- `split_command`: a quoted program keeps its arguments apart; an unquoted `C:\Program Files\My App\Uninstall My App.exe --remove now` splits after `.exe`; `MsiExec.exe /X{...}` splits after `MsiExec.exe`; `C:\Tools\app.exe.old\run.exe` stays whole; blank text and an unterminated quote give nothing.
+- `libraryfolders.vdf` in the current layout gives both library paths with single backslashes; the old layout gives its numbered path; an `appmanifest` gives the app id, name, folder under the library, and `LastPlayed` in ms (0 = none); one without `installdir` gives nothing.
+
+### ACT-UNINSTALL: Uninstall runs the app's own uninstaller and never deletes its folder
+**Applies to:** hoardini
+**Verification:** manual
+
+`POST /api/apps/{id}/uninstall` (SRV-APPS) shall look the id up among the installed apps (ACT-APPS-RARELY-USED) and start
+that app's registered uninstaller through the shell (`ShellExecuteExW`, so an uninstaller that needs admin rights shows
+its own UAC prompt), or `steam://uninstall/<appid>` for a Steam game, and return at once. The uninstaller asks for its
+own confirmation. Hoardini never deletes an app's folder or files itself, and the request body is never read.
+
+**Verification (manual):**
+1. Install a small throwaway app that registers an uninstaller (e.g. an Inno Setup or NSIS installer) into `D:\scratch\app`, then pad its folder past 2 GiB: `fsutil file createnew D:\scratch\app\pad.bin 2147483648`.
+2. With `D:\scratch` indexed (`hoardini index --volume D:\` or a watched folder) and the app never started, `GET /api/apps/rarely-used` lists it with `last_run_ms: null`.
+3. `POST /api/apps/<its id>/uninstall`: the app's own uninstaller window opens (with a UAC prompt first if it needs admin). Cancel it: the folder and `pad.bin` are unchanged.
+4. Repeat and confirm: the uninstaller removes what it installed; `pad.bin`, which it did not install, is still there, so Hoardini removed nothing itself.
+5. For a Steam game listed by the same route, the POST opens Steam's own "Uninstall <game>?" dialog.
+6. `POST /api/apps/reg-0000000000000000/uninstall` answers 404 and opens nothing.
+(2026-10-09, partial: `hoardini serve --no-refresh` on a copy of this PC's index, real registry, UserAssist and Steam: `GET /api/apps/rarely-used` listed Visual Studio Community 2022, HIP SDK Core, Visual Studio Build Tools 2022 and LLVM, each with no recorded run; step 6 answered 404. Steps 1 and 3–5 were not run: they install and uninstall software.)
+
+### ACT-WINDOWS-CLEANUP-DETECT: Cleanups only Windows can do are detected without elevation
+**Applies to:** hoardini
+**Verification:** test
+
+`syscleanup::candidates(conn, facts)` shall offer, in this order, each operation the index and `SystemFacts` (read
+without elevation by `SystemFacts::gather`: the system drive, `SystemRoot`, physical RAM,
+`HKLM\SYSTEM\CurrentControlSet\Control\Power\HibernateEnabled`, the Recycle Bin size across drives, the WSL 2 distros
+in `HKCU\...\Lxss` with their `BasePath\VhdFileName`, and `%LOCALAPPDATA%\Docker\wsl`) show to be worthwhile:
+- `component_store` when the index holds `<SystemRoot>\WinSxS` at 2 GiB or more (the bytes not hard-linked into Windows
+  itself, INDEX-HARDLINK-ONCE); estimate unknown, size = that folder.
+- `restore_points` for the system drive when its latest refresh's unaccounted gap (INDEX-UNACCOUNTED) is 2 GiB or more;
+  target `System Volume Information`, estimate unknown, size = the gap.
+- `hibernation` when hibernation is not known to be off and the index holds `hiberfil.sys` at least 1 GiB larger than a
+  fifth of RAM (the reduced size); estimate = the difference.
+- `compact_vhdx` for each WSL distro disk and each `.vhdx` under Docker's `wsl` folder that the index holds at 5 GiB or
+  more, once per path; estimate unknown, size = the file.
+- `recycle_bin` when the Recycle Bin holds 1 GiB or more; estimate = its size.
+Each candidate has a target path, an optional estimate, a size, and a one-line note. `proposals::create_system_cleanup`
+stores them as a pending `system_cleanup` proposal whose items are the operations: the path is the target, `alloc` the
+estimate (0 when unknown), the verdict `safe` (component store, hibernation, compaction) or `review` (restore points,
+Recycle Bin), so ticks follow POLICY-DEFAULT-TICK with nothing counted small, and each item's JSON carries `op`
+(`{op, volume?|path?, label, explain, elevated, irreversible, estimate_known, size}`). A `compact_vhdx` whose path is
+not an existing `.vhdx` file, or a `restore_points` whose volume is not a drive letter, goes to `dropped`; a request
+with nothing left fails. `syscleanup::propose(db, facts, wanted, ...)` keeps the wanted operation names (all when
+empty) and lists a wanted one that was not detected in `dropped`. A `system_cleanup` request through
+`proposals::create` (paths) is refused. Tests: `specs/act/tests/system.rs`.
+
+**Acceptance criteria:**
+- On a fake `C:\` with a 6 GiB WinSxS, a 25 GiB `hiberfil.sys`, a 60 GiB Ubuntu disk, a 40 GiB `docker_data.vhdx`, a 1 GiB Docker `ext4.vhdx`, and over 2 GiB unaccounted, with 64 GiB RAM, hibernation on, and 3 GiB in 12 Recycle Bin items: the candidates are, in order, component store (size 6 GiB), restore points on `C:` (size = the gap), hibernation (estimate 25 GiB − 12.8 GiB), the Ubuntu disk, the Docker data disk, and the Recycle Bin (3 GiB, note starting "12 items").
+- With a 1 GiB WinSxS, a gap under 2 GiB, 128 GiB RAM, a 500 MiB Recycle Bin, and no WSL or Docker disks there are none, also with 16 GiB RAM and hibernation off; with hibernation unknown, the 25 GiB file is offered at 25 − 3.2 GiB. `propose` then fails with "nothing Windows can clean up".
+- Proposing restore points, hibernation, Recycle Bin, and compaction gives three items in that order with ticks off, on, off, the irreversible flag on restore points and the Recycle Bin, `elevated` off only for the Recycle Bin, `estimate_known` off only for restore points, `small` off, `total_alloc` = the two estimates, and both vhdx files (absent on disk) in `dropped`. The JSON has `kind: "system_cleanup"` and `op: {op: "restore_points", volume: "C:", explain: "...cannot be brought back."}`.
+
+### ACT-WINDOWS-CLEANUP-RUN: One administrator prompt per job, each operation journaled
+**Applies to:** hoardini
+**Verification:** test
+
+Approving a `system_cleanup` proposal (no file revalidation: the items are operations) starts a job that writes a
+`running` action row for every approved operation first, then runs the ones that belong to the user (the Recycle Bin,
+`SHEmptyRecycleBinW` with no confirmation; an empty bin is reported done with nothing freed) in-process, then hands every other operation to
+one `SystemRunner::elevated` call: `WindowsRunner` runs `wsl --shutdown` as the user when a disk is to be compacted,
+then relaunches the current exe once with the `runas` verb (one UAC prompt) as
+`system-cleanup --result "<temp file>" "<op>"...`, where each op is `component-store`, `restore-points=<X:>`,
+`hibernation-reduced`, or `compact-vhdx=<absolute local .vhdx path>` (`syscleanup::helper_params`); the elevated side
+(`syscleanup::run_helper`, wired into both the CLI and the app's `main`) accepts nothing else
+(`syscleanup::parse_helper_args`), runs each operation, and appends one JSON result per operation (`ok`, `freed` = the
+volume's free space after minus before, `error`, `detail`) that the job reads as they arrive. A declined prompt fails
+every elevated item with "The administrator prompt was declined; nothing ran". Each item ends `done` with its action
+row's `freed_bytes` and `undo_json` written first (ACT-JOURNAL; hibernation's undo is `powercfg /h /type full`, the
+others say there is no undo), or `failed` with the error; the proposal ends `done`, `partial`, or `failed` as other
+jobs do, and gets no follow-up. Cancel takes effect before the prompt; once the elevated helper runs, the Windows tools
+run to their end. Restore points are counted from `vssadmin list shadows` by their
+`\Device\HarddiskVolumeShadowCopyN` device paths, which are not localized (`syscleanup::count_shadows`).
+`Executor::set_system_runner` replaces `WindowsRunner` in tests. Tests: `specs/act/tests/system.rs`.
+
+**Acceptance criteria:**
+- With a fake runner, approving all five operations calls the user side once with the Recycle Bin and the elevated side exactly once with component store, restore points on `C:`, hibernation, and the vhdx, in that order; the results (3, 5, 12 GiB, and a diskpart failure) leave four items `done` (with their details) and the vhdx `failed` with the error; the proposal is `partial`, the job `done` with 21 GiB freed, five action rows carry 3, 5, 12, 0, and 1 GiB, the restore-point undo says they cannot be brought back, hibernation's undo is `["powercfg.exe","/h","/type","full"]`, the failed row has none, and there is no follow-up. At every job event, every `done` item already has a `done` row with undo info.
+- A declined prompt fails the four elevated items with the declined message (four failed action rows), the Recycle Bin still runs, and the job frees 1 GiB.
+- Approving only the Recycle Bin never calls the elevated side.
+- The helper command line for four operations is exactly `system-cleanup --result "<file>" "component-store" "restore-points=D:" "hibernation-reduced" "compact-vhdx=C:\wsl\Ubuntu Disk\ext4.vhdx"` and parses back to the same operations; the Recycle Bin cannot be put on it; `recycle-bin`, `format-c`, `restore-points=C:\`, a non-`.vhdx` path, a relative path, a UNC path, and a relative result file are refused.
+- A `vssadmin` listing with two shadow device paths (one under a German label) counts 2; "No items found" counts 0.
+
+### ACT-WINDOWS-CLEANUP: Windows' own tools free the space, behind one admin prompt
+**Applies to:** hoardini
+**Verification:** manual
+
+Each approved operation runs the Windows tool that owns it: component store, `Dism.exe /Online /Cleanup-Image
+/StartComponentCleanup /Quiet /NoRestart` (exit 3010 = done, restart pending); restore points, every shadow copy of the
+drive except the newest via `vssadmin delete shadows /for=<X:> /oldest /quiet`, repeated (deleting old points is chosen
+over capping shadow storage, because a cap can only be set blind without elevation and may grow the allowance instead);
+hibernation, `powercfg /h /type reduced` (reduced rather than off: Fast Startup keeps working, the Hibernate option goes
+away, and `powercfg /h /type full` undoes it); WSL and Docker disks, `wsl --shutdown` as the user, then `diskpart`
+(`select vdisk`, `attach vdisk readonly`, `compact vdisk`, and always a separate `detach vdisk`), which needs no Hyper-V
+module, chosen over `wsl --manage --set-sparse`, which WSL itself flags as experimental and which only frees space as
+Linux trims it later; the Recycle Bin, `SHEmptyRecycleBinW` as the user. Child tools run without a console window. The
+card (UI-SYSTEM-CLEANUP-CARD) says what each operation does and, on the approve step, that deleted restore points
+cannot be brought back. The freed bytes reported are the volume's free space after minus before.
+
+**Verification (manual):**
+1. On a test PC (or VM) with an index of `C:` and some restore points, a WSL distro, and a few GB in the Recycle Bin, ask "what can Windows clean up?"; the model calls `propose_system_cleanup` and the card lists the detected operations with their notes.
+2. Tick everything and hold to clean up: exactly one UAC prompt appears (for `hoardini.exe system-cleanup ...`). Decline it: every operation except the Recycle Bin fails with "The administrator prompt was declined; nothing ran", and the Recycle Bin is empty.
+3. Ask again, approve and accept the prompt: WSL stops (`wsl -l -v` shows every distro Stopped), DISM runs (Task Manager), and the job ends with each item done or failed with the tool's message.
+4. `vssadmin list shadows /for=C:` (as admin) shows one shadow copy left; `powercfg /a` shows hibernation unavailable with Fast Startup available and `hiberfil.sys` at about a fifth of RAM; the vhdx file is smaller and the distro starts with its files intact.
+5. The collapsed card reads "Cleaned up N items · freed X"; X matches the drop in used space (`fsutil volume diskfree C:` before and after, within what else changed).
+6. `SELECT kind, status, freed_bytes, undo_json, error FROM action WHERE kind = 'system_cleanup'` shows one row per operation with its undo info.
+(2026-10-09, partial: none of steps 1–6 were run on this PC, which must not be cleaned up. Run instead: `hoardini system-cleanup --result <scratch file>` with no operations exited 0 and wrote an empty file; with `format-c`, `recycle-bin`, or a relative result file it exited 2 and ran nothing. Detection on a copy of this PC's index (read-only facts) offered component store (19.2 GB WinSxS), restore points (91.2 GB unaccounted), hibernation (35.1 GB file, about 17.5 GB to free with 87.6 GB RAM), and three WSL/Docker disks of 7.5, 121, and 6.1 GB; the Recycle Bin held 40 KB and was not offered.)
 
 ### ACT-ARCHIVE-VERIFY: Archive deletes the source only after the copy verifies
 **Applies to:** hoardini
@@ -101,7 +241,7 @@ ticked; an item left unticked comes back unticked. The items go through proposal
 the deny list, `alloc`, blocks, caps, in-use status, and the memory note are current: a newly blocked item is unticked,
 and a newly denied path is listed in `dropped`. An item whose path no longer exists is left out. Kind, destination,
 format, summary, verdicts, and reasons carry over; the follow-up has no `tool_call_id`. Nothing is created when no item
-is left, and dedupe jobs get no follow-up. The follow-up row is committed before the job's terminal update is broadcast
+is left, and dedupe and system_cleanup jobs get no follow-up. The follow-up row is committed before the job's terminal update is broadcast
 (`Executor::subscribe`, so the status stream's `job` frame too). Proposal JSON (`GET /api/proposals/{id}` and the
 `proposals` map of `GET /api/thread`) carries `parent_id` and `follow_up_id` (the newest proposal whose `parent_id` is
 this one), both null when absent. A job interrupted by a restart (marked failed at startup) gets no follow-up. Tests:
@@ -163,6 +303,36 @@ weights) shall report ratio 1.0 without being compressed.
 - A 4 MiB file of zeros: every format's ratio is below 0.1 and savings exceed 3 MiB.
 - A `.mp4`-named random file is flagged `already_compressed`, samples 0 bytes, and every format reports ratio 1.0 and 0 saved.
 
+### ACT-COMPRESS-CANDIDATES: Folders worth compressing in place are found from the index
+**Applies to:** hoardini
+**Verification:** test
+
+`compress::candidates(conn, env, root, now)` shall list folders under `root` of at least 2 GiB allocated (`MIN_FOLDER`),
+biggest first, that compressing in place can help, using only the index: walking down from `root` through folders of
+at least 2 GiB, a folder with two or more such children, or one child holding at least 90% of it, is opened instead of
+listed; a deny-listed folder (POLICY-DENY) is opened too; a folder whose catalog category gets a delete card instead
+(cache, browser, package or installer cache, build output, temp, crash dumps, Windows leftovers, system, VM disk,
+downloads) is skipped with everything under it. Any other folder is listed unless one of these holds, in which case its
+children are tried instead: something in it (a folder or a file row) was modified in the last 30 days (`QUIET_DAYS`;
+writes undo WOF compression); it holds a link or a cloud-only file; the folder has the NTFS compressed attribute; half or
+more of its file-row bytes are already NTFS-compressed or allocated under 90% of their size (WOF hides its tag from
+listings); half or more of its bytes (INDEX-EXT-MIX) are media, archive, package or quantized-weight types; or it holds a
+virtual disk (`vhdx`, `vhd`, `avhdx`, `vmdk`, `vdi`, `qcow2`), which WSL and Hyper-V refuse to run compressed. At most
+400 folders are examined per call.
+
+Each candidate carries the cached `lzx` estimate (`compress_estimate` table, schema v6) while its size and newest
+modification time are unchanged. `compress::estimate_top(db, candidates, limit)` runs `compress::estimate`
+(ACT-COMPRESS-ESTIMATE) for the first `limit` candidates without a current estimate and stores each; the review runs it
+for the top 10 (`ESTIMATE_TOP`) on a background thread (`compress::spawn_estimates`). A candidate is proposable when
+the estimate saves at least 1 GiB and at least 20% of its size (`compress::proposable(saved, logical)`); the card is an
+in-place `lzx` compress of those folders. Tests: `specs/act/tests/candidates.rs`.
+
+**Acceptance criteria:**
+- On a fake `C:\` (now = a year after the files were written): `steamapps\common\GameB` (4.1 GiB), `C:\data\corpus` (3.5 GiB), `C:\Users\me\Datasets\set`, `steamapps\common\GameA` (3 GiB each), and `C:\proj\old` (2.5 GiB) are listed in that order, and nothing else: not a folder with a file touched 5 days ago, not one allocated at 5 of 8 GiB, not one with the NTFS compressed attribute, not one holding a junction, not one of `.mp4` files, not a 1 GiB folder, not the folder holding `disk.vhdx`, not `C:\Windows\big`, not a folder under `%TEMP%`, and not `C:\games`, `steamapps`, `common`, `C:\data`, or `C:\proj` (whose newest file is a day old) themselves.
+- A stored estimate for `C:\data\corpus` at its size and newest time rides along (2 GiB saved: proposable); one stored at a different size does not.
+- `proposable`: 1 GiB of 5 GiB, and 2 GiB of 10 GiB, are; 1 GiB − 1 byte of 4 GiB, 1.5 GiB of 8 GiB, and 2 GiB − 1 byte of 10 GiB are not.
+- `estimate_top` with limit 1 over two 4 MiB text folders estimates only the first (saved over 2 MiB, ratio under 0.5); a second call estimates nothing; limit 2 estimates the second; a changed newest time estimates the first again.
+
 ### ACT-COMPRESS-VERIFY: Originals go only after the archive tests clean
 **Applies to:** hoardini
 **Verification:** test
@@ -176,6 +346,7 @@ partial file. An in-place compress shall leave content identical and reduce allo
 - When each finished archive is damaged before its test, the job fails, the file and folder are byte-identical to before, no archive or `.hoardini-partial` exists, and 0 bytes are freed.
 - `lzx` and `lznt1` on a 4 MiB text file: content is identical, allocation after is under half of before, `freed_bytes` equals the difference, and the journaled undo is a `compact /u` command.
 - `lzx` on a folder of text files: `freed_bytes` equals the files' allocation before minus after.
+- One `lzx` card holding two folders: both items end `done`, each folder's files shrink below half their allocation with content unchanged, and each item's action row carries its own folder's saving.
 - `lzx` and `lznt1` on a folder holding a junction to another folder: the item fails naming the link, and neither the junction's target nor the folder's own files change allocation.
 
 ### ACT-DEDUPE-VERIFY: Duplicates are removed only after a fresh full-hash match
