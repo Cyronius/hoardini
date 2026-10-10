@@ -152,12 +152,37 @@ fn at_most_forty_biggest_folders_per_drive() {
     }
     let out = refresh(&d.c(), &d.fs, r"C:\", &RefreshOptions::default()).unwrap();
     assert!(out.completed);
-    let large = large_folders(&d.c(), r"C:\").unwrap();
+    let large = large_folders(&d.c(), &d.env, r"C:\").unwrap();
     assert_eq!(large.len(), 40);
     assert_eq!(large[0].path, r"C:\many");
     let names: Vec<&str> = large.iter().map(|l| l.path.as_str()).collect();
     assert!(names.contains(&r"C:\many\f44") && names.contains(&r"C:\many\f06"));
     assert!(!names.contains(&r"C:\many\f05") && !names.contains(&r"C:\many\f00"));
+}
+
+// Traces: MEM-LOCATION
+#[test]
+fn folders_inside_a_catalog_unit_take_no_slot_and_the_unit_counts_whole() {
+    let d = Drive::new();
+    let temp = r"C:\Users\tester\AppData\Local\Temp";
+    for i in 0..10u64 {
+        d.two_files(&format!(r"{temp}\claude\c--code-p{i}"), 3);
+    }
+    d.two_files(r"C:\Users\tester\.lmstudio\models\org\big", 10);
+    d.two_files(r"C:\data\set", 3);
+    d.sweep(T0);
+    let large = large_folders(&d.c(), &d.env, r"C:\").unwrap();
+    let names: Vec<&str> = large.iter().map(|l| l.path.as_str()).collect();
+    assert!(names.contains(&temp), "{names:?}");
+    assert!(
+        !names.iter().any(|n| n.starts_with(&format!(r"{temp}\"))),
+        "{names:?}"
+    );
+    assert!(names.contains(&r"C:\Users\tester\.lmstudio\models"));
+    assert!(!names.contains(&r"C:\Users\tester\.lmstudio\models\org\big"));
+    assert!(names.contains(&r"C:\data\set"));
+    let row = d.row(temp).unwrap();
+    assert_eq!(detail(&row).by.as_deref(), Some("catalog:temp-user"));
 }
 
 // Traces: MEM-LOCATION

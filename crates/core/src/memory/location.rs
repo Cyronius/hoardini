@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -44,7 +44,11 @@ pub struct Large {
     pub size: u64,
 }
 
-pub fn large_folders(conn: &Connection, volume: &str) -> anyhow::Result<Vec<Large>> {
+pub fn large_folders(
+    conn: &Connection,
+    env: &PolicyEnv,
+    volume: &str,
+) -> anyhow::Result<Vec<Large>> {
     let root = normalize_path(volume);
     let Some((vid, root_node, total, free)) = conn
         .query_row(
@@ -91,20 +95,24 @@ pub fn large_folders(conn: &Connection, volume: &str) -> anyhow::Result<Vec<Larg
         "SELECT MAX(CASE WHEN kind = 0 THEN sub_alloc ELSE alloc END) FROM node WHERE parent_id = ?1",
     )?;
     let mut paths = PathCache::default();
+    let mut decided: HashMap<String, bool> = HashMap::new();
     let mut out = Vec::new();
     for (id, size) in rows {
         let size = to_u64(size);
+        let Some(path) = paths.get(conn, id)? else {
+            continue;
+        };
+        if inside_a_unit(env, &root, &path, &mut decided) {
+            continue;
+        }
         let child = to_u64(
             biggest
                 .query_row([id], |r| r.get::<_, Option<i64>>(0))?
                 .unwrap_or(0),
         );
-        if child * 100 >= size * DOMINANT_CHILD_PCT {
+        if child * 100 >= size * DOMINANT_CHILD_PCT && !names_unit(env, &path, &mut decided) {
             continue;
         }
-        let Some(path) = paths.get(conn, id)? else {
-            continue;
-        };
         out.push(Large {
             node_id: id,
             path,
@@ -115,6 +123,34 @@ pub fn large_folders(conn: &Connection, volume: &str) -> anyhow::Result<Vec<Larg
         }
     }
     Ok(out)
+}
+
+// Ten scratch folders inside %TEMP% are one location, %TEMP%, not ten of the 40 slots.
+fn inside_a_unit(
+    env: &PolicyEnv,
+    root: &str,
+    path: &str,
+    decided: &mut HashMap<String, bool>,
+) -> bool {
+    let mut cur = path;
+    while let Some(i) = cur.rfind('\\') {
+        cur = &cur[..i];
+        if cur.len() <= root.len() {
+            return false;
+        }
+        if names_unit(env, cur, decided) {
+            return true;
+        }
+    }
+    false
+}
+
+fn names_unit(env: &PolicyEnv, path: &str, decided: &mut HashMap<String, bool>) -> bool {
+    *decided.entry(path.to_lowercase()).or_insert_with(|| {
+        env.catalog()
+            .lookup_exact(path)
+            .is_some_and(|e| e.unit != UnitKind::Container)
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -128,7 +164,7 @@ pub struct Assessment {
     pub text: String,
 }
 
-fn capitalized(s: &str) -> String {
+pub(crate) fn capitalized(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
         Some(f) => f.to_uppercase().chain(c).collect(),
@@ -136,7 +172,7 @@ fn capitalized(s: &str) -> String {
     }
 }
 
-fn first_sentence(s: &str) -> &str {
+pub(crate) fn first_sentence(s: &str) -> &str {
     match s.find(". ") {
         Some(i) => &s[..=i],
         None => s,
@@ -349,7 +385,7 @@ pub fn refresh_volume(
         .map(|m| (expanded(env, &m.key), m))
         .filter(|(p, _)| on_volume(p))
         .collect();
-    let large = large_folders(conn, &root)?;
+    let large = large_folders(conn, env, &root)?;
     let mut sum = RefreshSummary {
         large: large.len(),
         ..RefreshSummary::default()
