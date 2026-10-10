@@ -368,7 +368,7 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
   const selType = sel?.kind === "file" ? (sel.ext ?? "") : sel?.kind === "small" ? SMALL : null;
 
   return (
-    <div className="@container flex h-full min-h-0 w-full flex-col gap-2 overflow-y-auto p-3 @3xl:overflow-hidden" aria-label="Explore">
+    <div className="@container flex h-full min-h-0 w-full flex-col gap-2 overflow-y-auto p-3" aria-label="Explore">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <h2 className="font-[family-name:var(--font-display)] text-[length:var(--fs-md)] font-bold text-paper">Explore</h2>
         <nav aria-label="Folder path" className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5 text-[length:var(--fs-sm)]">
