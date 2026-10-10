@@ -33,7 +33,9 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
     fs.file(r"C:\pagefile.sys", 16 * GIB);
     fs.file(r"C:\hiberfil.sys", 12 * GIB);
     fs.file(r"C:\Program Files\App\app.exe", 5 * GIB);
-    fs.file(r"C:\code\covenant-agent\models\m.dat", 100 * GIB);
+    fs.file(r"C:\code\covenant-agent\.git\HEAD", 1024);
+    fs.file(r"C:\code\covenant-agent\models\tiny\a.dat", 60 * GIB);
+    fs.file(r"C:\code\covenant-agent\models\tiny\b.dat", 40 * GIB);
     fs.file(r"C:\code\covenant-agent\data\x.dat", 61 * GIB);
     fs.touch(r"C:\code\covenant-agent\data\x.dat", NOW - 2 * DAY);
     fs.file(r"C:\Users\tester\Pictures\2023\a.jpg", 25 * GIB);
@@ -41,6 +43,7 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
     fs.file(r"C:\Users\tester\.lmstudio\models\org\q\q.gguf", 20 * GIB);
     fs.file(r"C:\vm\disk.vhdx", 30 * GIB);
     fs.file(r"C:\small\s.dat", 512 * MIB);
+    fs.file(r"C:\code\small-proj\.git\objects\pack\p.pack", 2560 * MIB);
     let out = refresh(&db.conn().unwrap(), &fs, r"C:\", &RefreshOptions::default()).unwrap();
     assert!(out.completed);
     let vid: i64 = db
@@ -90,6 +93,7 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
                 3,
                 Some(ADMIN_HINT)
             ),
+            (r"c:\code\small-proj".to_string(), 2, None),
             (format!(r"{w}\temp"), 2, Some(ADMIN_HINT)),
         ]
     );
@@ -133,7 +137,8 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
             .contains("Hoardini never deletes anything here")
     );
     assert!(r.areas[7].why_not.starts_with("WinSxS component store: "));
-    assert!(r.areas[10].why_not.starts_with("System temp folder: "));
+    assert!(r.areas[10].unknown, "a pack file is shown as its project");
+    assert!(r.areas[11].why_not.starts_with("System temp folder: "));
 
     let stored = review::get(&db.conn().unwrap(), &r.id).unwrap().unwrap();
     assert_eq!(stored.areas, r.areas);

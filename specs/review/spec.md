@@ -118,7 +118,11 @@ units that no card took in full; what a card took, and units the exclusions of R
   are rows of their own. A kept unit's size leaves out the units found inside it and the `keep` catalog locations named
   literally inside it (`WinSxS`, `Installer`, `DriverStore`, `WindowsApps`), which become rows of their own. Any other
   unit joins the row of the deepest location row (MEM-LOCATION) at or above it that lies within the scope, is not the
-  volume root, and is not a `container`, or is its own row when there is none. A row's size is the sum of its units.
+  volume root, and is not a `container`. When that row is `unknown`, or has the category of a project row above it, the
+  unit joins the outermost such project row instead; a project is a folder holding `.git`, `Cargo.toml`, `package.json`,
+  `pyproject.toml`, `go.mod`, `pom.xml`, `build.gradle`, `CMakeLists.txt` or a `.sln`, so a project's unknown subfolders
+  are one row and the "What is this?" answer belongs to the project. A file or folder that no location row covers joins
+  the outermost project folder between the scope and it, or is its own row. A row's size is the sum of its units.
 - **What it is.** `label`, `category`, `verdict` and `actions` (the proposal kinds still allowed) come from the first of:
   a location row from the user, a job or the web; the unit's catalog entry, unless it is a `container` entry (actions
   none for `keep` or admin rows, else all four); any other location row; the location classifier. A `target` with no
@@ -135,7 +139,7 @@ units that no card took in full; what a card took, and units the exclusions of R
   move them off <drive>.`; otherwise none.
 
 **Acceptance criteria:**
-- On a fake `C:\` the areas are, in order: `C:\code\covenant-agent` 161 GiB (unknown, no verdict, no actions, why_not starting `Not identified` and ending with the 30-day sentence, since a file in it was written 2 days ago); `~\Pictures` 40 GiB (`photos`, `keep`, `[archive]`, hint `Add a destination to move them off C:.`); `C:\vm\disk.vhdx` 30 GiB (`vm-disk`); `~\.lmstudio\models` 20 GiB (why_not starting `Model files: `); `C:\pagefile.sys` 16 GiB (`system`, why_not starting `Page file: `, hint `Windows manages its size.`); `C:\hiberfil.sys` 12 GiB with its hint; the Windows folder 10 GiB (23 GiB less `Temp`, `SoftwareDistribution\Download` and `WinSxS`; no hint); `WinSxS` 8 GiB (why_not starting `WinSxS component store: `, hint `Windows can trim this itself.`); `C:\Program Files` 5 GiB; `SoftwareDistribution\Download` 3 GiB and the Windows `Temp` 2 GiB (why_not starting `System temp folder: `), both with the admin hint. A 512 MiB folder is not listed, and no card is made.
+- On a fake `C:\` the areas are, in order: `C:\code\covenant-agent` 161 GiB, one row although `models\tiny` inside it is a location row too, since it holds `.git` (unknown, no verdict, no actions, why_not starting `Not identified` and ending with the 30-day sentence, since a file in it was written 2 days ago); `~\Pictures` 40 GiB (`photos`, `keep`, `[archive]`, hint `Add a destination to move them off C:.`); `C:\vm\disk.vhdx` 30 GiB (`vm-disk`); `~\.lmstudio\models` 20 GiB (why_not starting `Model files: `); `C:\pagefile.sys` 16 GiB (`system`, why_not starting `Page file: `, hint `Windows manages its size.`); `C:\hiberfil.sys` 12 GiB with its hint; the Windows folder 10 GiB (23 GiB less `Temp`, `SoftwareDistribution\Download` and `WinSxS`; no hint); `WinSxS` 8 GiB (why_not starting `WinSxS component store: `, hint `Windows can trim this itself.`); `C:\Program Files` 5 GiB; `SoftwareDistribution\Download` 3 GiB with the admin hint; `C:\code\small-proj` 2.5 GiB (unknown), shown as the project that holds a 2.5 GiB `.git\objects\pack\p.pack`; and the Windows `Temp` 2 GiB (why_not starting `System temp folder: `) with the admin hint. A 512 MiB folder is not listed, and no card is made.
 - The review read back with `review::get` has the same areas.
 
 Test: `specs/review/tests/areas.rs`.
@@ -202,6 +206,7 @@ progress and 400 without a path. This is the only place the review calls the mod
 2. `curl -N -X POST -H "Authorization: Bearer dev" -d "{\"path\":\"<a folder in the index>\"}" http://127.0.0.1:7261/api/review/look-closer`: the stream starts with `RUN_STARTED` for thread `main`, carries the model's tool calls and answer, and ends with `RUN_FINISHED`.
 3. `GET /api/thread` lists the user message `What is <folder>? Look inside and tell me whether to keep it, delete it, or move it elsewhere.` followed by the answer.
 4. While a run streams, a second look-closer call answers 409; a body without `path` answers 400.
+(2026-10-09: steps 1–4 pass against a debug `hoardini serve` on a scratch index of `C:\code` and `~\AppData\Local`, with LM Studio `minicpm5-2b` as a small provider: for `C:\code\q4k-test` the stream ran `RUN_STARTED` on thread `main`, one `inspect` call, the answer and `RUN_FINISHED` in 184 s; `GET /api/thread` lists the question and the answer; a second call during a run answered 409, and a body without `path` 400.)
 
 ## Defaults
 

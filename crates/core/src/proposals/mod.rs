@@ -8,6 +8,7 @@ use crate::policy::{self, Action, FsState, ItemKind, PolicyEnv, Verdict};
 use crate::store::{Db, now_ms};
 
 pub const SMALL_BYTES: i64 = 50 * 1024 * 1024;
+const EXAMINE_THREADS: usize = 8;
 
 // Both bounds, so a card made only of small files still ticks its biggest ones.
 pub fn is_small(alloc: i64, total: i64) -> bool {
@@ -360,10 +361,10 @@ fn build(
         });
     }
 
+    let examined = examine_all(db, env, &accepted, req.kind.action())?;
     let mut rows = Vec::new();
-    for (path, i) in accepted {
+    for ((path, i), ex) in accepted.into_iter().zip(examined) {
         let item = &req.items[i];
-        let ex = policy::examine(&conn, env, &path, req.kind.action())?;
         let note = memory::note_covering_with(&conn, &path, &env.profile)?.map(|m| m.text);
         rows.push(Row {
             verdict: item.verdict.map(|v| v.capped(ex.cap)),
@@ -449,6 +450,39 @@ fn build(
     tx.commit()?;
     let p = load(&conn, &id)?.ok_or_else(|| anyhow::anyhow!("proposal vanished"))?;
     Ok(Ok(p))
+}
+
+// The open-file check waits on Restart Manager per item, so a long card checks its items on a few threads.
+fn examine_all(
+    db: &Db,
+    env: &PolicyEnv,
+    paths: &[(String, usize)],
+    action: Action,
+) -> anyhow::Result<Vec<policy::Examined>> {
+    let one = |chunk: &[(String, usize)]| -> anyhow::Result<Vec<policy::Examined>> {
+        let conn = db.conn()?;
+        chunk
+            .iter()
+            .map(|(p, _)| policy::examine(&conn, env, p, action))
+            .collect()
+    };
+    if paths.len() <= EXAMINE_THREADS {
+        return one(paths);
+    }
+    std::thread::scope(|s| {
+        let handles: Vec<_> = paths
+            .chunks(paths.len().div_ceil(EXAMINE_THREADS))
+            .map(|chunk| s.spawn(move || one(chunk)))
+            .collect();
+        let mut out = Vec::with_capacity(paths.len());
+        for h in handles {
+            out.extend(
+                h.join()
+                    .map_err(|_| anyhow::anyhow!("checking the items failed"))??,
+            );
+        }
+        Ok(out)
+    })
 }
 
 pub fn get(db: &Db, id: &str) -> anyhow::Result<Option<Proposal>> {

@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use super::cards::{Cx, knowledge, last_change};
@@ -14,6 +17,16 @@ pub const AREA_MIN_BYTES: u64 = 1 << 30;
 pub const MAX_AREAS: usize = 30;
 pub const RECENT_DAYS: i64 = 30;
 pub const ADMIN_HINT: &str = "Needs admin; Hoardini will offer this with Windows cleanups.";
+const PROJECT_MARKERS: &[&str] = &[
+    ".git",
+    "Cargo.toml",
+    "package.json",
+    "pyproject.toml",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+    "CMakeLists.txt",
+];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Area {
@@ -43,7 +56,6 @@ struct Row<'a> {
     loc: Option<&'a Memory>,
     admin: bool,
     not_build: bool,
-    model: bool,
 }
 
 fn same_or_under(a: &str, p: &str) -> bool {
@@ -65,6 +77,7 @@ pub fn collect<'a>(
     volume: &str,
 ) -> anyhow::Result<Vec<Area>> {
     let mut rows: Vec<Row<'a>> = Vec::new();
+    let mut projects: HashMap<String, bool> = HashMap::new();
     let catalog = cx.env.catalog();
     for l in left {
         let u = l.unit;
@@ -86,7 +99,6 @@ pub fn collect<'a>(
                         entry: Some(e),
                         admin: false,
                         not_build: false,
-                        model: false,
                     });
                 }
             }
@@ -94,8 +106,8 @@ pub fn collect<'a>(
         let system = matches!(area_of(cx.env, &u.path), Some(PolicyArea::System { .. }));
         let own_row =
             l.admin || l.not_build || (u.why == Why::Kept && (l.entry.is_some() || system));
-        let group = if own_row {
-            None
+        let rows_above: Vec<&(String, Memory)> = if own_row {
+            Vec::new()
         } else {
             cx.locations
                 .iter()
@@ -105,18 +117,36 @@ pub fn collect<'a>(
                         && !p.eq_ignore_ascii_case(volume)
                         && m.detail.as_ref().is_some_and(|d| d.category != "container")
                 })
-                .max_by_key(|(p, _)| p.len())
+                .collect()
         };
-        let (path, loc, entry) = match group {
+        let category = |m: &Memory| m.detail.as_ref().map(|d| d.category.clone());
+        let deepest = rows_above.iter().max_by_key(|(p, _)| p.len()).copied();
+        // A subfolder that is unknown, or of the project's own kind, says less than the project does.
+        let project = deepest.and_then(|(_, dm)| {
+            let inner = category(dm);
+            rows_above
+                .iter()
+                .filter(|(p, m)| {
+                    (inner.as_deref() == Some("unknown") || category(m) == inner)
+                        && *projects
+                            .entry(p.to_lowercase())
+                            .or_insert_with(|| is_project(cx, p))
+                })
+                .min_by_key(|(p, _)| p.len())
+                .copied()
+        });
+        let (path, loc, entry) = match project.or(deepest) {
             Some((p, m)) => (p.clone(), Some(m), None),
+            None if !own_row && u.why == Why::Leaf => {
+                match project_folder(cx, root, &u.path, &mut projects) {
+                    Some(p) => (p, None, None),
+                    None => (u.path.clone(), cx.location_at(&u.path), l.entry),
+                }
+            }
             None => (u.path.clone(), cx.location_at(&u.path), l.entry),
         };
-        let model = u.why == Why::ModelStore;
         match rows.iter_mut().find(|r| r.path.eq_ignore_ascii_case(&path)) {
-            Some(r) => {
-                r.size += own;
-                r.model |= model;
-            }
+            Some(r) => r.size += own,
             None => rows.push(Row {
                 path,
                 size: own,
@@ -124,7 +154,6 @@ pub fn collect<'a>(
                 loc,
                 admin: l.admin,
                 not_build: l.not_build,
-                model,
             }),
         }
     }
@@ -132,6 +161,39 @@ pub fn collect<'a>(
     rows.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
     rows.truncate(MAX_AREAS);
     rows.iter().map(|r| describe(cx, r, volume)).collect()
+}
+
+fn project_folder(
+    cx: &Cx,
+    root: &str,
+    path: &str,
+    known: &mut HashMap<String, bool>,
+) -> Option<String> {
+    let mut chain = Vec::new();
+    let mut cur = path;
+    while let Some(i) = cur.rfind('\\') {
+        cur = &cur[..i];
+        if cur.len() <= root.len() {
+            break;
+        }
+        chain.push(cur.to_string());
+    }
+    chain.into_iter().rev().find(|p| {
+        *known
+            .entry(p.to_lowercase())
+            .or_insert_with(|| is_project(cx, p))
+    })
+}
+
+fn is_project(cx: &Cx, path: &str) -> bool {
+    cx.lister.list_dir(Path::new(path)).is_ok_and(|es| {
+        es.iter().any(|e| {
+            PROJECT_MARKERS
+                .iter()
+                .any(|m| e.name.eq_ignore_ascii_case(m))
+                || e.name.to_ascii_lowercase().ends_with(".sln")
+        })
+    })
 }
 
 fn describe(cx: &Cx, r: &Row, volume: &str) -> anyhow::Result<Area> {
@@ -180,7 +242,7 @@ fn describe(cx: &Cx, r: &Row, volume: &str) -> anyhow::Result<Area> {
         (a.label, a.category, a.verdict, a.actions, a.text)
     };
     let unknown = category == "unknown";
-    let mut why_not = if r.model || matches!(category.as_str(), "model-store" | "model-weights") {
+    let mut why_not = if matches!(category.as_str(), "model-store" | "model-weights") {
         "Model files: Hoardini proposes them once it can show where else a copy exists.".to_string()
     } else if category == "vm-disk" {
         "A virtual machine's disk: deleting it deletes the machine inside.".to_string()
@@ -231,7 +293,10 @@ fn hint(cx: &Cx, r: &Row, category: &str, volume: &str) -> Option<String> {
         _ => {}
     }
     if matches!(category, "photos" | "documents") && cx.destination.is_none() {
-        let drive = volume.trim_end_matches('\\');
+        let drive = volume
+            .get(..2)
+            .filter(|d| d.ends_with(':'))
+            .unwrap_or(volume);
         return Some(format!("Add a destination to move them off {drive}."));
     }
     None
