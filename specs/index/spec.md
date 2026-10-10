@@ -2,7 +2,7 @@
 
 Canonical spec for the indexer (`hoardini-core::index`, `hoardini index`). Design: `.claude/plans/hoardini-design.md` §5.1.
 
-Tests: `specs/index/tests/index.rs` and its modules `journal.rs`, `compact.rs`, and `volumes.rs` (`cargo test -p hoardini-specs --test index`); INDEX-VOLUMES also has server tests in `specs/srv/tests/srv.rs`. Most run
+Tests: `specs/index/tests/index.rs` and its modules `journal.rs`, `compact.rs`, and `volumes.rs` (`cargo test -p hoardini-specs --test specs index::`); INDEX-VOLUMES also has server tests in `specs/srv/tests/srv.rs`. Most run
 against `index::FakeFs`, an in-memory volume with a fake change journal; the `real_*` tests run the real lister
 (`index::WinLister`) and, for the journal, the real C: change journal (`index::WinJournal`) on a temp directory.
 

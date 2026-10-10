@@ -2,7 +2,7 @@
 
 Canonical spec for the agent loop (`crates/agent/src/run.rs`), its stored threads (`thread.rs`), the tool registry (`tools/`) and the system prompt (`prompts/`). Design reference: `hoardini-design.md` sections 2, 5.4, 5.12 and 7; the AG-UI contract and approval flow are in `hoardini-impl.md`.
 
-Requirement tests: `specs/agent/tests/agent.rs` (`cargo test -p hoardini-specs --test agent`). The executor half of AGENT-NO-DIRECT and AGENT-APPROVAL-KEYED are tested in `specs/agent/tests/approval.rs`.
+Requirement tests: `specs/agent/tests/agent.rs` (`cargo test -p hoardini-specs --test specs agent::`). The executor half of AGENT-NO-DIRECT and AGENT-APPROVAL-KEYED are tested in `specs/agent/tests/approval.rs`.
 
 ### AGENT-NO-DIRECT: No agent tool changes the filesystem
 **Applies to:** hoardini
@@ -340,7 +340,7 @@ The loop shall complete a tool-using answer against a real OpenAI-compatible loc
 
 ## Eval harness (design 5.12 gate)
 
-`hoardini eval` builds a fixture disk shaped like the author's PC, asks 20 scripted questions through `run_agent`, and scores each transcript. The `q4nx` case ("What are .q4nx files?") runs with web search on: for that case only, an active SearXNG provider points at a loopback stand-in (`eval::search_standin`) that answers every query with the recorded results in `crates/agent/src/eval/q4nx_search.json`, so the eval stays offline and every model reads the same pages; small profiles skip the case, since their toolset has no `web_search`. Code: `crates/agent/src/eval.rs` and `crates/agent/src/eval/`; CLI: `crates/cli/src/eval_cmd.rs`. Requirement tests: `specs/agent/tests/eval.rs` (part of `--test agent`), and for AGENT-EVAL-SCORING also the in-crate tests of `crates/agent/src/eval/score.rs`.
+`hoardini eval` builds a fixture disk shaped like the author's PC, asks 20 scripted questions through `run_agent`, and scores each transcript. The `q4nx` case ("What are .q4nx files?") runs with web search on: for that case only, an active SearXNG provider points at a loopback stand-in (`eval::search_standin`) that answers every query with the recorded results in `crates/agent/src/eval/q4nx_search.json`, so the eval stays offline and every model reads the same pages; small profiles skip the case, since their toolset has no `web_search`. Code: `crates/agent/src/eval.rs` and `crates/agent/src/eval/`; CLI: `crates/cli/src/eval_cmd.rs`. Requirement tests: `specs/agent/tests/eval.rs` (part of `--test specs agent::`), and for AGENT-EVAL-SCORING also the in-crate tests of `crates/agent/src/eval/score.rs`.
 
 ### AGENT-EVAL-SCORING: Deterministic scoring of a transcript
 **Applies to:** hoardini

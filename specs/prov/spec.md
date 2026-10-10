@@ -56,7 +56,7 @@ Outgoing requests shall omit a blank or whitespace-only `model`, and shall strip
 
 ## Built-in model (design 5.12)
 
-The "Built-in" provider runs a pinned GGUF in a `llama-server` child. Code: `crates/server/src/builtin.rs` (supervisor, download job, routes `/api/builtin*`), UI `ui/src/drawer/BuiltinCard.tsx`. Requirement tests: `specs/prov/tests/builtin.rs` (part of `--test prov`), against a fake launcher that stands in for llama-server. Download and hash checks are RUNTIME-PINNED-HASH. The choice of default model is AGENT-EVAL-GATE.
+The "Built-in" provider runs a pinned GGUF in a `llama-server` child. Code: `crates/server/src/builtin.rs` (supervisor, download job, routes `/api/builtin*`), UI `ui/src/drawer/BuiltinCard.tsx`. Requirement tests: `specs/prov/tests/builtin.rs` (part of `--test specs prov::`), against a fake launcher that stands in for llama-server. Download and hash checks are RUNTIME-PINNED-HASH. The choice of default model is AGENT-EVAL-GATE.
 
 ### PROV-BUILTIN-LAZY: The child starts on the first chat turn
 **Applies to:** hoardini-server

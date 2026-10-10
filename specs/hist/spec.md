@@ -2,7 +2,7 @@
 
 Canonical spec for `hoardini-core::history` and `hoardini changes`. Design: `.claude/plans/hoardini-design.md` §5.2.
 
-Tests: `specs/hist/tests/hist.rs` (`cargo test -p hoardini-specs --test hist`).
+Tests: `specs/hist/tests/hist.rs` (`cargo test -p hoardini-specs --test specs hist::`).
 
 ## Terms
 

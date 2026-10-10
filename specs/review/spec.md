@@ -2,7 +2,7 @@
 
 The review sweeps a drive (or a folder) with no model call and lists what could go and what is big but stays.
 Plan (done): `specs/review/archive/review-first.md`. Code: `crates/core/src/review`, routes in `crates/server/src/review.rs`. Tests: `specs/review/tests/review.rs`
-(`cargo test -p hoardini-specs --test review`).
+(`cargo test -p hoardini-specs --test specs review::`).
 
 ### REVIEW-UNITS: Items resolve to deletable units
 **Applies to:** hoardini

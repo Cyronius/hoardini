@@ -2,7 +2,7 @@
 
 Canonical spec for `hoardini-server` and `hoardini serve`. Design: `.claude/plans/hoardini-design.md` §4, §5.1, §7; route table: `hoardini-impl.md`.
 
-Tests: `specs/srv/tests/srv.rs` (`cargo test -p hoardini-specs --test srv`). The route list the tests walk is exported by `hoardini_server::route_list()`, which is also what builds the router.
+Tests: `specs/srv/tests/srv.rs` (`cargo test -p hoardini-specs --test specs srv::`). The route list the tests walk is exported by `hoardini_server::route_list()`, which is also what builds the router.
 
 ## Requirements
 

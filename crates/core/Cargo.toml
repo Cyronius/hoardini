@@ -30,6 +30,7 @@ tracing = "0.1.44"
 uuid = { version = "1.27.0", features = ["v7", "serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 zstd = "0.14.0"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 tempfile = "3.27.0"

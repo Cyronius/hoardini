@@ -20,6 +20,7 @@ thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tracing = "0.1.44"
 uuid = { version = "1.27.0", features = ["v7", "serde"] }
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "test-util"] }
