@@ -181,9 +181,15 @@ run to their end. Restore points are counted from `vssadmin list shadows` by the
 For `leftovers` the elevated side derives its targets itself, from the catalog compiled into the exe and the Windows and
 ProgramData folders as Windows reports them (`hoardini_win::windows_directory`, `program_data_directory`), never from
 the command line, the proposal or the environment (`leftover_targets`). Inside each target (`syscleanup::clear_contents`)
-it deletes only files whose last write is more than 24 hours old, each opened with no sharing so a file anything holds
-open is left (`hoardini_win::delete_unless_open`, which also clears read-only); it never follows or removes a link or
-junction, removes a subfolder only when it was untouched for 24 hours and is empty afterwards, keeps the targets
+it walks by handle (`hoardini_win::NoFollow`): the target and every folder below it are opened as themselves (never
+through a final link) and listed from that handle, and every child is opened relative to its parent's handle
+(`NtCreateFile` with the parent as root directory), so a folder swapped for a junction after it was listed or while its
+contents are cleared is held as the junction and never walked through. It deletes only files whose last write is more
+than 24 hours old, each opened with no sharing so a file anything holds open is left, and deleted through that same
+handle (POSIX semantics, read-only cleared), the age taken from that handle too; nothing is deleted unless the handle's
+final path (`GetFinalPathNameByHandleW`) is still strictly under the target's own, so a folder moved out of the target
+mid-walk keeps its files. It never follows or removes a link or junction, removes a subfolder (through its own handle)
+only when it was untouched for 24 hours and is empty afterwards, keeps the targets
 themselves, and reports `N files deleted (<size>); left: <n> in use, <n> newer than a day, <n> could not be deleted`.
 `Executor::set_system_runner` replaces `WindowsRunner` in tests. Tests: `specs/act/tests/system.rs`.
 
@@ -194,6 +200,8 @@ themselves, and reports `N files deleted (<size>); left: <n> in use, <n> newer t
 - The helper command line for five operations is exactly `system-cleanup --result "<file>" "component-store" "restore-points=D:" "hibernation-reduced" "compact-vhdx=C:\wsl\Ubuntu Disk\ext4.vhdx" "leftovers"` and parses back to the same operations; the Recycle Bin cannot be put on it; `recycle-bin`, `format-c`, `restore-points=C:\`, a non-`.vhdx` path, a relative path, a UNC path, `leftovers=C:\Users\me\Documents`, `leftovers:C:\Users`, `clear-folder=C:\Users`, and a relative result file are refused.
 - Approving a review card's `leftovers` with a fake runner hands the elevated side exactly `[leftovers]`, and the item ends `done` with the helper's detail and freed bytes.
 - `clear_contents` of a scratch `Temp` deletes the three files written 3 days ago (one read-only, one in an old subfolder, which goes too) and reports `3 files deleted (8 B); left: 1 in use, 1 newer than a day`; a file this test holds open with no sharing, a file written now, the folder itself, and a junction inside and the file it points to are all still there. A 5-day-old `MEMORY.DMP` target is deleted on its own.
+- With a test-only hook after a folder is listed (`crates/core/src/syscleanup/helper.rs`): when `Temp\a` is renamed to `Temp\a-moved` and a junction `Temp\a` to an outside folder takes its place, the outside folder's 3-day-old `x.txt` is still there and `Temp\a-moved\x.txt` is the one deleted (1 file, 0 failed); when `Temp\a` is instead moved outside the target, its `x.txt` is still there and counts as could not be deleted.
+- `NoFollow` (`crates/win/src/nofollow.rs`): a junction opened through its parent's handle reports itself as a reparse point and its own listing never shows the target's files; a file's handle reports the creation, write and change times set on it, a final path under its folder's, and `None` for a second no-sharing open; `path_inside` holds only strictly below a folder on a component boundary.
 - A `vssadmin` listing with two shadow device paths (one under a German label) counts 2; "No items found" counts 0.
 
 ### ACT-WINDOWS-CLEANUP: Windows' own tools free the space, behind one admin prompt
