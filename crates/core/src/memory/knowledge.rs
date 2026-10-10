@@ -175,6 +175,35 @@ pub fn upsert_with(
     Ok((m, true))
 }
 
+// The user vouches for what a row says the folder or type is; a verdict still needs the catalog, a job or the user's answer.
+pub fn confirm(
+    conn: &Connection,
+    id: i64,
+    now: i64,
+    profile: &str,
+) -> anyhow::Result<Option<Memory>> {
+    let Some(m) = get(conn, id)? else {
+        return Ok(None);
+    };
+    let Some(detail) = m.detail else {
+        anyhow::bail!("memory {id} is a note; only location and file-type rows can be confirmed");
+    };
+    let detail = Detail {
+        verdict: None,
+        actions: Vec::new(),
+        ..detail
+    };
+    let k = Knowledge {
+        scope: m.scope,
+        key: m.key,
+        kind: m.kind,
+        text: m.text,
+        source: "user".into(),
+        detail,
+    };
+    upsert_with(conn, k, now, profile).map(|(m, _)| Some(m))
+}
+
 pub(crate) fn set_detail(conn: &Connection, id: i64, detail: &Detail) -> anyhow::Result<()> {
     conn.execute(
         "UPDATE memory SET detail_json = ?1 WHERE id = ?2",

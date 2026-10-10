@@ -1668,3 +1668,138 @@ async fn reveal_refuses_paths_off_the_watched_drives_and_paths_that_do_not_exist
     }
     let _ = f.h.shutdown.send(());
 }
+
+// Traces: SRV-LEARNED, MEM-LEARN-JOB
+#[tokio::test(flavor = "multi_thread")]
+async fn a_finished_job_lists_what_it_learned_and_the_chip_routes_undo_and_confirm() {
+    use hoardini_core::memory::knowledge::{Detail, remember_filetype};
+    use hoardini_core::proposals::{self, NewItem, NewProposal, ProposalKind};
+    let f = Fixture::new().await;
+    let work = f.dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let go = work.join("go.bin");
+    let stay = work.join("stay.bin");
+    std::fs::write(&go, vec![1u8; 8192]).unwrap();
+    std::fs::write(&stay, vec![2u8; 8192]).unwrap();
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let item = |p: &Path| NewItem {
+        path: p.to_string_lossy().into_owned(),
+        verdict: None,
+        reason: None,
+    };
+    let p = proposals::create(
+        &db,
+        NewProposal {
+            conversation_id: Some("main".into()),
+            tool_call_id: None,
+            kind: ProposalKind::Delete,
+            destination_id: None,
+            format: None,
+            dedupe: None,
+            summary: "two files".into(),
+            items: vec![item(&go), item(&stay)],
+        },
+    )
+    .unwrap();
+    let (_, pending) = f
+        .call("GET", &format!("/api/proposals/{}", p.id), None)
+        .await;
+    assert_eq!(pending["learned"], json!([]));
+
+    let mut stream = f.stream().await;
+    let mut buf = String::new();
+    let go_id = p
+        .items
+        .iter()
+        .find(|i| i.path.ends_with("go.bin"))
+        .unwrap()
+        .id;
+    let (st, r) = f
+        .call(
+            "POST",
+            &format!("/api/proposals/{}/approve", p.id),
+            Some(json!({"item_ids": [go_id]})),
+        )
+        .await;
+    assert_eq!(st, 200, "{r}");
+    let job_id = r["job_id"].as_str().unwrap().to_string();
+    loop {
+        let fr = next_frame(&mut stream, &mut buf).await;
+        if fr["type"] == "job"
+            && fr["id"] == job_id.as_str()
+            && matches!(fr["status"].as_str(), Some("done" | "failed" | "cancelled"))
+        {
+            break;
+        }
+    }
+    let (_, done) = f
+        .call("GET", &format!("/api/proposals/{}", p.id), None)
+        .await;
+    let learned = done["learned"]
+        .as_array()
+        .expect("learned is listed by the job's end");
+    assert_eq!(learned.len(), 1, "{done}");
+    let text = learned[0]["text"].as_str().unwrap();
+    assert!(text.starts_with(r"go.bin in ~\"), "{text}");
+    assert!(
+        text.contains(" — cleaned 8.0 KB on ")
+            && text.ends_with("; 1 item you left unticked is kept"),
+        "{text}"
+    );
+    let memory_id = learned[0]["memory_id"].as_i64().unwrap();
+    let (_, t) = f.call("GET", "/api/thread", None).await;
+    assert_eq!(t["proposals"][&p.id]["learned"], done["learned"]);
+
+    let undo = format!("/api/proposals/{}/learned/{memory_id}", p.id);
+    let (st, v) = f.call("DELETE", &undo, None).await;
+    assert_eq!((st, v), (200, json!({"ok": true})));
+    let (_, after) = f
+        .call("GET", &format!("/api/proposals/{}", p.id), None)
+        .await;
+    assert_eq!(after["learned"], json!([]));
+    assert_eq!(f.call("DELETE", &undo, None).await.0, 404);
+
+    let (ty, _) = remember_filetype(
+        &db.conn().unwrap(),
+        "q4nx",
+        ".q4nx: NPU model weights (FastFlowLM).",
+        "web:https://example.test/flm",
+        Detail {
+            category: "model-weights".into(),
+            app: Some("FastFlowLM".into()),
+            ..Detail::default()
+        },
+        1,
+    )
+    .unwrap();
+    let (st, m) = f
+        .call("POST", &format!("/api/memory/{}/confirm", ty.id), None)
+        .await;
+    assert_eq!(st, 200, "{m}");
+    assert_eq!(
+        (m["id"].as_i64(), &m["source"], &m["pinned"]),
+        (Some(ty.id), &json!("user"), &json!(true))
+    );
+    assert_eq!(m["text"], ".q4nx: NPU model weights (FastFlowLM).");
+    assert_eq!(m["detail"]["app"], "FastFlowLM");
+    let (st, note) = f
+        .call(
+            "POST",
+            "/api/memory",
+            Some(json!({"scope": "global", "key": "n", "kind": "fact", "text": "a note"})),
+        )
+        .await;
+    assert_eq!(st, 200);
+    assert_eq!(
+        f.call("POST", &format!("/api/memory/{}/confirm", note["id"]), None)
+            .await
+            .0,
+        400
+    );
+    assert_eq!(
+        f.call("POST", "/api/memory/999999/confirm", None).await.0,
+        404
+    );
+    drop(stream);
+    let _ = f.h.shutdown.send(());
+}
