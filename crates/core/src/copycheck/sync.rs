@@ -85,9 +85,9 @@ impl CopyCheck for SyncCheck {
         })
     }
 
-    // A file inside can fall out of sync without the folder's own id, size or mtime moving.
-    fn still_valid(&self, _cx: &Cx<'_>, s: &Subject, _r: &CopyResult) -> bool {
-        !s.dir
+    // Pinning, freeing or falling out of sync moves no id, size or mtime, and the ask is cheap.
+    fn still_valid(&self, _cx: &Cx<'_>, _s: &Subject, _r: &CopyResult) -> bool {
+        false
     }
 
     fn find(&self, cx: &Cx<'_>, s: &Subject) -> anyhow::Result<Find> {

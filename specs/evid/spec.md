@@ -108,11 +108,15 @@ Every check returns `{check, locator, confidence, checked_ms, detail}`, with `co
 org/repo on Hugging Face", "in winget as Balena.Etcher 2.1.7", "synced to OneDrive"); `detail.pending` marks an answer
 that waits on the background hash (`hash`), the sync engine (`sync`), or a folder's own files (`files`). Results are
 stored in `copy_check`, keyed by volume, path, and check, with the file id, size (a folder's indexed logical total), and
-mtime they were made for. `results_for(path)` returns only rows that still match the path's current id, size, and mtime.
+mtime they were made for. A folder's `archive` or `huggingface` answer also stores its contents' fingerprint
+(`detail.fingerprint`: file count, bytes and newest mtime inside, `copycheck::fingerprint`), since a rewrite inside moves
+none of the folder's own id, mtime or indexed size; such an answer holds only while the fingerprint does (a found copy with
+no fingerprint does not hold). `results_for(path)` returns only rows that still match the path's current id, size, and mtime.
 `check_subject` reuses a matching row instead of running the check again, unless the row is pending and what it waits on
 has arrived (a row waiting on the sync engine is always re-run), or the check says it went stale through something other
-than the path (`CopyCheck::still_valid`: a duplicate's twin changed, git state, a sync folder's files, a moved archive
-copy). A check that finds the path is not its business (`Find::Skip`) drops its old row. The confidence decides the effect (`copycheck::effect`, `copycheck::verdict_for`):
+than the path (`CopyCheck::still_valid`: a duplicate's twin changed, git state, sync state, a moved archive copy, a
+folder's fingerprint). `identical_for` (the policy's re-check) runs the offline checks again and takes a stored online
+answer only while its check's `still_valid` holds. A check that finds the path is not its business (`Find::Skip`) drops its old row. The confidence decides the effect (`copycheck::effect`, `copycheck::verdict_for`):
 
 | Confidence | Effect | Verdict it allows |
 |---|---|---|
@@ -133,8 +137,10 @@ A knowledge row (memory) whose `detail_json.copy_hint` names a check (`"huggingf
 covers and tells it where to look first. A hint never sets or raises a confidence.
 
 `run_volume(db, env, registry, root, go)` is one background pass: first the volume's stored answers for paths that no
-longer exist are deleted (`copycheck::prune`, counted as `RunReport.pruned`), then every candidate is checked, then each
-one whose answer waits on a hash gets a SHA-256, biggest first, and is checked again. Hashes are read through the atime-preserving handle
+longer exist are deleted (`copycheck::prune`, counted as `RunReport.pruned`; nothing is pruned while the volume root
+itself cannot be read, so an unplugged drive keeps its answers), then every candidate is checked, then each one whose
+answer waits on a hash, and each file a folder's answer lists in `detail.hash_files` (`Outcome.hash_files`), gets a
+SHA-256, biggest first, and the waiting files and then folders are checked again. Hashes are read through the atime-preserving handle
 (EVID-ATIME-PRESERVE), stored in `file_hash` keyed by volume and file id, and reused while size and mtime hold; a file
 that changes while it is hashed gets no row. Hugging Face blobs (`models--*\blobs\<sha256>`) and Ollama blobs
 (`sha256-<hex>`) are named by their hash and are never read. `go` is polled between files and between 1 MiB chunks.
@@ -149,6 +155,8 @@ over all watched volumes in meta `copy_online_waiting` after each full pass (`se
 - `run_volume` hashes the four big files, the 120 MiB pair first; each `file_hash` row equals the SHA-256 of the file's bytes, and afterwards each file's `dup` answer is `identical` with its twin as the locator. A second pass hashes nothing; after one file is appended to, the next pass hashes only that file.
 - When `go` turns false inside the first hash, `run_volume` reports `stopped` with nothing hashed and no `file_hash` row; the next pass hashes both files.
 - After `b101.bin` is deleted, the next `run_volume` reports `pruned` 1 and no `copy_check` row is left for that path, while the changed `a120.bin` keeps its rows.
+- `prune` of a volume whose root does not exist deletes nothing; once the root exists, the row for its missing file goes.
+- An archived folder that is `identical` becomes `same-name-and-size` after a file inside is rewritten with the same size, and `identical_for` no longer returns it; an LM Studio folder `identical` to its repo is no longer `identical` once its small LFS file is rewritten in place.
 - A file named like a hub blob whose bytes do not match its name keeps the name as its hash, and no `file_hash` row is written for it.
 - With a glob row `**\*.q4nx` carrying `{"copy_hint": "huggingface:acme"}`, the Hugging Face check applies to `x.q4nx` and its one request is `/api/models?author=acme&limit=10`; without the row it does not apply.
 
@@ -162,7 +170,7 @@ false), an online check that applies is reported as waiting (`Outcome.waiting`, 
 stays false for its paths; once asked with the service off, the check simply does not run. Offline checks (duplicate,
 archive, sync, git, Ollama, catalog) never look at consent. Requests that go out carry repo ids, search terms made from
 file names, and package names, never a local hash, a file size, a local path, or file contents: the remote hash is
-fetched and compared on this machine.
+fetched and compared on this machine. A content-addressed blob (named by its SHA-256) is never searched for by name.
 
 **Acceptance criteria:**
 - With consent unasked, checking an LM Studio GGUF sends no request to the Hugging Face stand-in, reports `huggingface` as waiting, still runs the offline `dup` check, and `only_copy` is false.
@@ -211,7 +219,8 @@ now is a newer one: `same-name-and-size` when its size equals the recorded size,
 one, and other providers), read from `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager\<id>\UserSyncRoots`
 with the provider named from the registration id. A file is `identical` when the sync engine marks its placeholder in
 sync (`CfGetPlaceholderInfo`, opened for attributes with no recall), with the provider as the locator and the note
-"synced to <provider>". A folder is `identical` when every file in it (up to 20,000) is in sync, and is walked again on every pass, since
+"synced to <provider>". Pinning, freeing or falling out of sync changes neither id, size nor mtime, so a stored sync
+answer is never reused: the check runs again each time. A folder is `identical` when every file in it (up to 20,000) is in sync, and is walked again on every pass, since
 a file inside can fall out of sync without the folder changing. Shell metadata the engines never upload (`desktop.ini`,
 `thumbs.db`, `.DS_Store`) is not counted, and a folder of more than 20,000 files is `none` with a note saying each file
 is checked when it is freed. A file set to "Always keep on this device", or a folder holding one, is still `identical`
@@ -222,6 +231,7 @@ against a fake one.
 **Acceptance criteria:**
 - With a fake root `<tmp>\OneDrive` (provider OneDrive): an in-sync file is `identical`, locator `OneDrive`, note "synced to OneDrive"; a file the fake reports as not in sync, and a plain file that is no placeholder, are `none` pending `sync`; a file outside the root gets no `sync` answer.
 - A folder whose two files are in sync is `identical` although it also holds a `desktop.ini` that is no placeholder; with one of the two not in sync it is `none` with "1 of 2 files not in sync".
+- A file answered while not pinned reads as pinned in `sync_result` once the fake reports it pinned.
 - Provider names: `OneDrive!S-1-...!Personal|x` is OneDrive, `Dropbox!...` Dropbox, `iCloudDrive!...` iCloud Drive (`hoardini_win::provider_display_name`, in-crate test); an ordinary file is no placeholder (`placeholder_info` gives `None`).
 
 **Verification (manual, live provider, read-only):**
@@ -265,15 +275,19 @@ hint names it for. It looks for the repo in this order, each source only a place
 repo and revision; LM Studio's publisher and repo), the GGUF header (EVID-GGUF-SOURCE), a sibling `config.json`
 `_name_or_path` or README `base_model`, a hint naming a repo, and, when none of those names the file's exact path,
 `GET /api/models?search=<file name without its quant tag>&limit=10` (`&filter=gguf` for GGUF; a hint naming an org adds
-`author=<org>`, and a term under 3 characters is left out), taking up to 8 repos. For
+`author=<org>`, and a term under 3 characters is left out; never for a content-addressed blob), taking up to 8 repos. For
 each candidate it reads `GET /api/models/{repo}/tree/{rev}?recursive=1` (following `Link: rel="next"`; a missing revision
 falls back to `main`; trees are cached in the process for an hour) and takes the entry with the same path (or the same file name, or
 for a hub blob the same LFS oid) and the same size: `same-name-and-size` pending `hash` until the local SHA-256 is known,
 then `identical` when it equals the entry's `lfs.oid` and `none` when it differs. No match anywhere: `none` "not found on
 Hugging Face". A hub cache repo folder is `identical` when every blob name is an oid in the trees of its snapshot
 revisions. An LM Studio or model folder is `identical` when every file matches by path and size and every file of at
-least 100 MiB has its own `identical` answer (small files are hashed inline); until then it is `same-name-and-size`
-pending `files`.
+least 100 MiB has its own `identical` answer and every smaller LFS file's stored SHA-256 equals its `lfs.oid`; until
+then it is `same-name-and-size` pending `files`, listing the smaller files still to hash in `detail.hash_files`, which
+the pass's hash phase hashes (nothing is read inside the check itself). The folder walk takes dot files and folders too
+(a `.git` is content like any other) except `huggingface-cli`'s `.cache\huggingface` download metadata; a walk that
+stops at 500 files, meets a link or placeholder folder, or cannot read a folder is `none` ("not every file was compared
+with <repo>: ...").
 
 `ollama` (offline) applies to blobs in the Ollama models folder (`OLLAMA_MODELS`, else `~\.ollama\models`): a manifest
 under `manifests\` naming the blob's digest makes it `claimed` ("in Ollama as llama3:8b (ollama pull brings it back)");
@@ -283,7 +297,9 @@ with no manifest it is `none`.
 - `<profile>\.lmstudio\models\lmstudio-community\SmolLM2-135M-Instruct-GGUF\SmolLM2-135M-Instruct-Q4_K_M.gguf` of 105,454,144 bytes: one tree request for that repo at `main` and no search; the answer is `same-name-and-size` pending `hash` with locator `lmstudio-community/SmolLM2-135M-Instruct-GGUF`. Once its SHA-256 is the recorded `lfs.oid` it is `identical`, note "identical to lmstudio-community/SmolLM2-135M-Instruct-GGUF on Hugging Face"; with another hash it is `none`.
 - The same file outside any layout: the search asks for `SmolLM2-135M-Instruct` with `filter=gguf`, bartowski's same-named file of another size does not match, and the lmstudio-community entry does.
 - A file of another size outside any layout matches nothing: `none` "not found on Hugging Face", with `detail.searched` listing the repos tried.
-- A cache repo folder `models--o--m` whose blob names are the tree's oids is `identical` without hashing; with an extra unknown blob it is `none`.
+- A cache repo folder `models--o--m` whose blob names are the tree's oids is `identical` without hashing; with an extra unknown blob it is `none`. A blob of a repo with no tree sends one tree request and no search.
+- An LM Studio folder of 500 files that all match is `identical`; with a 501st file of the user's it is `none` "... more than 500 files"; with a `.git\refs\local` file it is `none` "1 of 500 files not on pub/repo"; with only `.cache\huggingface\download` metadata beside the files it is `identical`.
+- An LM Studio folder holding a 50 MiB LFS file and a 1.1 GiB file is `same-name-and-size` pending `files` with the 50 MiB file in `hash_files`, reused unchanged until that file is hashed, and nothing is hashed by the check; one `run_volume` hashes that file and leaves the folder `identical`, and the next pass hashes nothing.
 - An Ollama blob named by a `registry.ollama.ai\library\llama3\8b` manifest is `claimed` "in Ollama as llama3:8b ..."; an orphan blob is `none`.
 
 ### EVID-COPY-WINGET: Installers winget can fetch again

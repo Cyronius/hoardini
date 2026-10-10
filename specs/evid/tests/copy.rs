@@ -1170,6 +1170,279 @@ fn a_hub_cache_repo_is_identical_when_its_blobs_are_the_trees_oids() {
     assert_eq!(r.confidence, Confidence::None, "{}", note(&r));
 }
 
+// Traces: EVID-COPY-CONSENT, EVID-COPY-MODELHUB
+#[test]
+fn a_hub_blob_is_never_searched_by_its_name() {
+    let fx = Fx::new();
+    let sha = "ab".repeat(32);
+    let blob = fx.data().join(r"hub\models--o--m\blobs").join(&sha);
+    std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+    std::fs::write(&blob, b"blob").unwrap();
+    let hub = StandIn::start(vec![]);
+    let mut env = fx.env();
+    env.hub_base = hub.base.clone();
+    env.consent = hf_on();
+    let r = answer(&fx, &env, HubCheck::NAME, &blob).unwrap();
+    assert_eq!(r.confidence, Confidence::None);
+    assert_eq!(
+        hub.requests(),
+        ["/api/models/o/m/tree/main?recursive=1"],
+        "the blob's name is its hash"
+    );
+}
+
+fn lm_repo(fx: &Fx) -> PathBuf {
+    let dir = fx.profile().join(r".lmstudio\models\pub\repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn tree_route(entries: Value) -> Vec<(String, String)> {
+    vec![(
+        "/api/models/pub/repo/tree/main?recursive=1".into(),
+        entries.to_string(),
+    )]
+}
+
+// Traces: EVID-COPY-MODELHUB
+#[test]
+fn a_model_folder_seen_only_in_part_is_no_copy() {
+    let fx = Fx::new();
+    let dir = lm_repo(&fx);
+    let mut tree = Vec::new();
+    for i in 0..500 {
+        let n = format!("a{i:03}.json");
+        std::fs::write(dir.join(&n), b"{}").unwrap();
+        tree.push(json!({"type": "file", "oid": "1".repeat(40), "size": 2, "path": n}));
+    }
+    let hub = StandIn::start(tree_route(json!(tree)));
+    let mut env = fx.env();
+    env.hub_base = hub.base.clone();
+    env.consent = hf_on();
+    let r = answer(&fx, &env, HubCheck::NAME, &dir).unwrap();
+    assert_eq!(r.confidence, Confidence::Identical, "{}", note(&r));
+
+    std::fs::write(dir.join("zz-my-own-notes.txt"), b"only copy of my notes").unwrap();
+    let r = answer(&fx, &env, HubCheck::NAME, &dir).unwrap();
+    assert_eq!(r.confidence, Confidence::None, "{}", note(&r));
+    assert!(note(&r).ends_with("more than 500 files"), "{}", note(&r));
+
+    std::fs::remove_file(dir.join("zz-my-own-notes.txt")).unwrap();
+    std::fs::remove_file(dir.join("a499.json")).unwrap();
+    std::fs::create_dir_all(dir.join(r".git\refs")).unwrap();
+    std::fs::write(dir.join(r".git\refs\local"), b"commit").unwrap();
+    let r = answer(&fx, &env, HubCheck::NAME, &dir).unwrap();
+    assert_eq!(r.confidence, Confidence::None, "{}", note(&r));
+    assert_eq!(note(&r), "1 of 500 files not on pub/repo");
+
+    std::fs::remove_dir_all(dir.join(".git")).unwrap();
+    std::fs::create_dir_all(dir.join(r".cache\huggingface\download")).unwrap();
+    std::fs::write(
+        dir.join(r".cache\huggingface\download\a000.json.metadata"),
+        b"x",
+    )
+    .unwrap();
+    let r = answer(&fx, &env, HubCheck::NAME, &dir).unwrap();
+    assert_eq!(
+        r.confidence,
+        Confidence::Identical,
+        "download metadata is no content: {}",
+        note(&r)
+    );
+}
+
+// Traces: EVID-COPY-MODELHUB, EVID-COPY-BACKGROUND
+#[test]
+fn a_model_folders_smaller_files_are_hashed_in_the_hash_phase() {
+    let fx = Fx::new();
+    let dir = lm_repo(&fx);
+    let mid = dir.join("mid.gguf");
+    sparse(&mid, 50 * MIB);
+    sparse(&dir.join("weights.dat"), 1100 * MIB);
+    let tree = json!([
+        {"type": "file", "oid": "1".repeat(40), "size": 50 * MIB, "path": "mid.gguf",
+         "lfs": {"oid": sha_of(&mid), "size": 50 * MIB, "pointerSize": 130}},
+        {"type": "file", "oid": "2".repeat(40), "size": 1100 * MIB, "path": "weights.dat"}
+    ]);
+    let hub = StandIn::start(tree_route(tree));
+    let mut env = fx.env();
+    env.hub_base = hub.base.clone();
+    env.consent = hf_on();
+
+    let first = check(&fx, &env, &Registry::standard(), &dir);
+    let r = first
+        .results
+        .iter()
+        .find(|r| r.check == "huggingface")
+        .unwrap();
+    assert_eq!(r.pending(), Some("files"));
+    assert_eq!(first.hash_files, [s(&mid)]);
+    let again = answer(&fx, &env, HubCheck::NAME, &dir).unwrap();
+    assert_eq!(
+        again.checked_ms, r.checked_ms,
+        "reused until the hash is in"
+    );
+    let rows: i64 = fx
+        .db
+        .conn()
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM file_hash", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 0, "nothing hashed outside the hash phase");
+
+    let index_root = fx.profile();
+    let out = index::refresh(
+        &fx.db.conn().unwrap(),
+        &WinLister,
+        &s(&index_root),
+        &RefreshOptions {
+            workers: 2,
+            ..RefreshOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(out.completed);
+    let report = copycheck::run_volume(
+        &fx.db,
+        &env,
+        &Registry::standard(),
+        &s(&index_root),
+        &|| true,
+    )
+    .unwrap();
+    assert_eq!(report.hashed, 1, "{report:?}");
+    let r = answer(&fx, &env, HubCheck::NAME, &dir).unwrap();
+    assert_eq!(
+        (r.confidence, r.pending()),
+        (Confidence::Identical, None),
+        "{}",
+        note(&r)
+    );
+    let report = copycheck::run_volume(
+        &fx.db,
+        &env,
+        &Registry::standard(),
+        &s(&index_root),
+        &|| true,
+    )
+    .unwrap();
+    assert_eq!(report.hashed, 0);
+}
+
+// Traces: EVID-COPY-CHECK, EVID-COPY-ARCHIVE
+#[test]
+fn a_folder_answer_goes_stale_when_a_file_inside_is_rewritten() {
+    let fx = Fx::new();
+    let dir = fx.data().join("proj");
+    let copy = fx.root.join(r"archive\proj");
+    for d in [&dir, &copy] {
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join(r"sub\doc.txt"), b"version one").unwrap();
+    }
+    let old = 1_700_000_000_000i64;
+    for p in [dir.join(r"sub\doc.txt"), dir.join("sub"), dir.clone()] {
+        set_mtime(&p, old);
+    }
+    fx.index();
+    fx.db
+        .conn()
+        .unwrap()
+        .execute(
+            "INSERT INTO archive_entry(original_path, destination_id, dest_uri, kind, size, archived_ms, restored_ms)
+             VALUES (?1, 'd1', ?2, 0, 11, ?3, ?4)",
+            rusqlite::params![s(&dir), s(&copy), old + 500_000, old + 600_000],
+        )
+        .unwrap();
+    let env = fx.env();
+    let r = answer(&fx, &env, "archive", &dir).unwrap();
+    assert_eq!(r.confidence, Confidence::Identical, "{}", note(&r));
+
+    std::fs::write(dir.join(r"sub\doc.txt"), b"VERSION TWO").unwrap();
+    fx.index();
+    let conn = fx.db.conn().unwrap();
+    let id = copycheck::identical_for(
+        &conn,
+        Arc::new(FakeCloud::default()),
+        &s(&fx.profile()),
+        &s(&dir),
+        false,
+    );
+    assert!(id.is_none(), "{:?}", id.map(|r| r.note()));
+    let r = answer(&fx, &env, "archive", &dir).unwrap();
+    assert_eq!(r.confidence, Confidence::SameNameAndSize, "{}", note(&r));
+
+    let lm = lm_repo(&fx);
+    let tok = lm.join("tokenizer.bin");
+    std::fs::write(&tok, b"original").unwrap();
+    set_mtime(&tok, old);
+    let oid: String = Sha256::digest(b"original")
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let hub = StandIn::start(tree_route(json!([
+        {"type": "file", "oid": "1".repeat(40), "size": 8, "path": "tokenizer.bin",
+         "lfs": {"oid": oid, "size": 8, "pointerSize": 130}}
+    ])));
+    let mut env = fx.env();
+    env.hub_base = hub.base.clone();
+    env.consent = hf_on();
+    let tok_sub = Subject::load(&conn, &s(&tok)).unwrap();
+    hash::hash_subject(&conn, &tok_sub, &|| true).unwrap();
+    let r = answer(&fx, &env, HubCheck::NAME, &lm).unwrap();
+    assert_eq!(r.confidence, Confidence::Identical, "{}", note(&r));
+    std::fs::write(&tok, b"modified").unwrap();
+    let r = answer(&fx, &env, HubCheck::NAME, &lm).unwrap();
+    assert_ne!(r.confidence, Confidence::Identical, "{}", note(&r));
+}
+
+// Traces: EVID-COPY-SYNC
+#[test]
+fn a_file_pinned_since_its_last_answer_reads_as_pinned() {
+    let fx = Fx::new();
+    let root = fx.data().join("OneDrive");
+    let f = root.join("video.mp4");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(&f, b"pixels").unwrap();
+    let cloud = Arc::new(FakeCloud::with_root(&root, "OneDrive"));
+    cloud.set(&f, true);
+    let conn = fx.db.conn().unwrap();
+    let r = copycheck::sync_result(&conn, cloud.clone(), &s(&fx.profile()), &s(&f)).unwrap();
+    assert!(!copycheck::is_pinned(&r.detail));
+    cloud.states.lock().unwrap().insert(
+        s(&f).to_lowercase(),
+        CloudState {
+            in_sync: true,
+            pinned: true,
+            local_bytes: 6,
+        },
+    );
+    let r = copycheck::sync_result(&conn, cloud.clone(), &s(&fx.profile()), &s(&f)).unwrap();
+    assert!(copycheck::is_pinned(&r.detail), "{}", note(&r));
+}
+
+// Traces: EVID-COPY-CHECK
+#[test]
+fn an_unplugged_drives_answers_are_not_pruned() {
+    let fx = Fx::new();
+    let gone = fx.root.join("unplugged");
+    let conn = fx.db.conn().unwrap();
+    conn.execute("INSERT INTO volume(root) VALUES (?1)", [s(&gone)])
+        .unwrap();
+    let vid: i64 = conn
+        .query_row("SELECT id FROM volume WHERE root = ?1", [s(&gone)], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    conn.execute(
+        "INSERT INTO copy_check(volume_id, path, size, check_name, confidence, checked_ms) VALUES (?1, ?2, 1, 'dup', 'none', 1)",
+        rusqlite::params![vid, s(&gone.join("x.bin"))],
+    )
+    .unwrap();
+    assert_eq!(copycheck::prune(&conn, &s(&gone)).unwrap(), 0);
+    std::fs::create_dir_all(&gone).unwrap();
+    assert_eq!(copycheck::prune(&conn, &s(&gone)).unwrap(), 1);
+}
+
 // Traces: EVID-COPY-MODELHUB
 #[test]
 fn ollama_blobs_are_claimed_by_their_manifest() {

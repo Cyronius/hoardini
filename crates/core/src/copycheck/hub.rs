@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::{
     Confidence, CopyCheck, CopyResult, Cx, FILE_MIN, Find, Found, Service, Subject, current, hash,
-    pending, with_note,
+    pending, same_contents, with_fingerprint, with_note,
 };
 
 pub const HF_BASE: &str = "https://huggingface.co";
@@ -18,7 +18,6 @@ const TREE_TTL: Duration = Duration::from_secs(3600);
 const MAX_SEARCH_REPOS: usize = 8;
 const MAX_TREE_PAGES: usize = 20;
 const DIR_FILE_CAP: usize = 500;
-const INLINE_HASH_MAX: u64 = 32 << 20;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeEntry {
@@ -450,7 +449,8 @@ fn file_candidates(cx: &Cx<'_>, hub: &HubCheck, s: &Subject) -> anyhow::Result<V
             },
         );
     }
-    if list.iter().all(|c| c.rel.is_none()) {
+    // A content-addressed blob's name is its local hash, which never leaves the machine.
+    if list.iter().all(|c| c.rel.is_none()) && hash::content_address(&s.path).is_none() {
         let term = Some(search_term(s.name())).filter(|t| t.len() >= 3);
         let author = s
             .hint
@@ -517,35 +517,49 @@ fn find_file(cx: &Cx<'_>, hub: &HubCheck, s: &Subject) -> anyhow::Result<Find> {
     )))
 }
 
-fn local_files(dir: &Path) -> Vec<(String, std::path::PathBuf, u64)> {
-    let mut out = Vec::new();
+type LocalFile = (String, std::path::PathBuf, u64);
+
+// `skipped` says why the walk did not see the whole folder; a folder only partly seen is never `identical`.
+struct Walk {
+    files: Vec<LocalFile>,
+    skipped: Option<String>,
+}
+
+fn local_files(dir: &Path) -> Walk {
+    let mut w = Walk {
+        files: Vec::new(),
+        skipped: None,
+    };
     let mut stack = vec![(dir.to_path_buf(), String::new())];
     while let Some((d, prefix)) = stack.pop() {
         let Ok(entries) = hoardini_win::list_dir(&d) else {
+            w.skipped = Some(format!("{} could not be read", d.display()));
             continue;
         };
         for e in entries {
-            if e.name.starts_with('.') {
-                continue;
-            }
             let rel = if prefix.is_empty() {
                 e.name.clone()
             } else {
                 format!("{prefix}/{}", e.name)
             };
-            if e.is_dir() {
-                if !e.is_reparse() {
-                    stack.push((d.join(&e.name), rel));
-                }
-            } else if !e.is_link() {
-                out.push((rel, d.join(&e.name), e.logical));
-                if out.len() >= DIR_FILE_CAP {
-                    return out;
+            // What `huggingface-cli download --local-dir` keeps beside the files it fetched.
+            if e.is_dir() && rel.eq_ignore_ascii_case(".cache/huggingface") {
+                continue;
+            }
+            if e.is_link() || (e.is_dir() && e.is_reparse()) {
+                w.skipped = Some(format!("{rel} is a link or placeholder"));
+            } else if e.is_dir() {
+                stack.push((d.join(&e.name), rel));
+            } else {
+                w.files.push((rel, d.join(&e.name), e.logical));
+                if w.files.len() > DIR_FILE_CAP {
+                    w.skipped = Some(format!("more than {DIR_FILE_CAP} files"));
+                    return w;
                 }
             }
         }
     }
-    out
+    w
 }
 
 fn find_hf_cache_dir(cx: &Cx<'_>, hub: &HubCheck, s: &Subject, l: &Layout) -> anyhow::Result<Find> {
@@ -617,7 +631,14 @@ fn find_model_dir(cx: &Cx<'_>, hub: &HubCheck, s: &Subject) -> anyhow::Result<Fi
             format!("{repo} is not on Hugging Face"),
         )));
     };
-    let files = local_files(dir);
+    let walk = local_files(dir);
+    if let Some(why) = walk.skipped {
+        return Ok(Find::NoCopy(with_note(
+            json!({"repo": repo}),
+            format!("not every file was compared with {repo}: {why}"),
+        )));
+    }
+    let files = walk.files;
     let unmatched: Vec<&String> = files
         .iter()
         .filter(|(rel, _, size)| !tree.iter().any(|e| e.path == *rel && e.size == *size))
@@ -634,9 +655,21 @@ fn find_model_dir(cx: &Cx<'_>, hub: &HubCheck, s: &Subject) -> anyhow::Result<Fi
     }))
 }
 
+// The smaller files a folder answer waits on the hash phase for.
+pub(crate) fn hash_files(s: &Subject, r: &CopyResult) -> Vec<String> {
+    r.detail["hash_files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|rel| format!("{}\\{}", s.path, rel.replace('/', "\\")))
+        .collect()
+}
+
 // Big files carry their own results; a folder waits until each of them has a settled answer.
-pub(crate) fn files_still_pending(cx: &Cx<'_>, s: &Subject) -> bool {
-    local_files(Path::new(&s.path))
+pub(crate) fn files_still_pending(cx: &Cx<'_>, s: &Subject, r: &CopyResult) -> bool {
+    let big = local_files(Path::new(&s.path))
+        .files
         .into_iter()
         .filter(|(_, _, size)| *size >= FILE_MIN)
         .any(|(_, p, _)| {
@@ -646,7 +679,10 @@ pub(crate) fn files_still_pending(cx: &Cx<'_>, s: &Subject) -> bool {
                     .find(|r| r.check == HubCheck::NAME)
                     .is_none_or(|r| r.pending().is_some())
             })
-        })
+        });
+    big || hash_files(s, r)
+        .iter()
+        .any(|p| Subject::load(cx.conn, p).is_some_and(|f| hash::current(cx.conn, &f).is_none()))
 }
 
 fn verify_model_dir(
@@ -660,17 +696,19 @@ fn verify_model_dir(
         .tree_or_main(&cx.env.hub_base, &repo, "main")?
         .unwrap_or_default();
     let mut waiting = false;
-    for (rel, p, size) in local_files(Path::new(&s.path)) {
+    let mut to_hash: Vec<String> = Vec::new();
+    for (rel, p, size) in local_files(Path::new(&s.path)).files {
         let Some(e) = tree.iter().find(|e| e.path == rel) else {
             continue;
         };
         let Some(oid) = &e.lfs_oid else {
             continue;
         };
+        let Some(sub) = Subject::load(cx.conn, &p.to_string_lossy()) else {
+            waiting = true;
+            continue;
+        };
         let sha = if size >= FILE_MIN {
-            let Some(sub) = Subject::load(cx.conn, &p.to_string_lossy()) else {
-                continue;
-            };
             match current(cx.conn, &sub)
                 .into_iter()
                 .find(|r| r.check == HubCheck::NAME)
@@ -692,10 +730,12 @@ fn verify_model_dir(
                     continue;
                 }
             }
-        } else if size <= INLINE_HASH_MAX {
-            hash::sha256_file(&p, &|| true)?.unwrap_or_default()
+        } else if let Some(h) = hash::current(cx.conn, &sub) {
+            h
         } else {
+            // Hashed in the pass's hash phase, which stops when nobody is looking.
             waiting = true;
+            to_hash.push(rel);
             continue;
         };
         if sha != *oid {
@@ -710,11 +750,15 @@ fn verify_model_dir(
     }
     if waiting {
         let note = format!("same files and sizes as {repo} on Hugging Face; checking the bytes");
+        let mut detail = pending(with_note(f.detail, note), "files");
+        if !to_hash.is_empty() {
+            detail["hash_files"] = json!(to_hash);
+        }
         return Ok(CopyResult::new(
             HubCheck::NAME,
             Some(repo),
             Confidence::SameNameAndSize,
-            pending(with_note(f.detail, note), "files"),
+            detail,
         ));
     }
     let note = format!("identical to {repo} on Hugging Face");
@@ -751,6 +795,10 @@ impl CopyCheck for HubCheck {
         is_hf_repo_dir(path) || is_lmstudio_repo_dir(path)
     }
 
+    fn still_valid(&self, _cx: &Cx<'_>, s: &Subject, r: &CopyResult) -> bool {
+        same_contents(s, r)
+    }
+
     fn find(&self, cx: &Cx<'_>, s: &Subject) -> anyhow::Result<Find> {
         if !s.dir {
             return find_file(cx, self, s);
@@ -766,14 +814,17 @@ impl CopyCheck for HubCheck {
         if s.dir {
             if is_hf_repo_dir(&s.path) {
                 let note = format!("identical to {repo} on Hugging Face");
-                return Ok(CopyResult::new(
-                    Self::NAME,
-                    Some(repo),
-                    Confidence::Identical,
-                    with_note(f.detail, note),
+                return Ok(with_fingerprint(
+                    CopyResult::new(
+                        Self::NAME,
+                        Some(repo),
+                        Confidence::Identical,
+                        with_note(f.detail, note),
+                    ),
+                    s,
                 ));
             }
-            return verify_model_dir(cx, self, s, f);
+            return Ok(with_fingerprint(verify_model_dir(cx, self, s, f)?, s));
         }
         let remote = f.detail["lfs_oid"].as_str().map(str::to_string);
         let local = hash::current(cx.conn, s);
