@@ -36,6 +36,7 @@ export type Status = {
   vanished_total_bytes: number;
   active_provider: { id: string; name: string; model: string | null } | null;
   running_runs: number;
+  review?: { id: string; created_ms: number } | null;
 };
 
 export type StatusEvent = ({ type: "status" } & Status) | ({ type: "job" } & Job);
@@ -90,7 +91,7 @@ export type RarelyUsedApp = {
 export type Proposal = {
   id: string;
   kind: ProposalKind;
-  status: "pending" | "approved" | "declined" | "running" | "done" | "partial" | "failed";
+  status: "pending" | "approved" | "declined" | "running" | "done" | "partial" | "failed" | "superseded";
   total_alloc: number;
   created_ms: number;
   job_id: string | null;
@@ -103,8 +104,33 @@ export type Proposal = {
   follow_up_id: string | null;
   // What the finished job recorded on location rows (MEM-LEARN-JOB); absent from older servers.
   learned?: Learned[];
+  review_id?: string | null;
+  card?: string | null;
+  touched?: boolean;
 };
 export type Learned = { memory_id: number; text: string; url?: string };
+
+// Review (REVIEW-BUILD, REVIEW-AREAS, REVIEW-TRIGGER): POST /api/review/open, POST /api/review/run, GET /api/review.
+export type ReviewArea = {
+  path: string;
+  size: number;
+  label: string;
+  category: string;
+  verdict: Verdict | null;
+  why_not: string;
+  hint: string | null;
+  unknown: boolean;
+  actions: ("delete" | "dedupe" | "archive" | "compress")[];
+};
+export type ReviewCardRef = { card: string; title: string; proposal_id: string };
+export type ReviewView = {
+  review: { id: string; created_ms: number; volume: string; scope_path: string | null };
+  header: { root: string; used_bytes: number | null; free_bytes: number | null; ready_bytes: number };
+  cards: ReviewCardRef[];
+  areas: ReviewArea[];
+  proposals: Record<string, Proposal>;
+};
+export type LocationAnswer = "keep" | "disposable" | "move-elsewhere" | "never-touch";
 
 export type Memory = {
   id: number;

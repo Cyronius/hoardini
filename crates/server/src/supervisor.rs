@@ -33,6 +33,8 @@ struct State {
     only: Option<Vec<String>>,
     // Removed while their child may run; that child is killed before their rows are deleted.
     dropping: Vec<String>,
+    // The pass the server started at launch; its end may rebuild an untouched review (REVIEW-SUPERSEDE).
+    launch: bool,
 }
 
 impl State {
@@ -66,6 +68,7 @@ pub struct Supervisor {
     job: Option<hoardini_win::KillOnCloseJob>,
     // Copy checks follow a finished refresh and the user's return.
     copy: std::sync::OnceLock<Weak<crate::copywork::CopyWorker>>,
+    after_launch: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     me: Weak<Supervisor>,
 }
 
@@ -79,7 +82,7 @@ enum ChildEnd {
 enum Next {
     Volume(String),
     Again(&'static str),
-    Finished,
+    Finished { launch: bool },
 }
 
 fn same(a: &str, b: &str) -> bool {
@@ -159,6 +162,7 @@ impl Supervisor {
             volume_edits: tokio::sync::Mutex::new(()),
             job,
             copy: std::sync::OnceLock::new(),
+            after_launch: Mutex::new(None),
             me: me.clone(),
         })
     }
@@ -259,6 +263,20 @@ impl Supervisor {
     }
 
     pub fn start_refresh(&self, mode: &str) -> anyhow::Result<bool> {
+        self.start(mode, false)
+    }
+
+    pub fn start_launch_refresh(&self, mode: &str) -> anyhow::Result<bool> {
+        self.start(mode, true)
+    }
+
+    pub fn on_launch_refreshed(&self, f: Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut h) = self.after_launch.lock() {
+            *h = Some(f);
+        }
+    }
+
+    fn start(&self, mode: &str, launch: bool) -> anyhow::Result<bool> {
         let Some(mode) = norm_mode(mode) else {
             anyhow::bail!("mode must be \"background\" or \"fast\"");
         };
@@ -269,6 +287,7 @@ impl Supervisor {
             *st = State {
                 refreshing: true,
                 mode: Some(mode),
+                launch,
                 ..State::default()
             };
             drop(st);
@@ -417,7 +436,7 @@ impl Supervisor {
     // Picking the next volume and ending the pass share one lock, so a drive added meanwhile is never missed.
     fn next_step(&self) -> Next {
         let Ok(mut st) = self.state.lock() else {
-            return Next::Finished;
+            return Next::Finished { launch: false };
         };
         let watched = self
             .db
@@ -445,8 +464,9 @@ impl Supervisor {
                 Next::Again(m)
             }
             None => {
+                let launch = st.launch;
                 *st = State::default();
-                Next::Finished
+                Next::Finished { launch }
             }
         }
     }
@@ -481,7 +501,15 @@ impl Supervisor {
                     self.bump();
                     continue;
                 }
-                Next::Finished => break,
+                Next::Finished { launch } => {
+                    if launch {
+                        let hook = self.after_launch.lock().ok().and_then(|h| h.clone());
+                        if let Some(f) = hook {
+                            f();
+                        }
+                    }
+                    break;
+                }
             };
             // An unplugged drive keeps its index until it is back.
             if !index::connected(&volume) {

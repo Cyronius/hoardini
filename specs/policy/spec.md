@@ -137,8 +137,9 @@ verdict, which is already capped (POLICY-VERDICT-CAP), is `safe` or `redownload`
 `total_alloc`, so a card made only of small files still ticks its biggest ones. Every item's JSON carries
 `small: boolean`. The rule is `proposals::is_small(alloc, total)` and `proposals::default_tick(blocked, verdict, small)`.
 On an online-only card (ACT-ONLINE-ONLY) the same rule ticks `synced` instead of `safe` or `redownload`
-(`proposals::default_tick_for(kind, blocked, verdict, small)`); `synced` never ticks on any other card. A follow-up proposal (ACT-FOLLOW-UP) keeps the approved tick state instead. Tests: `specs/policy/tests/policy.rs`;
-the item JSON is also checked in `specs/srv/tests/srv.rs`.
+(`proposals::default_tick_for(kind, blocked, verdict, small)`); `synced` never ticks on any other card. A follow-up proposal (ACT-FOLLOW-UP) keeps the approved tick state instead, and a review card that starts unticked
+(REVIEW-BUILD: Downloads, Send elsewhere) leaves every item unticked. Tests: `specs/policy/tests/policy.rs`;
+the item JSON is also checked in `specs/srv/tests/srv.rs`, and unticked review cards in `specs/review/tests/build.rs`.
 
 **Acceptance criteria:**
 - `is_small`: 50 MiB − 1 byte of a huge total is small; exactly 50 MiB and 50 MiB + 1 are not. 1,999 of 100,000 is small; exactly 2,000 (2%) and 2,001 are not. 3 MiB of a 3 MiB + 40 KiB card is not small while 4 KiB of it is. 0 of 0 is not small.

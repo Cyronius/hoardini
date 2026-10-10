@@ -3,6 +3,7 @@ use std::fmt::Write;
 
 use hoardini_core::paths::humanize_bytes;
 use hoardini_core::proposals::{self, Proposal};
+use hoardini_core::review;
 use hoardini_core::store::{Db, get_meta, now_ms, set_meta};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
@@ -478,19 +479,24 @@ pub fn describe_open(p: &Proposal) -> String {
     )
 }
 
-// Cards can outlive the turn that made them, so the prompt names every one still waiting.
+// Cards can outlive the turn that made them, so the prompt names every one still waiting, review cards too.
 pub fn open_proposals(db: &Db, conv: &str) -> anyhow::Result<Vec<String>> {
     let ids: Vec<String> = db
         .conn()?
         .prepare(
-            "SELECT id FROM proposal WHERE conversation_id = ?1 AND status = 'pending' ORDER BY created_ms, id",
+            "SELECT id FROM proposal WHERE (conversation_id = ?1 OR review_id IS NOT NULL) AND status = 'pending'              ORDER BY review_id IS NOT NULL, created_ms, id",
         )?
         .query_map([conv], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {
         if let Some(p) = proposals::get(db, &id)? {
-            out.push(describe_open(&p));
+            let mut line = describe_open(&p);
+            if let Some(c) = &p.card {
+                let title = review::card(c).map_or(c.as_str(), |x| x.title);
+                let _ = write!(line, " | review card: {title}");
+            }
+            out.push(line);
         }
     }
     Ok(out)

@@ -32,6 +32,7 @@ const status: T.Status = {
   vanished_total_bytes: Math.round(52.4 * GB),
   active_provider: { id: "prov-lmstudio", name: "LM Studio", model: "qwen3.8-27b" },
   running_runs: 0,
+  review: null,
 };
 
 const setFill = (f: number) => {
@@ -278,9 +279,9 @@ let nextJob: NextJob | null = null;
 function followUp(p: T.Proposal): void {
   const items = p.items.filter((i) => i.status !== "done").map((i) => ({ ...i, status: i.block_reason ? ("blocked" as const) : ("pending" as const), detail: null }));
   if (!items.length) return;
-  const f: T.Proposal = { ...p, id: uuid(), status: "pending", job_id: null, created_ms: now(), items, total_alloc: items.filter((i) => i.selected).reduce((a, i) => a + i.alloc, 0), parent_id: p.id, follow_up_id: null };
+  const f: T.Proposal = { ...p, id: uuid(), status: "pending", job_id: null, created_ms: now(), items, total_alloc: items.filter((i) => i.selected).reduce((a, i) => a + i.alloc, 0), parent_id: p.id, follow_up_id: null, touched: false };
   proposals.set(f.id, f);
-  thread.proposals[f.id] = f;
+  if (!p.review_id) thread.proposals[f.id] = f;
   p.follow_up_id = f.id;
 }
 
@@ -471,6 +472,174 @@ function childrenOf(path: string, limit: number) {
 
 const revealed: string[] = [];
 
+// ---- Review (REVIEW-BUILD, REVIEW-AREAS, REVIEW-TRIGGER, REVIEW-SUPERSEDE) ----
+type ItemSeed = { path: string; gb: number; verdict: T.Verdict; reason: string; kind?: "dir" | "file"; memory_note?: string };
+type CardSeed = { card: string; title: string; kind: T.ProposalKind; ticked: boolean; summary: string; items: ItemSeed[] };
+
+const cardSeeds = (): CardSeed[] => [
+  {
+    card: "temp",
+    title: "Temp and Windows leftovers",
+    kind: "delete",
+    ticked: true,
+    summary: "Temporary files, crash dumps and logs that nothing has used for a day.",
+    items: [
+      { path: "~\\AppData\\Local\\Temp\\claude", gb: 92, verdict: "safe", reason: "User temp folder: untouched for 9 days." },
+      { path: "~\\AppData\\Local\\Temp\\WinGet", gb: 3.1, verdict: "safe", reason: "User temp folder: untouched for 21 days." },
+      { path: "~\\AppData\\Local\\Temp\\chocolatey", gb: 0.8, verdict: "safe", reason: "User temp folder: untouched for 40 days. You cleaned this on 08-14." },
+      { path: "~\\AppData\\Local\\CrashDumps\\Code.exe.18244.dmp", gb: 1.2, verdict: "safe", reason: "Crash dumps: Process and kernel crash dumps and WER reports.", kind: "file" },
+      { path: "~\\AppData\\Local\\Temp\\vs_setup.log", gb: 0.004, verdict: "safe", reason: "User temp folder: untouched for 3 days.", kind: "file" },
+    ],
+  },
+  {
+    card: "caches",
+    title: "Caches",
+    kind: "delete",
+    ticked: true,
+    summary: "Browser, shader, app and package caches; their apps rebuild or download them again.",
+    items: [
+      { path: "~\\AppData\\Local\\npm-cache", gb: 3.8, verdict: "safe", reason: "npm cache: Tarballs npm downloaded; npm fetches them again on the next install." },
+      { path: "~\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache", gb: 2.4, verdict: "safe", reason: "Google Chrome cache: Web page cache; Chrome rebuilds it as you browse." },
+      { path: "~\\AppData\\Local\\pip\\cache", gb: 1.6, verdict: "safe", reason: "pip cache: Wheels and HTTP responses pip downloaded." },
+      { path: "~\\AppData\\Local\\D3DSCache", gb: 1.1, verdict: "safe", reason: "DirectX shader cache: Compiled shaders; games rebuild them." },
+    ],
+  },
+  {
+    card: "build",
+    title: "Build output",
+    kind: "delete",
+    ticked: true,
+    summary: "Build output and dependency folders; each project rebuilds them.",
+    items: [
+      { path: "C:\\code\\hoardini\\target", gb: 38.2, verdict: "safe", reason: "Rust target directory: Cargo build output when the parent folder has Cargo.toml (also Maven when it has pom.xml)." },
+      { path: "C:\\code\\k2-diffusion\\.venv", gb: 6.4, verdict: "redownload", reason: "Project virtualenv: Per-project Python environment." },
+      { path: "C:\\code\\glint\\node_modules", gb: 1.9, verdict: "redownload", reason: "node_modules: Installed npm packages; `npm install` restores them.", memory_note: "Safe to delete when the project has not been touched in 60 days; npm install brings it back." },
+      { path: "C:\\code\\OpenFlowLM-Next2\\build", gb: 4.7, verdict: "review", reason: "Build folder: Output of a CMake or similar build." },
+    ],
+  },
+  {
+    card: "downloads",
+    title: "Installers and archives in Downloads",
+    kind: "delete",
+    ticked: false,
+    summary: "Installers, disk images and archives you downloaded; most can be downloaded again.",
+    items: [
+      { path: "~\\Downloads\\Win11_24H2_English_x64.iso", gb: 5.8, verdict: "redownload", reason: "Downloaded installers and ISOs: Installers and disk images in Downloads.", kind: "file" },
+      { path: "~\\Downloads\\dataset-2025.zip", gb: 2.2, verdict: "review", reason: "Downloaded archives: Archives in Downloads; the extracted copy may be elsewhere.", kind: "file" },
+    ],
+  },
+  {
+    card: "archive",
+    title: "Send elsewhere",
+    kind: "archive",
+    ticked: false,
+    summary: "Photos, videos and documents nobody has opened for 180 days: copied to the destination, checked, then removed here.",
+    items: [{ path: "~\\Pictures\\2019", gb: 31.4, verdict: "review", reason: "Your photos and videos: nothing in it opened or changed for 412 days." }],
+  },
+];
+
+const ADMIN = "Needs admin; Hoardini will offer this with Windows cleanups.";
+const areaSeeds = (): T.ReviewArea[] => [
+  { path: "C:\\code\\covenant-agent", size: 161 * GB, label: "unknown", category: "unknown", verdict: null, why_not: "Not identified: no catalog entry matches, and no kind of file makes up 80% of it. Something in it changed in the last 30 days.", hint: null, unknown: true, actions: [] },
+  { path: "~\\AppData\\Local\\Docker\\wsl\\disk\\docker_data.vhdx", size: Math.round(134.8 * GB), label: "Virtual hard disk", category: "vm-disk", verdict: "review", why_not: "A virtual machine's disk: deleting it deletes the machine inside.", hint: null, unknown: false, actions: ["delete", "dedupe", "archive", "compress"] },
+  { path: "~\\.lmstudio\\models", size: 96 * GB, label: "LM Studio models", category: "model-store", verdict: "redownload", why_not: "Model files: Hoardini proposes them once it can show where else a copy exists.", hint: null, unknown: false, actions: ["delete", "dedupe", "archive", "compress"] },
+  { path: "C:\\Program Files", size: 48 * GB, label: "installed programs", category: "system", verdict: "keep", why_not: "Installed programs: Hoardini never deletes anything here.", hint: null, unknown: false, actions: [] },
+  { path: "C:\\hiberfil.sys", size: Math.round(25.4 * GB), label: "Hibernation file", category: "system", verdict: "keep", why_not: "Hibernation file: Hibernate and Fast Startup image, typically 40-75% of RAM.", hint: "Windows recreates it at boot; turning hibernation off removes it.", unknown: false, actions: [] },
+  { path: "C:\\Windows", size: 21 * GB, label: "the Windows folder", category: "system", verdict: "keep", why_not: "The Windows folder: Hoardini never deletes anything here.", hint: null, unknown: false, actions: [] },
+  { path: "~\\Pictures", size: 18 * GB, label: "your photos and videos", category: "photos", verdict: "keep", why_not: "Your photos and videos: 94% of its bytes are images or video.", hint: null, unknown: false, actions: ["archive"] },
+  { path: "C:\\pagefile.sys", size: 16 * GB, label: "Page file", category: "system", verdict: "keep", why_not: "Page file: Virtual-memory backing files, in use by the OS.", hint: "Windows manages its size.", unknown: false, actions: [] },
+  { path: "C:\\code\\scratch-models", size: Math.round(12.3 * GB), label: "unknown", category: "unknown", verdict: null, why_not: "Not identified: no catalog entry matches, and no kind of file makes up 80% of it.", hint: null, unknown: true, actions: [] },
+  { path: "C:\\Windows\\WinSxS", size: Math.round(9.8 * GB), label: "WinSxS component store", category: "system", verdict: "keep", why_not: "WinSxS component store: Component store; mostly hardlinks, so its apparent size overstates real use.", hint: "Windows can trim this itself.", unknown: false, actions: [] },
+  { path: "C:\\Windows\\SoftwareDistribution\\Download", size: Math.round(4.2 * GB), label: "Windows Update download cache", category: "windows-leftover", verdict: "safe", why_not: "Windows Update download cache: Update packages Windows already installed.", hint: ADMIN, unknown: false, actions: [] },
+  { path: "C:\\Windows\\Temp", size: Math.round(1.3 * GB), label: "System temp folder", category: "temp", verdict: "safe", why_not: "System temp folder: Windows and services' scratch space.", hint: ADMIN, unknown: false, actions: [] },
+];
+
+type MockReview = { id: string; created_ms: number; volume: string; scope_path: string | null; scan_ms: number | null; cards: T.ReviewCardRef[]; areas: T.ReviewArea[] };
+const reviews: MockReview[] = [];
+const under = (root: string, p: string) => p.toLowerCase() === root.toLowerCase() || p.toLowerCase().startsWith(`${root.toLowerCase().replace(/\\$/, "")}\\`);
+
+function buildReview(scope: string | null): MockReview {
+  const vol = selectedDrive().root;
+  const prior = reviews.filter((r) => r.volume === vol && (r.scope_path ?? "").toLowerCase() === (scope ?? "").toLowerCase());
+  const replacing = new Set(prior.flatMap((r) => [...proposals.values()].filter((p) => p.review_id === r.id && p.status === "pending" && !p.touched).map((p) => p.id)));
+  const taken = new Set([...proposals.values()].filter((p) => p.status === "pending" && !replacing.has(p.id)).flatMap((p) => p.items.map((i) => i.path.toLowerCase())));
+  const inScope = (p: string) => !scope || under(scope, p);
+  const r: MockReview = { id: uuid(), created_ms: now(), volume: vol, scope_path: scope, scan_ms: status.index.last_refresh_ms, cards: [], areas: areaSeeds().filter((a) => inScope(a.path)) };
+  for (const seed of cardSeeds()) {
+    if (seed.card === "archive" && !destinations.length) continue;
+    const kept = seed.items.filter((i) => inScope(i.path) && !taken.has(i.path.toLowerCase()));
+    const bytes = kept.reduce((a, i) => a + i.gb * GB, 0);
+    if (!kept.length || (!scope && bytes < 500 * MB)) continue;
+    const total = kept.reduce((a, i) => a + Math.round(i.gb * GB), 0);
+    const items: T.ProposalItem[] = kept.map((i, n) => {
+      const alloc = Math.round(i.gb * GB);
+      const small = alloc < 50 * MB && alloc * 50 < total;
+      const ticks = seed.ticked && (i.verdict === "safe" || i.verdict === "redownload") && !small;
+      return { id: n + 1, path: i.path, kind: i.kind ?? "dir", alloc, verdict: i.verdict, cap: null, reason: i.reason, block_reason: null, selected: ticks, status: "pending", detail: null, small, memory_note: i.memory_note ?? null };
+    });
+    const p: T.Proposal = {
+      id: uuid(),
+      kind: seed.kind,
+      status: "pending",
+      total_alloc: total,
+      created_ms: now(),
+      job_id: null,
+      destination: seed.kind === "archive" ? { id: destinations[0]!.id, name: destinations[0]!.name } : null,
+      format: null,
+      summary: seed.summary,
+      items,
+      parent_id: null,
+      follow_up_id: null,
+      review_id: r.id,
+      card: seed.card,
+      touched: false,
+    };
+    proposals.set(p.id, p);
+    r.cards.push({ card: seed.card, title: seed.title, proposal_id: p.id });
+  }
+  r.cards.sort((a, b) => proposals.get(b.proposal_id)!.total_alloc - proposals.get(a.proposal_id)!.total_alloc);
+  for (const id of replacing) {
+    const p = proposals.get(id)!;
+    if (p.status === "pending" && !p.touched) p.status = "superseded";
+  }
+  reviews.push(r);
+  status.review = scope ? status.review : { id: r.id, created_ms: r.created_ms };
+  dirty = true;
+  return r;
+}
+
+const latestVolumeReview = () => [...reviews].reverse().find((r) => r.volume === selectedDrive().root && !r.scope_path);
+
+function reviewView(r: MockReview): T.ReviewView {
+  const props = [...proposals.values()].filter((p) => p.review_id === r.id);
+  const ready = props.filter((p) => p.status === "pending").flatMap((p) => p.items).filter((i) => i.selected && i.status === "pending").reduce((a, i) => a + i.alloc, 0);
+  const d = selectedDrive();
+  return {
+    review: { id: r.id, created_ms: r.created_ms, volume: r.volume, scope_path: r.scope_path },
+    header: { root: r.volume, used_bytes: d.total_bytes - d.free_bytes, free_bytes: d.free_bytes, ready_bytes: ready },
+    cards: r.cards,
+    areas: r.areas,
+    proposals: Object.fromEntries(props.map((p) => [p.id, p])),
+  };
+}
+
+function answerLocation(path: string, answer: T.LocationAnswer): T.Memory {
+  const table: Record<T.LocationAnswer, { label: string; verdict: T.Verdict; actions: T.ReviewArea["actions"]; text: string }> = {
+    keep: { label: "yours", verdict: "keep", actions: ["archive", "compress"], text: "You keep this folder; it may still be moved or compressed." },
+    disposable: { label: "disposable", verdict: "safe", actions: ["delete", "dedupe", "archive", "compress"], text: "You said this folder can go." },
+    "move-elsewhere": { label: "move elsewhere", verdict: "keep", actions: ["archive"], text: "You want this folder moved to another drive, not deleted." },
+    "never-touch": { label: "never touch", verdict: "keep", actions: [], text: "Never touch this folder." },
+  };
+  const a = table[answer];
+  for (const r of reviews)
+    for (const area of r.areas.filter((x) => x.path.toLowerCase() === path.toLowerCase()))
+      Object.assign(area, { label: a.label, category: area.category === "unknown" ? "user" : area.category, verdict: a.verdict, actions: a.actions, why_not: a.text, unknown: false });
+  const m: T.Memory = { id: ++memSeq, scope: "path", key: path, kind: "verdict", text: a.text, source: "user", confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null, pinned: true, last_used_ms: now(), forgotten_ms: null, detail: { category: "user", label: a.label, verdict: a.verdict, actions: a.actions, by: "user", assessed_ms: now() } };
+  memories.push(m);
+  if (answer === "never-touch") memories.push({ ...m, id: ++memSeq, kind: "protect", text: "Never touch: your answer to What is this?", detail: null });
+  return m;
+}
+
 // ---- AG-UI run ----
 const enc = new TextEncoder();
 type Sse = { send: (e: Record<string, unknown>) => void; closed: () => boolean };
@@ -608,7 +777,12 @@ async function agentRun(input: { runId: string; messages: { id?: string; role: s
       const text = String(last?.content ?? "");
       if (thread.messages.length && now() - thread.updated_ms > SESSION_GAP_MS) thread.windowStart = thread.messages.length;
       thread.messages.push({ id: last?.id ?? uuid(), role: "user", content: text });
-      if (/^remember|remember that/i.test(text)) {
+      if (/^What is /.test(text)) {
+        const path = text.slice(8).split("? ")[0] ?? "";
+        await say(s, `Let me look inside \`${path}\`.\n\n`);
+        await readTool(s, "top_dirs", { under: path, depth: 1, limit: 10 }, `${path} 161.0 GB\n  models 100.0 GB (2 files)\n  data 61.0 GB (1 files)`, 700);
+        await say(s, "It is a project folder with two big data files you wrote recently. Nothing says it is regenerable, so **keep it**, or move it elsewhere if you no longer work on it.");
+      } else if (/^remember|remember that/i.test(text)) {
         await say(s, "Got it.");
         const toolCallId = await readTool(s, "remember", { scope: "global", kind: "preference", text }, JSON.stringify({ id: ++memSeq }), 300);
         memories.push({ id: memSeq, scope: "global", key: "", kind: "preference", text: text.replace(/^remember( that)?/i, "").trim() || text, source: "chat", confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null, pinned: false, last_used_ms: now(), forgotten_ms: null });
@@ -796,17 +970,29 @@ async function route(req: Request): Promise<Response> {
       const p = proposals.get(seg[1]!);
       if (!p) return err("proposal not found", 404);
       if (!seg[2]) return json(p);
+      if (seg[2] === "selection" && method === "PUT") {
+        if (p.status !== "pending") return err(`proposal ${p.id} is ${p.status}, not pending`, 409);
+        const { item_ids } = await body<{ item_ids: number[] }>();
+        const bad = (item_ids ?? []).find((i) => !p.items.some((x) => x.id === i && x.status === "pending"));
+        if (bad != null) return err(`item ${bad} is not part of proposal ${p.id}`, 409);
+        for (const it of p.items) if (it.status === "pending") it.selected = item_ids.includes(it.id);
+        p.touched = true;
+        dirty = true;
+        return json(p);
+      }
       if (seg[2] === "approve") {
         if (p.status !== "pending") return err(`proposal is ${p.status}`, 409);
         const { item_ids } = await body<{ item_ids: number[] }>();
         if (!item_ids?.length) return err("nothing selected");
         p.status = "approved";
+        p.touched = true;
         const job = runJob(p, item_ids);
         return json({ approved: true, items: item_ids, job_id: job.id });
       }
       if (seg[2] === "decline") {
         if (p.status !== "pending") return err(`proposal is ${p.status}`, 409);
         p.status = "declined";
+        p.touched = true;
         return json({ approved: false });
       }
       if (seg[2] === "learned" && method === "DELETE") {
@@ -818,6 +1004,37 @@ async function route(req: Request): Promise<Response> {
         return json({ ok: true });
       }
       break;
+    }
+    case "review": {
+      if (seg[1] === "open" && method === "POST") {
+        const last = latestVolumeReview();
+        const stale = !last || now() - last.created_ms > SESSION_GAP_MS || (status.index.last_refresh_ms ?? 0) !== (last.scan_ms ?? 0);
+        return json(reviewView(stale ? buildReview(null) : last));
+      }
+      if (seg[1] === "run" && method === "POST") {
+        const { path: folder } = await body<{ path?: string }>();
+        if (folder && !/^(~|[A-Za-z]:)\\/.test(folder)) return err("folder in the index not found", 404);
+        return json(reviewView(buildReview(folder?.trim() || null)));
+      }
+      if (seg[1] === "look-closer" && method === "POST") {
+        const { path: target } = await body<{ path?: string }>();
+        if (!target) return err("path is required");
+        if (status.running_runs > 0) return err("a chat run is in progress; stop it first", 409);
+        const content = `What is ${target}? Look inside and tell me whether to keep it, delete it, or move it elsewhere.`;
+        const input = { runId: uuid(), messages: [{ id: uuid(), role: "user", content }] };
+        return sseResponse((s) => agentRun(input, s), () => cancelled.add(input.runId));
+      }
+      const id = url.searchParams.get("id");
+      const r = id ? reviews.find((x) => x.id === id) : latestVolumeReview();
+      return r ? json(reviewView(r)) : err("review not found", 404);
+    }
+    case "locations": {
+      if (seg[1] !== "answer" || method !== "POST") break;
+      const b = await body<{ path?: string; answer?: T.LocationAnswer }>();
+      if (!b.path) return err("path is required");
+      if (!b.answer || !["keep", "disposable", "move-elsewhere", "never-touch"].includes(b.answer)) return err("invalid request body: unknown answer");
+      dirty = true;
+      return json(answerLocation(b.path, b.answer));
     }
     case "jobs":
       if (!seg[1]) return json([...jobs.values()]);

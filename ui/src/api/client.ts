@@ -87,6 +87,11 @@ export const routes = {
   uninstallApp: (id: string) =>
     api<{ started: true; id: string; name: string }>(`/api/apps/${enc(id)}/uninstall`, { method: "POST", body: {} }),
   undoLearned: (id: string, memoryId: number) => del(`/api/proposals/${enc(id)}/learned/${memoryId}`),
+  selectItems: (id: string, item_ids: number[]) => put<T.Proposal>(`/api/proposals/${enc(id)}/selection`, { item_ids }),
+  reviewOpen: () => api<T.ReviewView>("/api/review/open", { body: {} }),
+  reviewRun: (path?: string) => api<T.ReviewView>("/api/review/run", { body: path ? { path } : {} }),
+  review: (id?: string) => api<T.ReviewView>(`/api/review${id ? `?id=${enc(id)}` : ""}`),
+  answerLocation: (path: string, answer: T.LocationAnswer) => api<T.Memory>("/api/locations/answer", { body: { path, answer } }),
   jobs: () => api<T.Job[]>("/api/jobs"),
   cancelJob: (id: string) => api<{ ok: true }>(`/api/jobs/${enc(id)}/cancel`, { body: {} }),
 

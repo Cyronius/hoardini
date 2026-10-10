@@ -77,6 +77,7 @@ pub struct Inner {
     pub dialogs: Option<Arc<dyn DialogProvider>>,
     pub ui_dir: Option<std::path::PathBuf>,
     pub runs: Mutex<HashMap<String, RunSlot>>,
+    pub reviews: Mutex<()>,
     pub change: Arc<watch::Sender<u64>>,
     pub shutdown: watch::Sender<bool>,
     pub token: String,

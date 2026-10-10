@@ -135,10 +135,14 @@ impl Drop for RunGuard {
 }
 
 pub async fn agent_run(State(s): State<AppState>, body: Bytes) -> ApiResult<Response> {
-    let mut input: RunAgentInput = parse(&body)?;
+    let input: RunAgentInput = parse(&body)?;
     if input.run_id.is_empty() {
         return Err(ApiError::bad("runId is required"));
     }
+    start_run(s, input).await
+}
+
+pub async fn start_run(s: AppState, mut input: RunAgentInput) -> ApiResult<Response> {
     input.thread_id = thread::MAIN.into();
     let provider = {
         let st = s.clone();

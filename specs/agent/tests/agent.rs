@@ -1811,3 +1811,63 @@ async fn the_system_prompt_lists_each_pending_proposal_by_id_kind_target_and_siz
     assert!(line.ends_with(r"\models\big.gguf | 3.0 MB"), "{line}");
     assert!(!sys.contains(&done), "{sys}");
 }
+
+// Traces: AGENT-PROMPT-CONTEXT
+#[tokio::test]
+async fn the_system_prompt_also_lists_each_open_review_card() {
+    let h = Harness::new(None);
+    let (_tree, root) = real_tree(&h);
+    let card = |path: &str, review: &str| {
+        let req = proposals::NewProposal {
+            conversation_id: Some("review".into()),
+            tool_call_id: None,
+            kind: proposals::ProposalKind::Delete,
+            destination_id: None,
+            format: None,
+            dedupe: None,
+            summary: "cache".into(),
+            items: vec![proposals::NewItem {
+                path: path.into(),
+                verdict: None,
+                reason: None,
+            }],
+        };
+        let rc = proposals::ReviewCard {
+            review_id: review.into(),
+            card: "caches".into(),
+            ticked: true,
+        };
+        proposals::create_review_card(&h.db, &hoardini_core::policy::PolicyEnv::system(), req, &rc)
+            .unwrap()
+            .unwrap()
+            .id
+    };
+    let open = card(&format!(r"{root}\cache\blob.bin"), "r2");
+    let old = card(&format!(r"{root}\cache\copy.bin"), "r1");
+    h.db.conn()
+        .unwrap()
+        .execute(
+            "UPDATE proposal SET status = 'superseded' WHERE id = ?1",
+            [&old],
+        )
+        .unwrap();
+    let chat = pending_delete(&h, "t-rev", "c1", &format!(r"{root}\models\big.gguf"));
+    let mock = MockLlm::start(vec![Turn::Text("ok".into())]).await;
+    h.run(h.provider(&mock.base_url), user("t-rev", "u1", "hi"))
+        .await;
+    let sys = mock.requests()[0].messages()[0]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let line = sys
+        .lines()
+        .find(|l| l.contains(&open))
+        .unwrap_or_else(|| panic!("no line for {open}: {sys}"));
+    assert!(line.starts_with(&format!("- {open} | delete | ")), "{line}");
+    assert!(
+        line.ends_with(r"\cache\blob.bin | 2.0 MB | review card: Caches"),
+        "{line}"
+    );
+    assert!(sys.find(&chat).unwrap() < sys.find(&open).unwrap());
+    assert!(!sys.contains(&old), "{sys}");
+}

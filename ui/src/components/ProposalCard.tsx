@@ -289,7 +289,7 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
       const res = await routes.approve(proposalId, [...selected]);
       putProposal({ ...proposal, status: "approved", job_id: res.job_id });
       void loadProposal(proposalId);
-      if (!proposal.parent_id) settle(proposalId, res);
+      if (!proposal.parent_id && !proposal.review_id) settle(proposalId, res);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -302,7 +302,7 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
     try {
       const res = await routes.decline(proposalId);
       putProposal({ ...proposal, status: "declined" });
-      if (!proposal.parent_id) settle(proposalId, res);
+      if (!proposal.parent_id && !proposal.review_id) settle(proposalId, res);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

@@ -118,8 +118,10 @@ A note whose source is `user` (typed in the drawer) shall start pinned, and so s
 
 After each completed index refresh of a drive (`hoardini index` calls `memory::location::refresh_volume` before it reports
 `done`), each large folder of that drive shall have one location row. A folder is large when it holds at least 5 GiB or
-at least 1% of the drive's used space (never less than 256 MiB) and no single child holds 90% or more of it; only the 40
-biggest per drive count, and never the drive root. `location::large_folders(conn, volume)` lists them. Each is
+at least 1% of the drive's used space (never less than 256 MiB) and no single child holds 90% or more of it, unless a
+catalog entry names the folder itself as one unit (not a `container`, such as `%TEMP%` or `~\.lmstudio\models`); a folder
+inside such a folder is never large, so ten scratch folders in `%TEMP%` do not take ten places. Only the 40 biggest per
+drive count, and never the drive root. `location::large_folders(conn, env, volume)` lists them. Each is
 classified, with no model call, by the first step that applies:
 
 1. **Deny list:** a Windows system area of POLICY-DENY (the Windows folder, Program Files, `ProgramData\Microsoft`,
@@ -155,6 +157,7 @@ keeping `cleaned` and `kept`: `keep` gives verdict `keep` with `[archive, compre
 - On a fake drive with 1,000 GiB used: `~\Pictures` (80 GiB, 65 GiB of it `.jpg`, `.mp4` and `.heic` in two year folders) is a `mix` row keyed `~\Pictures`, kind `verdict`, category `photos`, `keep`, actions `[archive]`, `size_at` 80 GiB, `assessed_ms` the sweep time, tag `your photos and videos, keep`.
 - On the same drive `C:\code\covenant-agent` (161 GiB of `.dat` in two folders) is `unknown` with no verdict, source `index`, tag `unknown`; `C:\code`, 96% of which is that folder, has no row; `~\.lmstudio\models` is a `catalog` row by `catalog:lmstudio-models`, category `model-store`, all four actions, tag `LM Studio models, redownload`; the Windows folder is a `deny` row, `system`, `keep`, no actions; the profile is a `container` tagged `your profile folder`; a 2 GiB folder and the drive root have none; `location_covering` of a path under `~\Pictures` returns its row.
 - With 45 folders of 6 GiB and up under `C:\many`, `large_folders` returns 40: `C:\many` first, then the 39 biggest of the 45.
+- With ten 6 GiB folders under `%TEMP%\claude`, `%TEMP%` is large (a `catalog:temp-user` row) although `claude` holds all of it, and no folder under `%TEMP%` is; `~\.lmstudio\models` is large and the 20 GiB model folder inside it is not; a 6 GiB `C:\data\set` still is.
 - An 8 GiB folder grown 10% keeps its `assessed_ms`; grown to 11 GiB (37.5%) it is reassessed with `size_at` 11 GiB; 90 days later it is reassessed again; a folder the user answered Keep to is unchanged through all of it.
 - When three 6 GiB folders shrink to 2 GiB, the plain one loses its row, one whose detail has a `kept` entry keeps it, and one the user called Disposable keeps it.
 - Each answer is a pinned `user` row with the verdict and actions above and `size_at` the folder's size; Never touch also leaves a `user` protect note covering the folder; the folder still has one location row.
