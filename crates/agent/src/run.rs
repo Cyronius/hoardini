@@ -760,7 +760,7 @@ impl Run {
         let turn = self
             .env
             .client
-            .chat(cfg, key, &req)
+            .chat_once(cfg, key, &req)
             .await
             .map_err(|e| anyhow::anyhow!(self.scrub(&describe(&e, cfg))))?;
         let Some(id) = parse_identity(&turn.text) else {

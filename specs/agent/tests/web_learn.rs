@@ -449,3 +449,43 @@ async fn a_glob_that_matches_only_a_folder_above_is_not_already_known() {
         "{at}"
     );
 }
+
+// Traces: AGENT-WEB-LEARN
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rate_limited_learning_request_is_not_retried_before_the_run_ends() {
+    let h = Harness::new(Some(FAKE_PROFILE));
+    with_search(&h).await;
+    let mock = MockLlm::start(vec![
+        Turn::Calls(
+            None,
+            vec![call(
+                "s1",
+                "web_search",
+                json!({"query": "q4nx file format", "about": "*.q4nx"}),
+            )],
+        ),
+        Turn::Text("They are FastFlowLM NPU weights.".into()),
+        Turn::Http(429, r#"{"error": {"message": "slow down"}}"#.into()),
+        Turn::Text(r#"{"app": "FastFlowLM", "use": "NPU model weights"}"#.into()),
+    ])
+    .await;
+    let started = std::time::Instant::now();
+    let ev = h
+        .run(
+            h.provider(&mock.base_url),
+            user("t-429", "u1", "What are .q4nx files?"),
+        )
+        .await;
+    assert_valid_sequence(&ev);
+    assert_eq!(
+        mock.requests().len(),
+        3,
+        "the 429 ends the learning request"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "no backoff before RUN_FINISHED"
+    );
+    assert!(custom(&ev, "tool_data").is_empty());
+    assert!(filetype(&h.db.conn().unwrap(), "q4nx").unwrap().is_none());
+}
