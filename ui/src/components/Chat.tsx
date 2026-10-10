@@ -11,6 +11,7 @@ import { proposalTools } from "../agent/proposalTools";
 import { classifySettledTurn, describeRunError, isAbortError } from "../agent/runError";
 import { isProposeTool } from "../agent/toolDefs";
 import { friendlyToolName, humanElapsed } from "../format";
+import { useExploreLink } from "../explore/context";
 import { THREAD_ID, useStore } from "../store";
 import { FollowUps, followUps } from "./FollowUps";
 import { Greeting } from "./Greeting";
@@ -217,6 +218,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
 
   const callsBefore = useStore((s) => s.callsBefore);
   const toolData = useStore((s) => s.toolData);
+  const exploreLink = useExploreLink();
   const ask = (text: string) => void sendText(text);
   const renderCall = (tc: ToolCallLike) => {
     const name = tc.function?.name ?? getToolNameFromCallId(tc.id);
@@ -318,7 +320,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
     .flatMap((m) => (m as unknown as { toolCalls?: ToolCallLike[] }).toolCalls ?? [])
     .map((tc) => toolData[tc.id])
     .filter((d) => d != null);
-  const pills = !isStreaming && !waitingOnCard ? followUps(turnData) : [];
+  const pills = !isStreaming && !waitingOnCard ? followUps(turnData, { explore: !!exploreLink.onOpenExplore }) : [];
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">

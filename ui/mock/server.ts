@@ -247,18 +247,19 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
 
 // ---- Folder tree (GET /api/index/children) ----
 // Profile paths show as "~", as the real server sends them.
-type TreeNode = { path: string; name: string; kind: "dir" | "file"; size: number; files: number; mtime_ms: number; kids?: TreeNode[]; small?: { count: number; bytes: number } };
+type TreeNode = { path: string; name: string; kind: "dir" | "file"; size: number; files: number; mtime_ms: number; kids?: TreeNode[]; small?: { count: number; bytes: number }; parent?: TreeNode; grown?: boolean };
 const DAY = 86_400_000;
 const hash = (s: string) => [...s.toLowerCase()].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7);
 const join = (p: string, n: string) => (p.endsWith("\\") ? `${p}${n}` : `${p}\\${n}`);
+const FILE_RE = /\.(gguf|q4nx|bin|iso|safetensors|vhdx|mp4|sys|exe|zip|dll|pak)$/i;
 
 type Spec = [name: string, gb: number, kids?: Spec[]];
-function build(parent: string, [name, gb, kids]: Spec): TreeNode {
+function build(parent: string, [name, gb, kids]: Spec, up?: TreeNode): TreeNode {
   const path = parent === "" ? `${name}\\` : parent === "C:\\Users" && name === "josha" ? "~" : join(parent, name);
-  const isFile = /\.(gguf|bin|iso|safetensors|vhdx|mp4|sys|exe|zip)$/i.test(name) && !kids;
-  const node: TreeNode = { path, name, kind: isFile ? "file" : "dir", size: Math.round(gb * GB), files: isFile ? 1 : 0, mtime_ms: now() - (hash(path) % 300) * DAY };
+  const isFile = FILE_RE.test(name) && !kids;
+  const node: TreeNode = { path, name, kind: isFile ? "file" : "dir", size: Math.round(gb * GB), files: isFile ? 1 : 0, mtime_ms: now() - (hash(path) % 300) * DAY, parent: up };
   if (kids) {
-    node.kids = kids.map((k) => build(path, k));
+    node.kids = kids.map((k) => build(path, k, node));
     const rest = node.size - node.kids.reduce((a, k) => a + k.size, 0);
     if (rest > 0) node.small = { count: 40 + (hash(path) % 900), bytes: rest };
     node.files = node.kids.reduce((a, k) => a + k.files, 0) + (node.small?.count ?? 0);
@@ -267,43 +268,132 @@ function build(parent: string, [name, gb, kids]: Spec): TreeNode {
 }
 
 const smallRepos: Spec[] = Array.from({ length: 58 }, (_, i) => [`side-project-${String(i + 1).padStart(2, "0")}`, 0.5 - i * 0.007]);
+// Shaped like the maintainer's C: drive: a 725 GB profile, 365 GB of it in AppData\Local.
 const tree = build("", [
   "C:",
-  1844,
+  1800,
   [
-    ["Users", 652, [["josha", 650, [[".lmstudio", 96.1, [["models", 95.4, [["llama-3.3-70b-Q4_K_M.gguf", 42.5], ["qwen3.8-27b-Q8_0.gguf", 27.1], ["gemma-4-12b-Q8_0.gguf", 12.4], ["mistral-small-24b-Q6_K.gguf", 9.9]]], ["cache", 0.6]]], ["AppData", 120, [["Local", 110, [["Docker", 40], ["Temp", 12, [["claude", 9.1]]], ["Microsoft", 21]]], ["Roaming", 9]]], [".cache", 48, [["huggingface", 31], ["pip", 6.2], ["uv", 4.6]]], ["Downloads", 31], ["Documents", 22]]]]],
+    [
+      "Users",
+      727,
+      [
+        [
+          "josha",
+          725,
+          [
+            [
+              "AppData",
+              372,
+              [
+                [
+                  "Local",
+                  365,
+                  [
+                    [
+                      "Temp",
+                      101,
+                      [
+                        [
+                          "claude",
+                          92,
+                          [
+                            ["c--code-hoardini", 41, [["3f9c2d1e", 23, [["Qwen3.6-35B-A3B-NPU2.q4nx", 21.4]]], ["8a71b0c4", 17.8, [["gemma-4-12b-Q8_0.gguf", 12.4], ["phi-5-mini-NPU2.q4nx", 5.1]]]]],
+                            ["c--code-covenant-agent", 33, [["51e2aa90", 33, [["Qwen3.8-27B-NPU2.q4nx", 28.9], ["tokenizer-cache.bin", 3.6]]]]],
+                            ["c--code-based", 17.6, [["0d4be7f2", 17.6, [["llama-3.3-8b-NPU2.q4nx", 8.2], ["mistral-small-24b-Q4_K_M.gguf", 9.1]]]]],
+                          ],
+                        ],
+                      ],
+                    ],
+                    ["Docker", 82, [["wsl", 81.5, [["disk", 81.5, [["docker_data.vhdx", 78.2]]]]]]],
+                    ["Packages", 61, [["CanonicalGroupLimited.Ubuntu24.04LTS_79rhkp1fndgsc", 59.5, [["LocalState", 59.2, [["ext4.vhdx", 57.1]]]]]]],
+                    ["Programs", 48, [["cursor", 14.2], ["Ollama", 11.8], ["LM Studio", 9.6], ["Microsoft VS Code", 4.1]]],
+                    ["Microsoft", 22],
+                    ["NVIDIA", 21, [["DXCache", 14.5], ["GLCache", 6.3]]],
+                    ["Google", 18, [["Chrome", 18, [["User Data", 17.9]]]]],
+                  ],
+                ],
+                ["Roaming", 7],
+              ],
+            ],
+            [".flm", 104, [["models", 103.6, [["Qwen3.6-35B-A3B-NPU2", 38.1, [["model.q4nx", 37.6]]], ["Qwen3.8-27B-NPU2", 29.2, [["model.q4nx", 28.9]]], ["gemma-4-12b-NPU2", 14.1, [["model.q4nx", 13.8]]], ["Qwen3-Coder-30B-NPU2", 9.4, [["model.q4nx", 9.2]]], ["llama-3.3-8b-NPU2", 8.2, [["model.q4nx", 8]]], ["phi-5-mini-NPU2", 4.5, [["model.q4nx", 4.4]]]]]]],
+            [".lmstudio", 96.1, [["models", 95.4, [["llama-3.3-70b-Q4_K_M.gguf", 42.5], ["qwen3.8-27b-Q8_0.gguf", 27.1], ["gemma-4-12b-Q8_0.gguf", 12.4], ["mistral-small-24b-Q6_K.gguf", 9.9]]], ["cache", 0.6]]],
+            [".cache", 48, [["huggingface", 31, [["hub", 31, [["models--Qwen--Qwen3-8B-GGUF", 17.2, [["Qwen3-8B-Q8_0.gguf", 8.7], ["Qwen3-8B-Q6_K.gguf", 6.7]]], ["models--black-forest-labs--FLUX.1-dev", 13.6, [["flux1-dev.safetensors", 11.9]]]]]]], ["pip", 6.2], ["uv", 4.6]]],
+            ["Downloads", 31, [["Win11_25H2_English_x64.iso", 7], ["ubuntu-24.04.3-desktop-amd64.iso", 5.9], ["proxmox-ve_9.0-1.iso", 1.4], ["OllamaSetup.exe", 1.1]]],
+            ["Documents", 22, [["Videos", 14, [["wedding-2019.mp4", 4.2]]]]],
+            [".hipfire", 21],
+            ["Pictures", 18],
+            ["OneDrive", 8],
+          ],
+        ],
+      ],
+    ],
     ["code", 312, [["covenant-agent", 161, [["target", 98], ["data", 41], ["models", 17], ["node_modules", 3.2], ["src", 0.4]]], ["hoardini", 58, [["target", 52], ["ui", 4.1]]], ["llama.cpp", 31], ["based", 22], ["lm-admin", 14], ...smallRepos]],
-    ["Games", 160],
-    ["Program Files", 88],
-    ["Windows", 41],
-    ["ProgramData", 19],
+    ["Games", 300],
+    ["Program Files", 170],
+    ["AI", 140],
+    ["Windows", 52],
+    ["ProgramData", 44],
+    ["hiberfil.sys", 25],
+    ["pagefile.sys", 16],
     ["$WINDOWS.~BT", 9.2],
     ["NVIDIA", 3.1],
     ["Intel", 1.2],
-    ["PerfLogs", 0.1],
   ],
 ]);
+
+// What made-up contents are made of, by the nearest folder named here.
+const HINTS: Record<string, string[]> = {
+  "c:\\program files": ["dll", "exe", "pak"],
+  "~\\appdata\\local\\programs": ["dll", "exe", "pak"],
+  "c:\\windows": ["dll", "sys", "cab"],
+  "c:\\games": ["pak", "bin"],
+  "c:\\ai": ["gguf"],
+  "c:\\code": ["bin", "json", "pt"],
+  "c:\\code\\covenant-agent\\target": ["rlib", "pdb", "exe"],
+  "c:\\code\\hoardini\\target": ["rlib", "pdb", "exe"],
+  "c:\\code\\llama.cpp": ["gguf", "bin"],
+  "c:\\code\\covenant-agent\\data": ["parquet", "bin"],
+  "c:\\code\\covenant-agent\\models": ["safetensors", "gguf"],
+  "~\\pictures": ["jpg", "heic", "mp4"],
+  "~\\onedrive": ["docx", "pdf", "jpg"],
+  "~\\.hipfire": ["bin", "json"],
+  "~\\appdata\\local\\microsoft": ["dat", "db", "edb"],
+  "~\\appdata\\local\\nvidia": ["bin", "toc"],
+  "c:\\programdata": ["dat", "msi", "log"],
+};
+
+function hintFor(path: string): string[] {
+  let p = path.toLowerCase();
+  for (;;) {
+    if (HINTS[p]) return HINTS[p]!;
+    const i = p.lastIndexOf("\\");
+    if (i <= 0) return ["bin"];
+    p = p.slice(0, i);
+  }
+}
 
 const NAMES = ["cache", "data", "build", "models", "packages", "logs", "assets", "lib", "bin", "backup", "tmp", "src"];
 // Folders the tree above leaves open get made-up contents, so ▸ always goes deeper.
 function grow(n: TreeNode): void {
   if (n.kids || n.kind === "file") return;
   const h = hash(n.path);
+  n.grown = true;
   if (n.size < 64 * MB) {
     n.small = { count: n.files, bytes: n.size };
     n.kids = [];
     return;
   }
   const k = 3 + (h % 5);
-  let left = n.size * 0.9;
+  const exts = hintFor(n.path);
+  let left = n.size * 0.985;
   n.kids = Array.from({ length: k }, (_, i) => {
     const size = Math.round(i === k - 1 ? left : left * (0.45 + ((h >> i) % 20) / 100));
     left -= size;
-    const name = i === 0 && n.size < 4 * GB ? `${NAMES[h % NAMES.length]}-${i}.bin` : `${NAMES[(h + i) % NAMES.length]}${i > 3 ? `-${i}` : ""}`;
-    const isFile = name.endsWith(".bin");
-    return { path: join(n.path, name), name, kind: isFile ? "file" : "dir", size, files: isFile ? 1 : 10 + ((h >> i) % 3000), mtime_ms: now() - ((h >> i) % 200) * DAY };
+    const isFile = (i === 0 && n.size < 4 * GB) || (i === 1 && h % 3 === 0);
+    const name = isFile ? `${NAMES[(h + i) % NAMES.length]}-${i}.${exts[i % exts.length]}` : `${NAMES[(h + i) % NAMES.length]}${i > 3 ? `-${i}` : ""}`;
+    return { path: join(n.path, name), name, kind: isFile ? "file" : "dir", size, files: isFile ? 1 : 10 + ((h >> i) % 3000), mtime_ms: now() - ((h >> i) % 200) * DAY, parent: n };
   });
-  n.small = { count: 30 + (h % 500), bytes: Math.round(n.size * 0.1) };
+  n.small = { count: 30 + (h % 500), bytes: Math.round(n.size * 0.015) };
 }
 
 const norm = (p: string) => p.trim().replace(/\//g, "\\").replace(/^C:\\Users\\josha(?=\\|$)/i, "~").replace(/\\+$/, "").toLowerCase();
@@ -334,6 +424,157 @@ function childrenOf(path: string, limit: number) {
 }
 
 const revealed: string[] = [];
+
+// ---- Explore (GET /api/index/map, GET /api/index/types, PUT /api/explore/focus) ----
+type Known = T.MapTag & { self?: boolean };
+// What the mock "knows", by folder; the nearest one at or above a path wins, as on the server (SRV-INDEX-MAP).
+const KNOWN: Record<string, Known> = {
+  "c:\\": { state: "unknown", label: "the drive root", self: true },
+  "c:\\users": { state: "unknown", label: "user profiles", self: true },
+  "~": { state: "unknown", label: "your profile folder", self: true },
+  "~\\appdata": { state: "unknown", label: "the AppData folder", self: true },
+  "~\\appdata\\local": { state: "unknown", label: "AppData\\Local", self: true },
+  "c:\\windows": { state: "system", label: "the Windows folder", verdict: "keep" },
+  "c:\\program files": { state: "system", label: "installed programs", verdict: "keep" },
+  "c:\\programdata": { state: "keep", label: "app data for every user", verdict: "keep" },
+  "c:\\hiberfil.sys": { state: "system", label: "a Windows paging or hibernation file", verdict: "keep" },
+  "c:\\pagefile.sys": { state: "system", label: "a Windows paging or hibernation file", verdict: "keep" },
+  "c:\\$windows.~bt": { state: "proposed", label: "Windows upgrade leftovers", verdict: "safe" },
+  "c:\\nvidia": { state: "proposed", label: "GPU driver unpack folder", verdict: "safe" },
+  "c:\\intel": { state: "proposed", label: "GPU driver unpack folder", verdict: "safe" },
+  "c:\\games": { state: "review", label: "Steam library", verdict: "redownload" },
+  "c:\\ai": { state: "review", label: "model weights", verdict: "review" },
+  "c:\\code\\covenant-agent\\target": { state: "proposed", label: "Rust build output", verdict: "safe" },
+  "c:\\code\\hoardini\\target": { state: "proposed", label: "Rust build output", verdict: "safe" },
+  "c:\\code\\covenant-agent\\node_modules": { state: "review", label: "node_modules", verdict: "redownload" },
+  "~\\appdata\\local\\temp": { state: "proposed", label: "Temp files not touched for 24 hours", verdict: "safe" },
+  "~\\appdata\\local\\temp\\claude": { state: "proposed", label: "Old Claude Code scratchpads", verdict: "safe" },
+  "~\\appdata\\local\\docker": { state: "review", label: "Docker Desktop's WSL disk", verdict: "review" },
+  "~\\appdata\\local\\packages\\canonicalgrouplimited.ubuntu24.04lts_79rhkp1fndgsc": { state: "review", label: "WSL Ubuntu disk", verdict: "review" },
+  "~\\appdata\\local\\programs": { state: "keep", label: "installed apps", verdict: "keep" },
+  "~\\appdata\\local\\microsoft": { state: "keep", label: "Windows app data", verdict: "keep" },
+  "~\\appdata\\local\\nvidia": { state: "proposed", label: "NVIDIA shader cache", verdict: "safe" },
+  "~\\appdata\\local\\google\\chrome\\user data": { state: "keep", label: "Chrome profile", verdict: "keep" },
+  "~\\appdata\\roaming": { state: "keep", label: "app settings", verdict: "keep" },
+  "~\\.flm\\models": { state: "review", label: "FastFlowLM models", verdict: "redownload" },
+  "~\\.lmstudio\\models": { state: "review", label: "LM Studio models", verdict: "redownload" },
+  "~\\.lmstudio\\models\\qwen3.8-27b-q8_0.gguf": { state: "keep", label: "Keep Qwen3.8 27B; it is my daily driver.", verdict: "keep" },
+  "~\\.cache\\huggingface": { state: "review", label: "Hugging Face cache", verdict: "redownload" },
+  "~\\.cache\\pip": { state: "proposed", label: "pip download cache", verdict: "safe" },
+  "~\\.cache\\uv": { state: "proposed", label: "uv cache", verdict: "safe" },
+  "~\\downloads": { state: "review", label: "Downloads", verdict: "review" },
+  "~\\documents": { state: "user", label: "your documents", verdict: "keep" },
+  "~\\pictures": { state: "user", label: "your photos and videos", verdict: "keep" },
+  "~\\onedrive": { state: "user", label: "OneDrive", verdict: "keep" },
+  "~\\.hipfire": { state: "unknown", label: "hipfire's model cache" },
+};
+
+function tagOf(path: string): T.MapTag {
+  let p = path.replace(/\\+$/, "").toLowerCase() || path.toLowerCase();
+  const exact = KNOWN[p] ?? KNOWN[`${p}\\`];
+  if (exact) return { state: exact.state, label: exact.label, verdict: exact.verdict };
+  for (;;) {
+    const i = p.lastIndexOf("\\");
+    if (i < 0) return { state: "unknown" };
+    p = p.slice(0, i);
+    const k = KNOWN[p] ?? KNOWN[`${p}\\`];
+    if (k && !k.self) return { state: k.state, label: k.label, verdict: k.verdict };
+  }
+}
+
+const extOf = (name: string) => (name.lastIndexOf(".") > 0 ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "");
+const MAP_NODES = 5000;
+
+function mapOf(path: string, w: number, h: number): T.IndexMap | null {
+  const root = findNode(path);
+  if (!root) return null;
+  const min = Math.max(1, Math.ceil((9 * root.size) / (w * h)));
+  const out = (n: TreeNode): T.MapNode => ({ path: n.path, name: n.name, kind: n.kind, size: n.size, files: n.files, ...(n.kind === "file" ? { ext: extOf(n.name) } : {}), tag: tagOf(n.path) });
+  const top = out(root);
+  const open: [TreeNode, T.MapNode][] = [[root, top]];
+  let nodes = 1;
+  let capped = false;
+  while (open.length) {
+    let at = 0;
+    open.forEach(([n], i) => {
+      if (n.size > open[at]![0].size) at = i;
+    });
+    const [n, m] = open.splice(at, 1)[0]!;
+    if (nodes >= MAP_NODES) {
+      capped = true;
+      break;
+    }
+    grow(n);
+    const entries: (TreeNode | "small")[] = [...(n.kids ?? [])].sort((a, b) => b.size - a.size || a.name.localeCompare(b.name));
+    if (n.small && n.small.bytes > 0) entries.push("small");
+    entries.sort((a, b) => (b === "small" ? n.small!.bytes : b.size) - (a === "small" ? n.small!.bytes : a.size));
+    m.children = [];
+    m.more = { count: 0, bytes: 0 };
+    for (const e of entries) {
+      const size = e === "small" ? n.small!.bytes : e.size;
+      if (size < min || nodes >= MAP_NODES) {
+        if (size >= min) capped = true;
+        m.more.count += e === "small" ? n.small!.count : 1;
+        m.more.bytes += size;
+        continue;
+      }
+      nodes++;
+      if (e === "small") {
+        m.children.push({ path: n.path, name: "small files", kind: "small", size, files: n.small!.count, tag: m.tag });
+        continue;
+      }
+      const c = out(e);
+      m.children.push(c);
+      if (e.kind === "dir") open.push([e, c]);
+    }
+    m.size = m.children.reduce((a, c) => a + c.size, 0) + m.more.bytes;
+  }
+  const ancestors: { path: string; name: string }[] = [];
+  for (let p = root.parent; p; p = p.parent) ancestors.unshift({ path: p.path, name: p.name });
+  return { tree: top, ancestors, min_bytes: min, nodes, capped: capped || open.length > 0 };
+}
+
+function typesOf(path: string): T.TypeRow[] | null {
+  const root = findNode(path);
+  if (!root) return null;
+  const by = new Map<string, { bytes: number; files: number }>();
+  const small = { bytes: 0, files: 0 };
+  const add = (ext: string, bytes: number, files: number) => {
+    const e = by.get(ext) ?? { bytes: 0, files: 0 };
+    e.bytes += bytes;
+    e.files += files;
+    by.set(ext, e);
+  };
+  const walk = (n: TreeNode) => {
+    if (n.kind === "file") return add(extOf(n.name), n.size, 1);
+    // Made-up contents depend on what was opened before, so types use the folder's mix and stay the same.
+    if (n.grown) return guess(n);
+    if (n.small) {
+      small.bytes += n.small.bytes;
+      small.files += n.small.count;
+    }
+    if (n.kids) return n.kids.forEach(walk);
+    guess(n);
+  };
+  const guess = (n: TreeNode) => {
+    const exts = hintFor(n.path);
+    const shares = exts.length === 1 ? [0.985] : exts.length === 2 ? [0.66, 0.325] : [0.6, 0.265, 0.12];
+    exts.forEach((e, i) => add(e, Math.round(n.size * shares[i]!), Math.max(1, Math.round((n.files * shares[i]!) / 4))));
+    small.bytes += Math.round(n.size * 0.015);
+    small.files += Math.round(n.files * 0.7);
+  };
+  walk(root);
+  const fixed: Record<string, string> = { gguf: "model-weights", safetensors: "model-weights", pt: "model-weights", jpg: "photos", heic: "photos", mp4: "photos", pdf: "documents", docx: "documents" };
+  const rows: T.TypeRow[] = [...by.entries()].map(([ext, v]) => {
+    const m = memories.find((x) => x.scope === "glob" && x.key.toLowerCase() === `**\\*.${ext}` && x.detail);
+    const category = m?.detail?.category ?? fixed[ext];
+    return { ext, bytes: v.bytes, files: v.files, ...(m ? { label: m.text, app: m.detail?.app, use: m.detail?.use } : {}), ...(category ? { category } : {}) };
+  });
+  if (small.bytes > 0) rows.push({ ext: null, small: true, bytes: small.bytes, files: small.files });
+  return rows.sort((a, b) => b.bytes - a.bytes);
+}
+
+let exploreFocus: string | null = null;
 
 // ---- AG-UI run ----
 const enc = new TextEncoder();
@@ -445,7 +686,7 @@ function changesData() {
   };
 }
 
-async function suggest(s: Sse, parent: string, items: { label: string; kind: "ask" | "clean_up"; path?: string }[]) {
+async function suggest(s: Sse, parent: string, items: T.Pill[]) {
   const kept = items.filter((p) => !p.path || findNode(p.path));
   await readTool(s, "suggest_next", { items }, `Shown under your answer: ${kept.map((p) => JSON.stringify(p.label)).join(", ")}.`, 150, kept.length ? { v: 1, kind: "pills", items: kept } : undefined, parent);
 }
@@ -477,6 +718,14 @@ async function agentRun(input: { runId: string; messages: { id?: string; role: s
         const toolCallId = await readTool(s, "remember", { scope: "global", kind: "preference", text }, JSON.stringify({ id: ++memSeq }), 300);
         memories.push({ id: memSeq, scope: "global", key: "", kind: "preference", text: text.replace(/^remember( that)?/i, "").trim() || text, source: "chat", confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null, pinned: false, last_used_ms: now(), forgotten_ms: null });
         s.send({ type: "CUSTOM", name: "memory_noted", value: { memory_id: memSeq, text: text.replace(/^remember( that)?/i, "").trim() || text, tool_call_id: toolCallId, pinned: false } });
+      } else if (/^show me where|on a map/i.test(text)) {
+        const folders = { ...folderData(null), view: "map" };
+        await readTool(s, "top_dirs", { view: "map" }, folderText(folders), 500, folders);
+        const id = await say(s, "Your profile and `C:\\code` hold most of it; `AppData\\Local` alone is 365 GB.");
+        await suggest(s, id, [
+          { label: "Explore AppData\\Local", kind: "explore", path: "~\\AppData\\Local" },
+          { label: "Clean up C:\\code", kind: "clean_up", path: "C:\\code" },
+        ]);
       } else if (/hotspot|where .*space|taking up/i.test(text)) {
         const folders = folderData(null);
         await readTool(s, "top_dirs", {}, folderText(folders), 500, folders);
@@ -580,6 +829,7 @@ async function route(req: Request): Promise<Response> {
   switch (seg[0]) {
     case "mock": {
       if (seg[1] === "revealed") return json(revealed);
+      if (seg[1] === "focus") return json({ path: exploreFocus });
       const b = await body<{ fill?: number; running_runs?: number; idle?: boolean; next_job?: NextJob }>();
       if (b.next_job) nextJob = b.next_job;
       if (b.fill != null) setFill(b.fill);
@@ -608,10 +858,27 @@ async function route(req: Request): Promise<Response> {
         if (findNode(p)!.kind === "file") return err(`${p} is not a folder`);
         return json(page);
       }
+      if (seg[1] === "map" || seg[1] === "types") {
+        const p = url.searchParams.get("path");
+        if (!p?.trim()) return err("path is required");
+        const n = findNode(p);
+        if (!n) return err(`${p} in the index not found`, 404);
+        if (n.kind === "file") return err(`${p} is not a folder`);
+        const side = (k: string, d: number) => Math.min(8192, Math.max(16, Number(url.searchParams.get(k) ?? d) || d));
+        return json(seg[1] === "map" ? mapOf(p, side("w", 1200), side("h", 800)) : typesOf(p));
+      }
       if (seg[1] === "refresh") {
         if (status.index.state !== "idle") return json({ started: false });
         startRefresh(settings.index_speed === "fast" ? "fast" : "background");
         return json({ started: true });
+      }
+      break;
+    case "explore":
+      if (seg[1] === "focus" && method === "PUT") {
+        const { path: p } = await body<{ path?: string | null }>();
+        exploreFocus = p?.trim() || null;
+        console.log(`explore focus ${exploreFocus ?? "(none)"}`);
+        return json({ path: exploreFocus });
       }
       break;
     case "agent":

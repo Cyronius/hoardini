@@ -1,7 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError, routes } from "../api/client";
 import type { ChildRow, Children } from "../api/types";
-import { digits, humanBytes, shortDate } from "../format";
+import { digits, humanBytes, isUnder, samePath, shortDate } from "../format";
 import { ChevronRightIcon, ExplorerIcon } from "./icons";
 
 const TONE = { brass: "bg-brass/70", ok: "bg-ok/70", err: "bg-err/60" } as const;
@@ -30,7 +30,7 @@ function revealError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-export function RevealButton({ path }: { path: string }) {
+export function RevealButton({ path, label }: { path: string; label?: string }) {
   const [err, setErr] = useState<string | null>(null);
   const reveal = async () => {
     try {
@@ -42,8 +42,9 @@ export function RevealButton({ path }: { path: string }) {
   };
   return (
     <>
-      <button type="button" className={`${actionBtn} inline-flex items-center`} title="Show in Explorer" aria-label={`Show ${path} in Explorer`} onClick={() => void reveal()}>
+      <button type="button" className={`${actionBtn} inline-flex items-center gap-1`} title="Show in Explorer" aria-label={`Show ${path} in Explorer`} onClick={() => void reveal()}>
         <ExplorerIcon />
+        {label}
       </button>
       {err && (
         <span data-err className="text-[length:var(--fs-xs)] font-semibold text-err">
@@ -78,9 +79,16 @@ export type ItemTreeProps = {
   rootSize?: number;
   actions?: (row: ChildRow) => ReactNode;
   depth?: number;
+  selected?: string | null;
+  // Folders to open on the way to `selected`, as the server spells them (the profile shows as "~").
+  trail?: readonly string[];
+  onSelect?: (row: ChildRow) => void;
+  onOpen?: (row: ChildRow) => void;
 };
 
-export function ItemTree({ path, rootSize, actions, depth = 0 }: ItemTreeProps) {
+type Selecting = Pick<ItemTreeProps, "selected" | "trail" | "onSelect" | "onOpen">;
+
+export function ItemTree({ path, rootSize, actions, depth = 0, selected, trail, onSelect, onOpen }: ItemTreeProps) {
   const [limit, setLimit] = useState(50);
   const [state, setState] = useState<{ data?: Children; err?: string }>({});
   useEffect(() => {
@@ -102,7 +110,7 @@ export function ItemTree({ path, rootSize, actions, depth = 0 }: ItemTreeProps) 
   return (
     <ul className={`${frame} text-[length:var(--fs-sm)]`}>
       {d.children.map((c) => (
-        <TreeRow key={c.path} row={c} parentSize={parent} actions={actions} depth={depth} />
+        <TreeRow key={c.path} row={c} parentSize={parent} actions={actions} depth={depth} selected={selected} trail={trail} onSelect={onSelect} onOpen={onOpen} />
       ))}
       {d.small.count > 0 && (
         <li className="flex items-center gap-2 py-[3px] pl-6 text-[length:var(--fs-xs)] italic text-faint">
@@ -121,18 +129,53 @@ export function ItemTree({ path, rootSize, actions, depth = 0 }: ItemTreeProps) 
   );
 }
 
-function TreeRow({ row, parentSize, actions, depth }: { row: ChildRow; parentSize: number; actions?: (row: ChildRow) => ReactNode; depth: number }) {
+function TreeRow({
+  row,
+  parentSize,
+  actions,
+  depth,
+  selected,
+  trail,
+  onSelect,
+  onOpen,
+}: { row: ChildRow; parentSize: number; actions?: (row: ChildRow) => ReactNode; depth: number } & Selecting) {
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
   const frac = parentSize > 0 ? row.size / parentSize : 0;
   const isDir = row.kind === "dir";
+  const isSel = selected != null && samePath(row.path, selected);
+  const onPath = selected != null && (isUnder(row.path, selected) || !!trail?.some((t) => samePath(t, row.path)));
+  // A selection made elsewhere (the treemap) opens the folders above it and scrolls to it.
+  useEffect(() => {
+    if (onPath) setOpen(true);
+  }, [onPath]);
+  useEffect(() => {
+    if (isSel) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [isSel]);
+  const name = (
+    <>
+      {row.name}
+      {row.denied && <span className="ml-1.5 text-[length:var(--fs-xs)] font-normal text-faint">(some unreadable)</span>}
+    </>
+  );
+  const nameCls = `min-w-0 flex-1 truncate text-left ${isDir ? "font-semibold text-paper" : "text-paper-dim"}`;
   return (
     <li>
-      <div className="group relative flex items-center gap-2 rounded-md py-[3px] pr-1 hover:bg-ink-800">
+      <div
+        ref={ref}
+        aria-current={isSel || undefined}
+        className={`group relative flex items-center gap-2 rounded-md py-[3px] pr-1 ${isSel ? "bg-brass/12 ring-1 ring-inset ring-brass/50" : "hover:bg-ink-800"}`}
+      >
         {row.has_children ? <Toggle open={open} onClick={() => setOpen((o) => !o)} label={row.name} /> : <span className="w-4 shrink-0" />}
-        <span className={`min-w-0 flex-1 truncate ${isDir ? "font-semibold text-paper" : "text-paper-dim"}`} title={row.path}>
-          {row.name}
-          {row.denied && <span className="ml-1.5 text-[length:var(--fs-xs)] font-normal text-faint">(some unreadable)</span>}
-        </span>
+        {onSelect ? (
+          <button type="button" className={`${nameCls} rounded-sm focus-visible:outline focus-visible:outline-1 focus-visible:outline-brass`} title={row.path} onClick={() => onSelect(row)} onDoubleClick={() => onOpen?.(row)}>
+            {name}
+          </button>
+        ) : (
+          <span className={nameCls} title={row.path}>
+            {name}
+          </span>
+        )}
         <span className="hidden w-16 shrink-0 @sm:block">
           <SizeBar fraction={frac} />
         </span>
@@ -142,12 +185,12 @@ function TreeRow({ row, parentSize, actions, depth }: { row: ChildRow; parentSiz
         <span className={`hidden w-16 shrink-0 whitespace-nowrap text-right text-[length:var(--fs-xs)] text-faint @lg:block ${underOverlay}`} title="Last modified">
           {shortDate(row.mtime_ms)}
         </span>
-        <span className={`${overlay} bg-ink-800 pr-1`}>
+        <span className={`${overlay} ${isSel ? "bg-ink-850" : "bg-ink-800"} pr-1`}>
           {actions?.(row)}
           <RevealButton path={row.path} />
         </span>
       </div>
-      {open && <ItemTree path={row.path} rootSize={row.size} actions={actions} depth={depth + 1} />}
+      {open && <ItemTree path={row.path} rootSize={row.size} actions={actions} depth={depth + 1} selected={selected} trail={trail} onSelect={onSelect} onOpen={onOpen} />}
     </li>
   );
 }
