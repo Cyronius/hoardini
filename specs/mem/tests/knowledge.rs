@@ -88,7 +88,7 @@ fn confirming_a_classified_row_keeps_its_keep_verdict() {
     let m = confirm(&d.c(), row.id, T0, P).unwrap().unwrap();
     assert_eq!(m.source, "user");
     assert_eq!(detail(&m).verdict, Some(Verdict::Keep));
-    assert!(detail(&m).actions.contains(&Action::Archive));
+    assert_eq!(detail(&m).actions, [Action::Archive]);
     d.sweep(T0 + 200 * DAY);
     assert!(
         keep_block(&d.c(), &d.env, photo, Action::Delete)
@@ -149,7 +149,9 @@ fn large_folders_get_one_classified_row_each() {
     assert_eq!(lm.source, "catalog");
     assert_eq!(detail(&lm).by.as_deref(), Some("catalog:lmstudio-models"));
     assert_eq!(detail(&lm).category, "model-store");
-    assert_eq!(detail(&lm).actions.len(), 4);
+    let mut acts: Vec<&str> = detail(&lm).actions.iter().map(|a| a.as_str()).collect();
+    acts.sort_unstable();
+    assert_eq!(acts, ["archive", "compress", "dedupe", "delete"]);
     assert_eq!(tag(&lm).as_deref(), Some("LM Studio models, redownload"));
 
     let w = d.row(&win).unwrap();

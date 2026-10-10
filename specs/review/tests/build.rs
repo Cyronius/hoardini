@@ -292,6 +292,7 @@ fn pending_and_recently_declined_items_stay_out_and_small_cards_only_show_for_a_
         "300 MiB is under the 500 MiB a card needs"
     );
     assert!(!r.areas.iter().any(|a| a.path == kept_for_chat));
+    assert!(!r.areas.iter().any(|a| a.path == declined));
 
     let folder = d.review(Scope::Folder(d.path(r"~\AppData\Local\pip")), NOW);
     assert_eq!(
@@ -680,7 +681,7 @@ fn verified_copies_disposable_answers_and_learned_entries_shape_the_cards() {
     assert_eq!(b.items[0].memory_note, None, "the reason already says it");
 }
 
-// Traces: REVIEW-BUILD, ACT-ONLINE-ONLY
+// Traces: REVIEW-BUILD, ACT-ONLINE-ONLY, POLICY-VERDICT-CAP
 #[test]
 fn cold_synced_files_go_online_only_and_never_to_a_delete_card() {
     let mut d = Disk::new();
@@ -709,6 +710,7 @@ fn cold_synced_files_go_online_only_and_never_to_a_delete_card() {
     assert_eq!(o.kind, ProposalKind::OnlineOnly);
     assert_eq!(items(&o), [(old.clone(), true)]);
     assert_eq!(o.items[0].verdict, Some(Verdict::Synced));
+    assert_eq!(o.items[0].cap, Some(Verdict::Synced));
     assert_eq!(
         o.items[0].reason.as_deref(),
         Some("Synced to OneDrive; nothing in it opened or changed for 400 days.")
@@ -847,15 +849,25 @@ fn open_answers_at_once_while_one_build_runs_in_the_background() {
     let vid = d.index();
     let clock = Arc::new(AtomicI64::new(NOW));
     let announced = Arc::new(AtomicUsize::new(0));
+    let building_at_announce = Arc::new(Mutex::new(Vec::new()));
+    let me: Arc<std::sync::OnceLock<std::sync::Weak<Builds>>> = Arc::default();
     let builds = {
-        let (c, a) = (clock.clone(), announced.clone());
+        let (c, a, seen, me) = (
+            clock.clone(),
+            announced.clone(),
+            building_at_announce.clone(),
+            me.clone(),
+        );
         Builds::new(
             move || c.load(Ordering::SeqCst),
             move || {
                 a.fetch_add(1, Ordering::SeqCst);
+                let b = me.get().and_then(std::sync::Weak::upgrade);
+                seen.lock().unwrap().push(b.is_some_and(|b| b.building()));
             },
         )
     };
+    me.set(Arc::downgrade(&builds)).unwrap();
     let started = Arc::new(AtomicUsize::new(0));
     let (go, gate) = std::sync::mpsc::channel::<()>();
     let gate = Arc::new(Mutex::new(gate));
@@ -942,6 +954,11 @@ fn open_answers_at_once_while_one_build_runs_in_the_background() {
     assert_eq!(*order.lock().unwrap(), ["a", "b"]);
     assert!(!builds.building());
     assert_eq!(announced.load(Ordering::SeqCst), 6);
+    assert_eq!(
+        building_at_announce.lock().unwrap()[4..],
+        [true, false],
+        "b runs before a is announced, so building stays true until both are"
+    );
 }
 
 // Traces: REVIEW-AREAS, EVID-COPY-CHECK

@@ -78,6 +78,7 @@ fn one_lzx_card_compresses_several_folders_each_on_its_own() {
     let (a1, b1) = (alloc(&a), alloc(&b));
     assert!(a1 < a0 / 2 && b1 < b0 / 2, "{a0}->{a1}, {b0}->{b1}");
     assert_eq!(std::fs::read(&a).unwrap(), text_blob(3 << 20));
+    assert_eq!(std::fs::read(&b).unwrap(), text_blob(2 << 20));
     let freed: Vec<(String, i64)> = fx
         .db
         .conn()

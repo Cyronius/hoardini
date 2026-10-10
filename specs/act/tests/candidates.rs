@@ -176,6 +176,26 @@ fn the_top_candidates_are_estimated_once_and_again_after_a_change() {
 
     assert_eq!(compress::estimate_top(&db, &cands, 1).unwrap(), 0);
     assert_eq!(compress::estimate_top(&db, &cands, 2).unwrap(), 1);
+    let stored = || -> Vec<(String, i64)> {
+        db.conn()
+            .unwrap()
+            .prepare("SELECT path, newest_ms FROM compress_estimate ORDER BY path")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(
+        stored(),
+        [(cands[0].path.clone(), 1), (cands[1].path.clone(), 1)],
+        "the second one only now"
+    );
     cands[0].newest_ms = Some(2);
     assert_eq!(compress::estimate_top(&db, &cands, 2).unwrap(), 1);
+    assert_eq!(
+        stored(),
+        [(cands[0].path.clone(), 2), (cands[1].path.clone(), 1)],
+        "the changed one again"
+    );
 }

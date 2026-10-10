@@ -1539,16 +1539,41 @@ fn recorded_winget_output_parses() {
             version: "2.1.7".into()
         }]
     );
-    let ff = winget::parse_search(&fixture("winget-search-firefox.txt"));
-    assert!(ff.len() >= 5);
-    assert_eq!(
+    let ff: Vec<(String, String, String)> =
+        winget::parse_search(&fixture("winget-search-firefox.txt"))
+            .into_iter()
+            .map(|r| (r.name, r.id, r.version))
+            .collect();
+    let want = [
         (
-            ff[1].name.as_str(),
-            ff[1].id.as_str(),
-            ff[1].version.as_str()
+            "Crash Firefox Intentionally",
+            "Mozilla.CrashFirefoxIntentionally",
+            "1",
         ),
-        ("Mozilla Firefox (en-US)", "Mozilla.Firefox", "157.0.1")
-    );
+        ("Mozilla Firefox (en-US)", "Mozilla.Firefox", "157.0.1"),
+        (
+            "Firefox Beta (MSIX)",
+            "Mozilla.Firefox.Beta.MSIX",
+            "153.0.11",
+        ),
+        (
+            "Firefox Developer Edition (en-US)",
+            "Mozilla.Firefox.DeveloperEdition",
+            "156.0",
+        ),
+        (
+            "Firefox Developer Edition (MSIX)",
+            "Mozilla.Firefox.DeveloperEdition.MSIX",
+            "158.0.5.0",
+        ),
+        (
+            "Firefox Developer Edition (ach)",
+            "Mozilla.Firefox.DeveloperEdition.ach",
+            "151.0",
+        ),
+    ]
+    .map(|(n, i, v)| (n.to_string(), i.to_string(), v.to_string()));
+    assert_eq!(ff, want);
     assert!(winget::parse_search(&fixture("winget-search-none.txt")).is_empty());
     let show = winget::parse_show(&fixture("winget-show-etcher.txt")).unwrap();
     assert_eq!(show.id, "Balena.Etcher");

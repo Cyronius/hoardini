@@ -200,11 +200,9 @@ fn big_apps_not_run_for_90_days_are_listed_from_registry_userassist_and_steam() 
         ]
     );
     assert_eq!(got[0].id, "steam-1001");
-    assert!(
-        got[1].id.starts_with("reg-") && got[1].id.len() == 20,
-        "{}",
-        got[1].id
-    );
+    let key = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Never Opened";
+    let hash = blake3::hash(key.to_lowercase().as_bytes()).to_hex();
+    assert_eq!(got[1].id, format!("reg-{}", &hash[..16]));
     let again = apps::rarely_used(&db.conn().unwrap(), &fake_inputs(), NOW).unwrap();
     assert_eq!(
         again.iter().map(|a| &a.id).collect::<Vec<_>>(),

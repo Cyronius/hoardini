@@ -224,8 +224,7 @@ fn the_system_cleanup_tool_takes_only_known_operations_and_stays_out_of_the_smal
 
 // Traces: AGENT-NO-DIRECT, AGENT-PROPOSE-PAUSE
 #[tokio::test]
-async fn a_propose_call_ends_the_run_with_a_pending_card_or_reports_the_refusal_and_deletes_nothing()
- {
+async fn a_propose_call_ends_the_run_with_a_pending_card_and_deletes_nothing() {
     let h = Harness::new(None);
     let (tree, root) = real_tree(&h);
     let victim = format!(r"{root}\models\big.gguf");
@@ -255,31 +254,24 @@ async fn a_propose_call_ends_the_run_with_a_pending_card_or_reports_the_refusal_
         "the loop changed the filesystem"
     );
     let cards = custom(&ev, "proposal");
-    if let Some(card) = cards.first() {
-        let pid = card["value"]["proposal_id"].as_str().unwrap();
-        assert_eq!(card["value"]["tool_call_id"], "call_p1");
-        assert_eq!(mock.requests().len(), 1, "the run must stop at the card");
-        assert_eq!(types(&ev).last().unwrap(), "RUN_FINISHED");
-        assert!(
-            of_type(&ev, "TOOL_CALL_RESULT").is_empty(),
-            "the propose call stays unanswered"
-        );
-        let args = of_type(&ev, "TOOL_CALL_ARGS");
-        let a: Value = serde_json::from_str(args[0]["delta"].as_str().unwrap()).unwrap();
-        assert_eq!(a["proposal_id"], pid);
-        assert_eq!(
-            proposals::get(&h.db, pid).unwrap().unwrap().status,
-            "pending"
-        );
-    } else {
-        let reqs = mock.requests();
-        assert_eq!(reqs.len(), 2);
-        assert!(tool_content(&reqs[1], "call_p1").starts_with("Error:"));
-        assert!(
-            of_type(&ev, "TOOL_CALL_START").is_empty(),
-            "no card for a refused proposal"
-        );
-    }
+    assert_eq!(cards.len(), 1, "one card for the one propose call");
+    let card = &cards[0];
+    let pid = card["value"]["proposal_id"].as_str().unwrap();
+    assert_eq!(card["value"]["tool_call_id"], "call_p1");
+    assert_eq!(mock.requests().len(), 1, "the run must stop at the card");
+    assert_eq!(types(&ev).last().unwrap(), "RUN_FINISHED");
+    assert!(
+        of_type(&ev, "TOOL_CALL_RESULT").is_empty(),
+        "the propose call stays unanswered"
+    );
+    let args = of_type(&ev, "TOOL_CALL_ARGS");
+    assert_eq!(args.len(), 1);
+    let a: Value = serde_json::from_str(args[0]["delta"].as_str().unwrap()).unwrap();
+    assert_eq!(a["proposal_id"], pid);
+    assert_eq!(
+        proposals::get(&h.db, pid).unwrap().unwrap().status,
+        "pending"
+    );
 }
 
 // Traces: AGENT-PROPOSE-REFUSED

@@ -442,7 +442,22 @@ fn gguf_header_names_its_hugging_face_sources() {
         info.source_repo.as_deref(),
         Some("HuggingFaceTB/SmolLM2-135M-Instruct")
     );
-    assert_eq!(info.base_model_urls.len(), 2);
+    assert_eq!(
+        info.source_url.as_deref(),
+        Some("https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct")
+    );
+    assert_eq!(
+        info.url.as_deref(),
+        Some("https://huggingface.co/lmstudio-community/SmolLM2-135M-Instruct-GGUF")
+    );
+    assert_eq!(
+        info.base_model_urls,
+        [
+            "https://huggingface.co/datasets/org/corpus",
+            "https://huggingface.co/HuggingFaceTB/SmolLM2-135M/tree/main"
+        ]
+    );
+    assert_eq!(info.architecture.as_deref(), Some("llama"));
     assert_eq!(
         info.hf_repos(),
         [
@@ -465,6 +480,8 @@ fn gguf_header_names_its_hugging_face_sources() {
         (info.basename, info.source_repo, info.source_url, info.url),
         (None, None, None, None)
     );
+    assert!(info.base_model_urls.is_empty());
+    assert_eq!(info.architecture.as_deref(), Some("llama"));
     assert_eq!(info.parameters, Some(64));
 }
 

@@ -13,7 +13,7 @@ const GIB: u64 = 1 << 30;
 const DAY: i64 = 86_400_000;
 const NOW: i64 = 1_700_000_000_000 + 30 * DAY;
 
-// Traces: REVIEW-AREAS
+// Traces: REVIEW-AREAS, REVIEW-BUILD
 #[test]
 fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
     let dir = tempfile::tempdir().unwrap();
@@ -78,16 +78,16 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
     let parts: Vec<(String, u64)> = op
         .parts
         .iter()
-        .map(|OpPart { path, size }| (path.to_lowercase(), size / MIB))
+        .map(|OpPart { path, size }| (path.to_lowercase(), *size))
         .collect();
     assert_eq!(
         parts,
         vec![
-            (format!(r"{w_}\softwaredistribution\download\abc"), 3072),
-            (format!(r"{w_}\temp\setup"), 2048),
+            (format!(r"{w_}\softwaredistribution\download\abc"), 3 * GIB),
+            (format!(r"{w_}\temp\setup"), 2 * GIB),
             (
                 format!(r"{}\microsoft\windows\wer\reportarchive", pd.to_lowercase()),
-                1536
+                1536 * MIB
             ),
         ]
     );
@@ -96,41 +96,45 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
     let got: Vec<(String, u64, Option<&str>)> = r
         .areas
         .iter()
-        .map(|a| (a.path.to_lowercase(), a.size / GIB, a.hint.as_deref()))
+        .map(|a| (a.path.to_lowercase(), a.size, a.hint.as_deref()))
         .collect();
     let w = win.to_lowercase();
     assert_eq!(
         got,
         vec![
-            (r"c:\code\covenant-agent".to_string(), 161, None),
+            (r"c:\code\covenant-agent".to_string(), 161 * GIB, None),
             (
                 r"c:\users\tester\pictures".to_string(),
-                40,
+                40 * GIB,
                 Some("Add a destination to move them off C:.")
             ),
-            (r"c:\vm\disk.vhdx".to_string(), 30, None),
-            (r"c:\users\tester\.lmstudio\models".to_string(), 20, None),
+            (r"c:\vm\disk.vhdx".to_string(), 30 * GIB, None),
+            (
+                r"c:\users\tester\.lmstudio\models".to_string(),
+                20 * GIB,
+                None
+            ),
             (
                 r"c:\pagefile.sys".to_string(),
-                16,
+                16 * GIB,
                 Some("Windows manages its size.")
             ),
             (
                 r"c:\hiberfil.sys".to_string(),
-                12,
+                12 * GIB,
                 Some("Windows recreates it at boot; turning hibernation off removes it.")
             ),
-            (w.clone(), 10, None),
+            (w.clone(), 10 * GIB, None),
             (
                 format!(r"{w}\winsxs"),
-                8,
+                8 * GIB,
                 Some("Windows can trim this itself.")
             ),
-            (r"c:\program files".to_string(), 5, None),
-            (r"c:\code\small-proj".to_string(), 2, None),
+            (r"c:\program files".to_string(), 5 * GIB, None),
+            (r"c:\code\small-proj".to_string(), 2560 * MIB, None),
             (
                 format!(r"{}\microsoft\visualstudio\packages", pd.to_lowercase()),
-                2,
+                2 * GIB,
                 Some(ADMIN_HINT)
             ),
         ]
