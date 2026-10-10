@@ -57,6 +57,8 @@ pub struct ServerOptions {
     pub refresh_on_start: bool,
     // None = current_exe(); tests and the Tauri shell may point elsewhere.
     pub indexer_exe: Option<PathBuf>,
+    // None reads this PC's for the review's Windows cleanups; tests fix them.
+    pub system_facts: Option<hoardini_core::syscleanup::SystemFacts>,
 }
 
 pub struct ServerHandle {
@@ -292,6 +294,10 @@ pub async fn start_with_launcher(
         Some(data_root),
     );
     let (shutdown_tx, _) = watch::channel(false);
+    let announce = change.clone();
+    let reviews = hoardini_core::review::Builds::new(hoardini_core::store::now_ms, move || {
+        announce.send_modify(|n| *n += 1)
+    });
     let state: AppState = Arc::new(state::Inner {
         db: db.clone(),
         secrets: secrets.clone(),
@@ -303,7 +309,8 @@ pub async fn start_with_launcher(
         dialogs: opts.dialogs,
         ui_dir: opts.ui_dir,
         runs: Mutex::new(HashMap::new()),
-        reviews: Mutex::new(()),
+        reviews,
+        facts: opts.system_facts,
         change,
         shutdown: shutdown_tx,
         token: token.clone(),
@@ -330,10 +337,8 @@ pub async fn start_with_launcher(
         let Some(s) = weak.upgrade() else {
             return;
         };
-        tokio::task::spawn_blocking(move || match review::rebuild_after_launch(&s) {
-            Ok(true) => s.bump(),
-            Ok(false) => {}
-            Err(e) => {
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = review::rebuild_after_launch(&s) {
                 tracing::warn!(error = %e, "rebuilding the review after the launch refresh failed")
             }
         });

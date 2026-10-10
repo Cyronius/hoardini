@@ -91,10 +91,29 @@ pub(crate) fn cap_and_copy(
     if in_use || deny_reason(conn, env, &p)?.is_some() {
         return Ok((Some(Verdict::Keep), None));
     }
+    // Nothing is deleted on an online-only card, so the catalog's caps about deleting do not apply there.
+    if online_only {
+        let copy =
+            crate::copycheck::identical_for(conn, env.cloud().clone(), &env.profile, &p, true);
+        let cap = if copy.is_some() {
+            Verdict::Synced
+        } else {
+            Verdict::Review
+        };
+        return Ok((Some(cap), copy));
+    }
     let found = env.catalog().lookup_match(&p);
     let mut cap = catalog_cap.max(found.as_ref().and_then(|m| m.cap));
+    // The user saying a folder can go is the knowledge an unknown location lacks.
+    let disposable = || {
+        crate::memory::location::user_answer_covering(conn, &env.profile, &p)
+            .ok()
+            .flatten()
+            .and_then(|m| m.detail)
+            .is_some_and(|d| d.verdict == Some(Verdict::Safe))
+    };
     let review = match &found {
-        None => true,
+        None => !disposable(),
         // One blob can back several models; only the whole model folder is a safe unit.
         Some(m) => m.shared_blobs && !std::fs::symlink_metadata(&p).is_ok_and(|md| md.is_dir()),
     };

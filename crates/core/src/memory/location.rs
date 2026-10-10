@@ -606,6 +606,28 @@ pub fn location_covering(
     Ok(None)
 }
 
+// The nearest answer the user gave at or above a path; classifier and job rows in between do not count.
+pub fn user_answer_covering(
+    conn: &Connection,
+    profile: &str,
+    path: &str,
+) -> anyhow::Result<Option<Memory>> {
+    let norm = normalize_key_with(
+        Scope::Path,
+        path.strip_prefix(r"\\?\").unwrap_or(path),
+        profile,
+    );
+    for k in path_and_ancestors(&norm) {
+        if let Some(m) = knowledge_at(conn, Scope::Path, &k)?
+            && m.source == "user"
+            && m.detail.is_some()
+        {
+            return Ok(Some(m));
+        }
+    }
+    Ok(None)
+}
+
 pub fn tag(m: &Memory) -> Option<String> {
     let d = m.detail.as_ref()?;
     let label = d

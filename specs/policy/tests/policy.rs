@@ -916,6 +916,165 @@ fn location_rows_from_the_classifier_are_not_item_notes() {
     );
 }
 
+// Traces: POLICY-VERDICT-CAP, REVIEW-BUILD
+#[test]
+fn a_disposable_answer_is_what_an_unknown_location_lacked() {
+    let fx = Fx::new();
+    let f = fx.file(r"junk\x.bin", &data(4096, 1));
+    let conn = fx.db.conn().unwrap();
+    assert_eq!(
+        cap_for_with(&conn, &fx.env, &f, None, false).unwrap(),
+        Some(Verdict::Review)
+    );
+    location(
+        &fx,
+        &fx.work.join("junk"),
+        "user",
+        "You said this folder can go.",
+        Verdict::Safe,
+        Action::ALL.to_vec(),
+    );
+    location(
+        &fx,
+        &fx.work.join(r"junk\deeper"),
+        "index",
+        "Not identified.",
+        Verdict::Review,
+        vec![],
+    );
+    let g = fx.file(r"junk\deeper\y.bin", &data(4096, 2));
+    assert_eq!(cap_for_with(&conn, &fx.env, &f, None, false).unwrap(), None);
+    assert_eq!(
+        cap_for_with(&conn, &fx.env, &g, None, false).unwrap(),
+        None,
+        "a classifier row in between does not hide the answer"
+    );
+    let p = fx.propose(ProposalKind::Delete, &[&f], None).unwrap();
+    assert_eq!(
+        (p.items[0].verdict, p.items[0].selected),
+        (Some(Verdict::Safe), true)
+    );
+    assert_eq!(
+        cap_for_with(&conn, &fx.env, &f, None, true).unwrap(),
+        Some(Verdict::Keep),
+        "in use still wins"
+    );
+}
+
+fn job_row(fx: &Fx, dir: &Path, text: &str, by: &str, cleaned: Vec<serde_json::Value>) {
+    upsert_with(
+        &fx.db.conn().unwrap(),
+        Knowledge {
+            scope: Scope::Path,
+            key: s(dir),
+            kind: Kind::Verdict,
+            text: text.into(),
+            source: "job:p1".into(),
+            detail: Detail {
+                category: "documents".into(),
+                by: Some(by.into()),
+                cleaned,
+                ..Detail::default()
+            },
+        },
+        1,
+        &s(&fx.profile),
+    )
+    .unwrap();
+}
+
+// Traces: POLICY-ITEM-MEMORY, MEM-LEARN-JOB
+#[test]
+fn a_job_row_notes_what_it_cleaned_not_the_sweeps_text() {
+    let fx = Fx::new();
+    let log = fx.file(r"logs\a.log", &data(4096, 1));
+    let other = fx.file(r"logs\b.bin", &data(4096, 2));
+    let fresh = fx.file(r"fresh\c.bin", &data(4096, 3));
+    // 2024-01-15 12:00 UTC.
+    let ms = 1_705_320_000_000i64;
+    let rule = format!(r"{}\*.log", s(&fx.work.join("logs")));
+    job_row(
+        &fx,
+        &fx.work.join("logs"),
+        "Your documents: 90% of its bytes are documents.",
+        "mix",
+        vec![serde_json::json!({
+            "ms": ms, "bytes": 5u64 << 20, "path": s(&fx.work.join(r"logs\old.log")),
+            "rule": rule, "job": "p1", "kind": "delete"
+        })],
+    );
+    job_row(
+        &fx,
+        &fx.work.join("fresh"),
+        "You cleaned 3 items here.",
+        "job",
+        Vec::new(),
+    );
+    let p = fx
+        .propose(ProposalKind::Delete, &[&log, &other, &fresh], None)
+        .unwrap();
+    assert_eq!(
+        item(&p, &log).memory_note.as_deref(),
+        Some("You cleaned this on 01-15 (5.0 MB)."),
+        "the cleaned entry, not the classifier's text"
+    );
+    assert_eq!(
+        item(&p, &other).memory_note,
+        None,
+        "a reclassified job row with no entry for the item is passed over"
+    );
+    assert_eq!(
+        item(&p, &fresh).memory_note.as_deref(),
+        Some("You cleaned 3 items here."),
+        "a job row the sweep has not reclassified keeps its own text"
+    );
+
+    let mut req = NewItem {
+        path: s(&log),
+        verdict: None,
+        reason: Some("Old logs. You cleaned this on 01-15 (5.0 MB).".into()),
+    };
+    let q = proposals::create_with(
+        &fx.db,
+        &fx.env,
+        proposals::NewProposal {
+            conversation_id: None,
+            tool_call_id: None,
+            kind: ProposalKind::Delete,
+            destination_id: None,
+            format: None,
+            dedupe: None,
+            summary: "logs".into(),
+            items: vec![req.clone()],
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        q.items[0].memory_note, None,
+        "a note the reason already carries is not repeated"
+    );
+    req.reason = Some("Old logs.".into());
+    let r = proposals::create_with(
+        &fx.db,
+        &fx.env,
+        proposals::NewProposal {
+            conversation_id: None,
+            tool_call_id: None,
+            kind: ProposalKind::Delete,
+            destination_id: None,
+            format: None,
+            dedupe: None,
+            summary: "logs".into(),
+            items: vec![req],
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        r.items[0].memory_note.as_deref(),
+        Some("You cleaned this on 01-15 (5.0 MB).")
+    );
+}
+
 fn sparse(path: &Path, len: u64) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::File::create(path).unwrap();

@@ -332,6 +332,7 @@ impl Server {
                 dialogs: None,
                 refresh_on_start: false,
                 indexer_exe: Some(dir.path().join("no-indexer.exe")),
+                system_facts: None,
             },
             Some(Arc::new(MemStore::default())),
             Some(fake.clone()),

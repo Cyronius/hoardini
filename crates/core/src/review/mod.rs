@@ -1,23 +1,28 @@
 pub mod areas;
 pub mod cards;
+pub mod trigger;
 pub mod units;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 use crate::catalog::{Category, Entry};
+use crate::cloud::SyncRoot;
+use crate::compress::{self, CompressCandidate};
 use crate::destinations::{self, Destination};
 use crate::index::{self, DirLister, is_ancestor_path, normalize_path};
 use crate::memory::{Memory, location};
 use crate::paths::humanize_bytes;
 use crate::policy::{Area as PolicyArea, PolicyEnv, area_of};
-use crate::proposals::{self, NewItem, NewProposal, ReviewCard};
+use crate::proposals::{self, NewItem, NewProposal, NewSystemCleanup, ProposalKind, ReviewCard};
 use crate::store::Db;
+use crate::syscleanup::{self, OpPart};
 
 pub use areas::Area;
 pub use cards::{CARDS, Card, Pick, card};
 use cards::{Cx, Seen};
-use units::Unit;
+pub use trigger::{Builds, Opened};
+use units::{Unit, Why};
 
 const HOUR_MS: i64 = 3_600_000;
 const DAY_MS: i64 = 24 * HOUR_MS;
@@ -51,6 +56,12 @@ pub struct Review {
     pub created_ms: i64,
     pub cards: Vec<CardRef>,
     pub areas: Vec<Area>,
+}
+
+impl Review {
+    pub fn root(&self) -> &str {
+        self.scope_path.as_deref().unwrap_or(&self.volume)
+    }
 }
 
 fn same_or_under(a: &str, p: &str) -> bool {
@@ -123,21 +134,52 @@ fn replaceable(
     Ok(ids)
 }
 
-fn taken(conn: &Connection, replacing: &[String], now: i64) -> anyhow::Result<Vec<String>> {
+struct Taken {
+    paths: Vec<String>,
+    // System cleanup items are operations, so they stay out by operation rather than by the folders they name.
+    ops: Vec<String>,
+}
+
+fn taken(conn: &Connection, replacing: &[String], now: i64) -> anyhow::Result<Taken> {
     let mut st = conn.prepare(
-        "SELECT p.id, i.path FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id \
+        "SELECT p.id, p.kind, i.path, p.params_json FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id \
          WHERE p.status = 'pending' OR (p.status = 'declined' AND p.decided_ms >= ?1)",
     )?;
     let rows = st
         .query_map([now - DECLINED_FOR_MS], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows
-        .into_iter()
-        .filter(|(id, _)| !replacing.contains(id))
-        .map(|(_, p)| p)
-        .collect())
+    let mut out = Taken {
+        paths: Vec::new(),
+        ops: Vec::new(),
+    };
+    for (id, kind, path, params) in rows {
+        if replacing.contains(&id) {
+            continue;
+        }
+        if kind != ProposalKind::SystemCleanup.as_str() {
+            out.paths.push(path);
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(&params).unwrap_or_default();
+        for name in v["ops"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|o| o["op"].as_str())
+        {
+            if !out.ops.iter().any(|o| o == name) {
+                out.ops.push(name.to_string());
+            }
+        }
+    }
+    Ok(out)
 }
 
 // Windows-run leftovers and machine-wide folders need elevation; Hoardini deletes as the user.
@@ -168,6 +210,51 @@ fn destination_off(conn: &Connection, volume: &str) -> anyhow::Result<Option<Des
     Ok(None)
 }
 
+// Removing a file from a sync folder here removes the cloud copy too, so only Online-only may hold one.
+fn touches_sync(roots: &[SyncRoot], path: &str) -> bool {
+    roots
+        .iter()
+        .any(|r| overlaps(&normalize_path(&r.path), path))
+}
+
+// The part of a unit its card holds: the picks inside it, or all of it when a pick holds it.
+fn claimed_by(u: &Unit, picks: &[Pick]) -> u64 {
+    let n: u64 = picks
+        .iter()
+        .map(|p| {
+            if same_or_under(&u.path, &p.path) {
+                p.size
+            } else if is_ancestor_path(&p.path, &u.path) {
+                u.size
+            } else {
+                0
+            }
+        })
+        .sum();
+    n.min(u.size)
+}
+
+fn system_volume(env: &PolicyEnv, volume: &str) -> bool {
+    env.system_root
+        .get(..2)
+        .is_some_and(|d| normalize_path(d).eq_ignore_ascii_case(volume))
+}
+
+// A folder holding something a delete card takes would be compressed and deleted at once.
+fn compressible(units: &[Unit], c: &CompressCandidate) -> bool {
+    c.proposable()
+        && !units.iter().any(|u| {
+            matches!(u.why, Why::Catalog | Why::Disposable) && is_ancestor_path(&c.path, &u.path)
+        })
+}
+
+fn with_cleaned(conn: &Connection, env: &PolicyEnv, p: &mut Pick) -> anyhow::Result<()> {
+    if let Some(c) = location::cleaned_for_with(conn, &env.profile, &p.path)? {
+        p.reason = format!("{} {}.", p.reason, location::capitalized(&c.reason()));
+    }
+    Ok(())
+}
+
 pub fn build(
     db: &Db,
     env: &PolicyEnv,
@@ -185,7 +272,7 @@ pub fn build(
     let units = units::resolve(&conn, env, lister, &root, now)?;
     let replacing = replaceable(&conn, volume_id, folder.as_deref())?;
     let taken = taken(&conn, &replacing, now)?;
-    let is_taken = |p: &str| taken.iter().any(|t| overlaps(t, p));
+    let is_taken = |p: &str| taken.paths.iter().any(|t| overlaps(t, p));
     let cx = Cx {
         conn: &conn,
         env,
@@ -196,6 +283,12 @@ pub fn build(
             .into_iter()
             .map(|m| (location::expanded(env, &m.key), m))
             .collect::<Vec<(String, Memory)>>(),
+        sync_roots: env.cloud().roots(),
+        compress: compress::candidates(&conn, env, &root, now)?
+            .into_iter()
+            .filter(|c| compressible(&units, c))
+            .collect(),
+        leftovers: syscleanup::leftover_targets(&env.system_root, &env.program_data),
     };
     let catalog = env.catalog();
     let mut chosen: Vec<Vec<Pick>> = CARDS.iter().map(|_| Vec::new()).collect();
@@ -205,27 +298,50 @@ pub fn build(
             continue;
         }
         let entry = u.catalog_id.as_deref().and_then(|id| catalog.get(id));
-        let seen = Seen {
-            unit: u,
-            entry,
-            admin: needs_admin(env, u, entry),
-        };
+        let seen = Seen::new(u, entry, needs_admin(env, u, entry));
+        let synced = cx.synced(&u.path);
         let mut claimed = 0;
         for (i, c) in CARDS.iter().enumerate() {
+            let online = c.kind == ProposalKind::OnlineOnly;
+            if synced && !online {
+                continue;
+            }
             let picks = (c.take)(&cx, &seen)?;
             if picks.is_empty() {
                 continue;
             }
-            claimed = picks.iter().map(|p| p.size).sum();
-            chosen[i].extend(picks.into_iter().filter(|p| !is_taken(&p.path)));
+            let (gone, picks): (Vec<Pick>, Vec<Pick>) =
+                picks.into_iter().partition(|p| is_taken(&p.path));
+            let mut keep = Vec::new();
+            for mut p in picks {
+                if (!online && touches_sync(&cx.sync_roots, &p.path))
+                    || location::was_kept_with(&conn, &env.profile, &p.path, p.size)?
+                {
+                    continue;
+                }
+                with_cleaned(&conn, env, &mut p)?;
+                keep.push(p);
+            }
+            if keep.is_empty() && gone.is_empty() {
+                continue;
+            }
+            claimed = claimed_by(u, &gone) + claimed_by(u, &keep);
+            for p in keep {
+                if !chosen[i]
+                    .iter()
+                    .any(|q| q.path.eq_ignore_ascii_case(&p.path))
+                {
+                    chosen[i].push(p);
+                }
+            }
             break;
         }
         left.push(areas::Left {
             unit: u,
             entry,
-            admin: seen.admin && u.why != units::Why::Kept,
+            admin: seen.admin && u.why != Why::Kept,
             not_build: entry.is_some_and(|e| !cards::is_build_output(&cx, u, e)),
-            claimed,
+            claimed: claimed.min(u.size),
         });
     }
     let areas = areas::collect(&cx, &left, &units, &root, &volume)?;
@@ -239,6 +355,28 @@ pub fn build(
     for (c, mut picks) in CARDS.iter().zip(chosen) {
         picks.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
         let total: u64 = picks.iter().map(|p| p.size).sum();
+        let card = ReviewCard {
+            review_id: id.clone(),
+            card: c.id.into(),
+            ticked: c.ticked,
+        };
+        if c.kind == ProposalKind::SystemCleanup {
+            let parts = (total >= min).then(|| {
+                picks
+                    .into_iter()
+                    .map(|p| OpPart {
+                        path: p.path,
+                        size: p.size,
+                    })
+                    .collect()
+            });
+            let system =
+                (folder.is_none() && system_volume(env, &volume)).then_some(volume.as_str());
+            if let Err(e) = windows_card(db, env, c, parts, system, &taken.ops, &card) {
+                tracing::warn!(card = c.id, error = %e, "review card not created");
+            }
+            continue;
+        }
         if picks.is_empty() || total < min {
             continue;
         }
@@ -256,10 +394,10 @@ pub fn build(
             conversation_id: Some(CONVERSATION.into()),
             tool_call_id: None,
             kind: c.kind,
-            destination_id: (c.kind == proposals::ProposalKind::Archive)
+            destination_id: (c.kind == ProposalKind::Archive)
                 .then(|| cx.destination.as_ref().map(|d| d.id.clone()))
                 .flatten(),
-            format: None,
+            format: (c.kind == ProposalKind::Compress).then(|| "lzx".to_string()),
             dedupe: None,
             summary,
             items: picks
@@ -270,11 +408,6 @@ pub fn build(
                     reason: Some(p.reason),
                 })
                 .collect(),
-        };
-        let card = ReviewCard {
-            review_id: id.clone(),
-            card: c.id.into(),
-            ticked: c.ticked,
         };
         match proposals::create_review_card(db, env, req, &card) {
             Ok(Ok(_)) => {}
@@ -295,6 +428,88 @@ pub fn build(
         )?;
     }
     get(&conn, &id)?.ok_or_else(|| anyhow::anyhow!("review vanished"))
+}
+
+// The leftovers the walk found, plus what Windows' own tools could free on the system drive.
+fn windows_card(
+    db: &Db,
+    env: &PolicyEnv,
+    c: &Card,
+    leftovers: Option<Vec<OpPart>>,
+    system_volume: Option<&str>,
+    taken_ops: &[String],
+    card: &ReviewCard,
+) -> anyhow::Result<()> {
+    let mut ops: Vec<syscleanup::CleanupCandidate> = Vec::new();
+    ops.extend(leftovers.and_then(syscleanup::leftovers_candidate));
+    if let Some(volume) = system_volume {
+        let facts = env.facts();
+        if facts.system_drive.eq_ignore_ascii_case(volume) {
+            ops.extend(syscleanup::candidates(&db.conn()?, &facts)?);
+        }
+    }
+    ops.retain(|o| !taken_ops.iter().any(|t| t == o.op.name()));
+    if ops.is_empty() {
+        return Ok(());
+    }
+    proposals::create_system_cleanup_card(
+        db,
+        NewSystemCleanup {
+            conversation_id: Some(CONVERSATION.into()),
+            tool_call_id: None,
+            summary: c.summary.into(),
+            ops,
+            dropped: Vec::new(),
+        },
+        Some(card),
+    )?;
+    Ok(())
+}
+
+// Estimates the scope's biggest compress candidates; true when that made a folder proposable that the review does not hold.
+pub fn compress_estimates(
+    db: &Db,
+    env: &PolicyEnv,
+    review: &Review,
+    now: i64,
+) -> anyhow::Result<bool> {
+    let conn = db.conn()?;
+    let before = compress::candidates(&conn, env, review.root(), now)?;
+    let held: Vec<String> = proposal_ids(&conn, &review.id)?
+        .into_iter()
+        .filter_map(|id| proposals::get(db, &id).ok().flatten())
+        .filter(|p| p.kind == ProposalKind::Compress)
+        .flat_map(|p| p.items.into_iter().map(|i| i.path))
+        .collect();
+    if compress::estimate_top(db, &before, compress::ESTIMATE_TOP)? == 0 {
+        return Ok(false);
+    }
+    Ok(compress::candidates(&conn, env, review.root(), now)?
+        .iter()
+        .any(|c| c.proposable() && !held.iter().any(|h| h.eq_ignore_ascii_case(&c.path))))
+}
+
+// Built again only while nobody has touched it and nothing newer replaced it.
+pub fn rebuild_if_current(
+    db: &Db,
+    env: &PolicyEnv,
+    lister: &dyn DirLister,
+    review_id: &str,
+    now: i64,
+) -> anyhow::Result<Option<Review>> {
+    let conn = db.conn()?;
+    let Some(r) = get(&conn, review_id)? else {
+        return Ok(None);
+    };
+    let latest = latest(&conn, r.volume_id, r.scope_path.as_deref())?;
+    if latest.is_none_or(|l| l.id != r.id) || !untouched(&conn, &r.id)? {
+        return Ok(None);
+    }
+    let scope = match r.scope_path {
+        Some(p) => Scope::Folder(p),
+        None => Scope::Volume(r.volume_id),
+    };
+    build(db, env, lister, scope, now).map(Some)
 }
 
 pub fn get(conn: &Connection, id: &str) -> anyhow::Result<Option<Review>> {

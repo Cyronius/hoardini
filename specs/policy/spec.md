@@ -117,7 +117,12 @@ ticked. A `sync` answer does that only on an online-only card, where the cap bec
 copy never relaxes anything, because deleting a synced file deletes the cloud copy too. The offline checks run again for
 the item first (`copycheck::identical_for`), so a twin deleted or an archive copy gone since the last pass never counts,
 and a copy the same card would remove (a path the card also holds, or one inside it) does not count either. A shared
-blob's `review`, a catalog cap, and `keep` stay, and no other confidence changes a cap.
+blob's `review`, a catalog cap, and `keep` stay, and no other confidence changes a cap. The user's Disposable answer
+(MEM-LOCATION: the nearest location row from the user at or above the path, with verdict `safe`; classifier and job rows
+in between do not count, `location::user_answer_covering`) is knowledge too: it lifts the `review` cap of a path no
+catalog entry knows. On an online-only card nothing is deleted, so the catalog's caps, which are about deleting (a sync
+folder's own entry caps deletes there at `review`), do not apply: the cap is `synced` when the sync check finds the item
+in sync and `review` otherwise, and `keep` still wins for a path in use or denied.
 
 **Acceptance criteria:**
 - LLM `safe` on an HF hub blob file → verdict `review`, cap `review`; on `disk.vhdx` → `review`/`review`; on an unknown file → `review`/`review`.
@@ -126,6 +131,7 @@ blob's `review`, a catalog cap, and `keep` stay, and no other confidence changes
 - `cap_for_with(.., in_use = true)` and the cap of the profile root are `keep`; every item satisfies verdict ≥ cap.
 - On a delete card, unknown files the model calls `safe`: one with a current `identical` Hugging Face answer shows `redownload`, cap `redownload`, ticked, with the copy note; one with `same-name-and-size` and one with an `identical` `sync` answer show `review`/`review`, unticked; an HF blob file with an `identical` answer stays `review`/`review`. `cap_for_with` gives `redownload` for the first file and `keep` when it is in use. An in-sync file on an online-only card shows `synced`, cap `synced` (`specs/act/tests/online.rs`).
 - Two 101 MiB files in a current duplicate group: one proposed alone shows `redownload`, ticked; both on one card show `review`/`review`, unticked; after the twin is deleted by hand, the first proposed alone shows `review`, unticked.
+- An unknown `junk\x.bin` is capped `review`; after the user's Disposable answer for `junk` its cap is none and the model's `safe` stays, ticked, also for `junk\deeper\y.bin` under an `index` row of its own; in use it is `keep`. An in-sync video under `~\OneDrive` (the catalog's `onedrive-sync`, cap `review`) is `synced` and ticked on an online-only card (`specs/review/tests/build.rs`).
 
 ### POLICY-DEFAULT-TICK: Only worthwhile safe or redownload items start ticked
 **Applies to:** hoardini
@@ -138,7 +144,7 @@ verdict, which is already capped (POLICY-VERDICT-CAP), is `safe` or `redownload`
 `small: boolean`. The rule is `proposals::is_small(alloc, total)` and `proposals::default_tick(blocked, verdict, small)`.
 On an online-only card (ACT-ONLINE-ONLY) the same rule ticks `synced` instead of `safe` or `redownload`
 (`proposals::default_tick_for(kind, blocked, verdict, small)`); `synced` never ticks on any other card. A follow-up proposal (ACT-FOLLOW-UP) keeps the approved tick state instead, and a review card that starts unticked
-(REVIEW-BUILD: Downloads, Send elsewhere) leaves every item unticked. Tests: `specs/policy/tests/policy.rs`;
+(REVIEW-BUILD: Downloads, Compress in place, Send elsewhere) leaves every item unticked. Tests: `specs/policy/tests/policy.rs`;
 the item JSON is also checked in `specs/srv/tests/srv.rs`, and unticked review cards in `specs/review/tests/build.rs`.
 
 **Acceptance criteria:**
@@ -154,7 +160,11 @@ the item JSON is also checked in `specs/srv/tests/srv.rs`, and unticked review c
 When a proposal is created, each item shall store `memory_note`: the text of the first non-protect, non-forgotten
 memory covering its path in MEM-RECALL-ANCESTRY order (the path itself, then each ancestor, then globs), or null.
 Location rows written by the classifier (sources `deny`, `catalog`, `mix`, `index`; MEM-LOCATION) are skipped, since
-they only restate the catalog and the index; file-type rows and location rows from the user, a job or the web count.
+they only restate the catalog and the index; file-type rows and location rows from the user, a job or the web count. A
+row a finished job made (source `job:<id>`, MEM-LEARN-JOB) speaks through what it cleaned: when `location::cleaned_for`
+finds a `cleaned` entry for the path, the note is `You cleaned this on MM-DD (<size>).`; otherwise the row's own text
+counts only while the job still describes the row (`by` `job`), and once the sweep has reclassified it, it is passed
+over like a classifier row. A note the item's reason already carries (case aside) is not stored again.
 Attaching a note marks that note used (MEM-USAGE); other covering notes are not touched. A protect memory still refuses
 the path (POLICY-PROTECT). The server redacts the note like the other item text.
 
@@ -163,6 +173,7 @@ the path (POLICY-PROTECT). The server redacts the note like the other item text.
 - A file under a folder whose only covering row is an `index` location row carries null; once the user's answer replaces that row, the file carries "You said this folder can go."
 - `work\keep\d.bin`, under both a fact and a protect ("family photos") on `work\keep`, is in `dropped` with the protect text.
 - The "scratch is disposable" note's `last_used_ms` moves to the proposal time; the "work folder" note's stays at its old value.
+- Under a `job:` row for `logs` that the sweep reclassified as documents and whose `cleaned` entry has rule `logs\*.log` (5 MB, 2024-01-15): `logs\a.log` carries `You cleaned this on 01-15 (5.0 MB).`, `logs\b.bin` carries null, and a file under a `job:` row still `by` `job` carries that row's text `You cleaned 3 items here.`. With the reason `Old logs. You cleaned this on 01-15 (5.0 MB).` the note is null; with `Old logs.` it is the cleaned sentence.
 
 ### POLICY-LOCATION-KEEP: Kept locations block delete and dedupe
 **Applies to:** hoardini

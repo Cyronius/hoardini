@@ -31,6 +31,7 @@ fn build_sync(s: &AppState) -> Value {
         "active_provider": active,
         "running_runs": running,
         "review": crate::review::status_ref(s),
+        "review_building": s.reviews.building(),
     })
 }
 
