@@ -212,6 +212,7 @@ subtree totals in one transaction, and re-resolve hard-link ownership.
 - Replacing a copy with a hard link + `patch_rescan` counts the pair once (the smallest path owns it); removing the
   owner + `patch_removed` promotes the remaining link.
 - `patch_rescan` of a removed directory returns `None`; of a new directory indexes its contents.
+- A file made online-only through the executor is rescanned, not removed: an mtime cleared in its row beforehand is the file's own again, and its logical size stays (`specs/act/tests/online.rs`).
 - After every step the snapshot equals a fresh build and totals verify.
 
 ### INDEX-COMPACT: The index stores only what is read

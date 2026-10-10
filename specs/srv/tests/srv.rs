@@ -414,6 +414,13 @@ async fn settings_round_trip() {
         s["online_checks"],
         json!({"asked": true, "services": {"huggingface": true, "winget": false}})
     );
+    {
+        use hoardini_core::copycheck::consent::{self, Service};
+        let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+        let c = consent::load(&db.conn().unwrap());
+        assert!(c.asked, "the copy checks read what was saved");
+        assert!(c.allows(Service::Huggingface) && !c.allows(Service::Winget));
+    }
 
     let (_, again) = f.call("GET", "/api/settings", None).await;
     assert_eq!(again["index_speed"], "fast");

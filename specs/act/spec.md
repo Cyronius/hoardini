@@ -294,12 +294,13 @@ is left, and dedupe and system_cleanup jobs get no follow-up. The follow-up row 
 (`Executor::subscribe`, so the status stream's `job` frame too). Proposal JSON (`GET /api/proposals/{id}` and the
 `proposals` map of `GET /api/thread`) carries `parent_id` and `follow_up_id` (the newest proposal whose `parent_id` is
 this one), both null when absent. A job interrupted by a restart (marked failed at startup) gets no follow-up. Tests:
-`specs/act/tests/follow_up.rs`; the JSON and stream order are also checked in `specs/srv/tests/srv.rs`, and a review card's follow-up in `specs/review/tests/build.rs`.
+`specs/act/tests/follow_up.rs`; the JSON and stream order are also checked in `specs/srv/tests/srv.rs`, a review card's follow-up in `specs/review/tests/build.rs`, and an online-only one in `specs/act/tests/online.rs`.
 
 **Acceptance criteria:**
 - Of seven delete items, one done, one grown after the proposal (approved, skipped as changed), one left unticked, one deleted before approval, one opened after the proposal and still open, one open at proposal time (blocked) and closed before approval, and one under a protect memory added before approval: when the job's terminal update arrives the parent already has `follow_up_id`. The follow-up has `parent_id`, status `pending`, kind `delete`, conversation `main`, and the parent's summary, and holds four items. The grown file is ticked with a larger `alloc` and its verdict and reason; the unticked one is unticked; the still-open one is `blocked` and unticked with an `Open in` reason; the formerly blocked one is `pending` and unticked. The done, deleted, and protected files are not items; the protected one is in `dropped` with the memory text.
 - A job where every item is done, and one whose only item not done was deleted, leave `follow_up_id` null and no child row. A delete dedupe whose second copy fails leaves none either.
 - An archive whose copy fails verification gets a follow-up of kind `archive` with the same destination and the item ticked. An archive cancelled during its first copy ends `cancelled` with the second item ticked and `pending` in the follow-up. An `lzx` compress that fails up front gets a follow-up of kind `compress`, format `lzx`, item ticked.
+- An online-only job that freed an in-sync file and failed on one not in sync, with a file outside every sync root blocked on the card, gets a pending follow-up of kind `online-only` named by the parent's `follow_up_id`, with `parent_id` the parent, holding the failed file ticked and the outside file unticked and `blocked`.
 - Through the server: a two-item delete with one approved streams its terminal `job` frame after `GET /api/proposals/{id}` already shows `follow_up_id`; the follow-up's `parent_id` names the parent, it holds the unapproved item unticked with its memory note, and `GET /api/thread` shows both links.
 
 ### ACT-RESTORE: Restore puts back the original path and content

@@ -184,6 +184,7 @@ fetched and compared on this machine. A content-addressed blob (named by its SHA
 - With `asked` true and `huggingface` off, nothing is sent and nothing waits.
 - With `huggingface` on, the stand-in receives requests whose paths and queries contain neither the file's SHA-256, nor its size, nor the profile path.
 - In a `run_volume` over two LM Studio GGUFs with a `CheckEnv::system` env, saving `huggingface` off after the first candidate leaves the stand-in with that one file's tree request.
+- What `PUT /api/settings` saves as `online_checks` is what `consent::load` returns (`specs/srv/tests/srv.rs`).
 
 ### EVID-COPY-DUP: Another copy on the indexed drives
 **Applies to:** hoardini

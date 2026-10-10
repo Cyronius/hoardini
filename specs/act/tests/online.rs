@@ -85,7 +85,7 @@ fn action_rows(fx: &Fx, proposal: &str) -> Vec<(String, String, Option<String>)>
         .collect()
 }
 
-// Traces: ACT-ONLINE-ONLY, ACT-JOURNAL, INDEX-ACTION-PATCH, POLICY-DEFAULT-TICK
+// Traces: ACT-ONLINE-ONLY, ACT-JOURNAL, ACT-FOLLOW-UP, INDEX-ACTION-PATCH, POLICY-DEFAULT-TICK, POLICY-VERDICT-CAP
 #[test]
 fn online_only_frees_in_sync_files_skips_the_rest_and_never_deletes() {
     let mut fx = Fx::new();
@@ -132,6 +132,7 @@ fn online_only_frees_in_sync_files_skips_the_rest_and_never_deletes() {
         (Some(Verdict::Synced), true),
         "{ia:#?}"
     );
+    assert_eq!(ia.cap, Some(Verdict::Synced));
     assert_eq!(ia.copy_note.as_deref(), Some("synced to OneDrive"));
     let ib = item(&p, &b);
     assert_eq!((ib.verdict, ib.selected), (Some(Verdict::Review), false));
@@ -140,6 +141,16 @@ fn online_only_frees_in_sync_files_skips_the_rest_and_never_deletes() {
         (ialbum.verdict, ialbum.selected),
         (Some(Verdict::Review), false)
     );
+
+    let node_a = node_by_path(&fx.db.conn().unwrap(), &s(&a))
+        .unwrap()
+        .unwrap();
+    assert!(node_a.mtime_ms.is_some());
+    fx.db
+        .conn()
+        .unwrap()
+        .execute("UPDATE node SET mtime = 0 WHERE id = ?1", [node_a.id])
+        .unwrap();
 
     let ex = fx.executor();
     let res = ex.approve(&p.id, &[ia.id, ib.id, ialbum.id]).unwrap();
@@ -192,11 +203,33 @@ fn online_only_frees_in_sync_files_skips_the_rest_and_never_deletes() {
         );
     }
     let conn = fx.db.conn().unwrap();
-    assert!(
-        node_by_path(&conn, &s(&a)).unwrap().is_some(),
-        "patched, not removed"
+    let patched = node_by_path(&conn, &s(&a))
+        .unwrap()
+        .expect("patched, not removed");
+    assert_eq!(
+        (patched.mtime_ms, patched.logical),
+        (node_a.mtime_ms, 96 * 1024),
+        "read again from disk"
     );
     assert!(node_by_path(&conn, &s(&c)).unwrap().is_some());
+
+    let follow = fx.get(after.follow_up_id.as_deref().expect("a follow-up for b"));
+    assert_eq!(follow.kind, ProposalKind::OnlineOnly);
+    assert_eq!(follow.parent_id.as_deref(), Some(p.id.as_str()));
+    assert_eq!(follow.status, "pending");
+    let mut left: Vec<(String, bool, String)> = follow
+        .items
+        .iter()
+        .map(|i| (i.path.clone(), i.selected, i.status.clone()))
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        [
+            (s(&b), true, "pending".to_string()),
+            (s(&outside), false, "blocked".to_string()),
+        ]
+    );
 }
 
 // Traces: POLICY-DEFAULT-TICK

@@ -307,6 +307,8 @@ left in it, and it is not pinned; it returns false when the row holds nothing of
 - While another connection holds the write lock for 300 ms, `learn_from_job` waits and records the done item.
 - A done `go.bin` and an unticked `left.bin` on a `downloads` review card give no `kept` entry; on a `temp` card
   `left.bin` is kept.
+- On a row holding 100 `cleaned` entries and a `kept` entry for `go.bin`, the same job leaves 100 `cleaned` entries,
+  the oldest gone and `go.bin` last, and `kept` holding only `left.bin`.
 - A `job:p9` row at `~\Pictures` holding a `cleaned` entry, swept once the folder holds 60 GiB of photos and video,
   becomes category `photos`, `keep`, actions `[archive]`, `by` `mix`, with a `Your photos and videos: ...` text, and
   keeps source `job:p9` and its entry.

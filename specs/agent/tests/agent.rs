@@ -1958,3 +1958,78 @@ async fn the_system_prompt_also_lists_each_open_review_card() {
     assert!(sys.find(&chat).unwrap() < sys.find(&open).unwrap());
     assert!(!sys.contains(&old), "{sys}");
 }
+
+// Traces: AGENT-INSPECT-COPIES
+#[test]
+fn inspect_runs_the_offline_copy_checks_and_lists_what_they_found() {
+    use hoardini_core::copycheck::{Subject, hash};
+    let h = Harness::new(None);
+    let tree = tempfile::tempdir().unwrap();
+    let a = tree.path().join(r"disks\a.dat");
+    let twin = tree.path().join(r"backup\a.dat");
+    let lone = tree.path().join(r"disks\lone.dat");
+    for (p, len) in [(&a, 120 * MIB), (&twin, 120 * MIB), (&lone, 110 * MIB)] {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::File::create(p).unwrap();
+        hoardini_win::set_sparse_and_zero_range(p, 0, 0).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_len(len)
+            .unwrap();
+    }
+    let root = normalize_path(&tree.path().to_string_lossy());
+    let conn = h.db.conn().unwrap();
+    assert!(
+        refresh(&conn, &WinLister, &root, &RefreshOptions::default())
+            .unwrap()
+            .completed
+    );
+    let key = |p: &Path| normalize_path(&p.to_string_lossy());
+    for p in [&a, &twin] {
+        let s = Subject::load(&conn, &key(p)).unwrap();
+        hash::hash_subject(&conn, &s, &|| true).unwrap();
+    }
+    let rows = |p: &Path| -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM copy_check WHERE path = ?1 COLLATE NOCASE",
+            [key(p)],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    let inspect = |p: &Path| {
+        let out = Registry::full().call(
+            &ctx(&h, &real_profile(), "call_inspect"),
+            "inspect",
+            &json!({"path": key(p)}).to_string(),
+        );
+        let Ok(Outcome::Text { content, .. }) = out else {
+            panic!("inspect of {} failed", p.display());
+        };
+        content
+    };
+    assert_eq!(rows(&a), 0);
+
+    let text = inspect(&a);
+    assert!(
+        text.contains("Copies elsewhere:\n- dup [identical]: identical copy at "),
+        "{text}"
+    );
+    assert!(text.contains(r"backup\a.dat"), "{text}");
+    assert!(!text.contains("only copy we know of"), "{text}");
+    assert_eq!(rows(&a), 1, "the offline answer is stored as it runs");
+
+    let text = inspect(&lone);
+    assert!(
+        text.contains(
+            "Copies elsewhere:\n- dup [none]: no other file of this size on the indexed drives\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Every copy check came up empty: this is the only copy we know of."),
+        "{text}"
+    );
+}

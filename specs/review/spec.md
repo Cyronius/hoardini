@@ -105,6 +105,14 @@ compress folder that holds or lies inside another card's item (a `redownload` fi
 compressed and then deleted or moved. The reason reads `Windows
 compression would save about <saved> (<pct>% of it); the files stay usable.`
 
+**Send elsewhere** takes nothing while no destination lies off this volume. Otherwise it takes a `kept` folder unit
+whose location row (MEM-LOCATION) has verdict `keep` and allows `archive`: for the user's Move elsewhere answer (label
+`move elsewhere`), the whole folder, whatever its size or age, verdict `review`, the answer's text as its reason; for any
+other such row only a `photos` or `documents` one counts, and then the folder when it holds 5 GiB or more and nothing in
+it was written or read for 180 days (`cards::last_change`, the newest mtime or atime inside), else each of its child
+folders and files that meets the same rule. A user's Keep answer allows `archive` too, but is neither, so it sends
+nothing.
+
 **Cleanups only Windows can do** holds operations, not paths: first `leftovers` (SystemOp `Leftovers`,
 ACT-WINDOWS-CLEANUP-RUN), made of the admin units that are exactly one of `syscleanup::leftover_targets` (`Windows\Temp`,
 `SoftwareDistribution\Download`, the Delivery Optimization caches, `ProgramData\Microsoft\Windows\WER`, `Minidump`,
@@ -148,6 +156,7 @@ that have no `parent_id`, plus the cards earlier reviews carry into it (REVIEW-S
 - Under a fake OneDrive root `~\OneDrive`, an in-sync `Videos\2019.mp4` untouched for 400 days is the `online_only` card, ticked, `synced`, reason `Synced to OneDrive; nothing in it opened or changed for 400 days.`, although `Videos` is a kept photos-and-video location and `2026.mp4` beside it was written yesterday; `2026.mp4` and the `raw.mov` that is not in sync are in no card, and the `node_modules` under the root is in no card at all.
 - `data\corpus` (3 GiB of text, untouched) is in no card until its estimate is stored; with 1.2 GiB of 3 GiB saved it is the `compress` card, `lzx`, unticked, reason `Windows compression would save about 1.2 GB (40% of it); the files stay usable.` and `saves` 1.2 GiB; ticking it makes `ready_bytes` 1.2 GiB, not 3 GiB. With an `identical` archive answer for `part0.txt` inside it, `part0.txt` is the `redownload` card and there is no compress card.
 - With `%TEMP%\old-a` in a pending chat card, the `temp` card holds `old-b`.
+- `work\renders` (2 GiB, written yesterday) answered Move elsewhere and `work\kept` (6 GiB, 400 days untouched) answered Keep give no `archive` card while there is no destination; once `NAS` is added the `archive` card goes to `NAS` and holds only `work\renders`, unticked, `review`, reason `You want this folder moved to another drive, not deleted.`
 - On a fake system drive `C:\` with fixed facts (64 GiB RAM, hibernation on), a 6 GiB WinSxS, 2 GiB of old `Windows\Temp` and a 25 GiB `hiberfil.sys`, the `windows` card's operations are `leftovers`, `component_store`, `hibernation`, in that order. With a pending chat card for hibernation the next review's card holds `leftovers` and `component_store`, and the earlier untouched card is `superseded`; once that card is declined, the next review has no `windows` card and no `Temp` area. On the fake `C:\` of REVIEW-AREAS the card holds one ticked `leftovers` item of 6.5 GiB whose parts are `SoftwareDistribution\Download\abc` (3 GiB), `Temp\setup` (2 GiB) and `ProgramData\Microsoft\Windows\WER\ReportArchive` (1.5 GiB).
 
 Test: `specs/review/tests/build.rs`; the leftovers card on the fake `C:\` in `specs/review/tests/areas.rs`.

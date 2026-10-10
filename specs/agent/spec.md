@@ -309,6 +309,23 @@ Every tool result shall stay under 8,000 characters (about 2k tokens), use human
 - `recall` of a path with a web-sourced note whose text contains an END marker returns exactly one END marker, after the note's text.
 - Wrapped text that would rebuild a marker once the first is removed (`<<<<END UNTRUSTED UNTRUSTED x>>>`, and the same for BEGIN) still yields exactly one BEGIN and one END marker, the END last.
 
+### AGENT-INSPECT-COPIES: inspect says what the copy checks found
+**Applies to:** hoardini
+**Verification:** test
+
+`inspect` (through `evidence::inspect`) shall run the offline copy checks (EVID-COPY-CHECK: duplicate, archive, sync,
+git, Ollama, catalog) on the file or folder before it answers, storing their rows in `copy_check`, and send no request
+itself: online answers come only from the rows the background pass stored (EVID-COPY-BACKGROUND). When the path has any
+current answer, the evidence lists them under `Copies elsewhere:`, one `- <check> [<confidence>]: <note>` line each (at
+most 8), and, when `copycheck::only_copy` holds, ends that part with `Every copy check came up empty: this is the only
+copy we know of.`
+
+**Acceptance criteria:**
+- Of two indexed 120 MiB files with the same hashed bytes, `inspect` of the first stores its first `copy_check` row and lists `Copies elsewhere:` then `- dup [identical]: identical copy at <the twin>`, with no only-copy line.
+- An indexed 110 MiB file with no file of its size lists `- dup [none]: no other file of this size on the indexed drives` and `Every copy check came up empty: this is the only copy we know of.`
+
+Test: `specs/agent/tests/agent.rs`.
+
 ### AGENT-LIVE-MODEL: Works against a real local model
 **Applies to:** hoardini
 **Verification:** manual

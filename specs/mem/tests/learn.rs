@@ -241,3 +241,50 @@ fn an_item_left_unticked_on_a_card_that_starts_unticked_is_not_kept() {
         "unticked on a card that starts ticked"
     );
 }
+
+// Traces: MEM-LEARN-JOB
+#[test]
+fn cleaning_a_path_drops_its_kept_entry_and_each_list_keeps_the_newest_hundred() {
+    use hoardini_core::memory::learn::{MAX_ENTRIES, learn_from_job};
+    let (dir, db, work) = job_fixture(None);
+    let env = hoardini_core::policy::PolicyEnv::with_paths(
+        std::path::Path::new(P),
+        &dir.path().join("data"),
+    );
+    let c = db.conn().unwrap();
+    let go = format!(r"{work}\go.bin");
+    row(
+        &c,
+        &work,
+        Detail {
+            category: "unknown".into(),
+            cleaned: (0..MAX_ENTRIES)
+                .map(|n| {
+                    let p = format!(r"{work}\old{n}.bin");
+                    json!({"ms": n, "bytes": 1, "path": p, "rule": p, "job": "p0", "kind": "delete"})
+                })
+                .collect(),
+            kept: vec![json!({"ms": 0, "path": go, "size": 8192, "job": "p0"})],
+            ..Detail::default()
+        },
+    );
+    learn_from_job(&c, &env, "p1", T).unwrap();
+    let d = hoardini_core::memory::location::location_at(&c, P, &work)
+        .unwrap()
+        .unwrap()
+        .detail
+        .unwrap();
+    let cleaned: Vec<&str> = d
+        .cleaned
+        .iter()
+        .filter_map(|v| v["path"].as_str())
+        .collect();
+    assert_eq!(cleaned.len(), 100);
+    assert_eq!(cleaned[0], format!(r"{work}\old1.bin"), "the oldest went");
+    assert_eq!(cleaned[99], go);
+    assert_eq!(
+        kept_paths(&c, &work),
+        [format!(r"{work}\left.bin")],
+        "cleaning go.bin dropped the entry that kept it"
+    );
+}

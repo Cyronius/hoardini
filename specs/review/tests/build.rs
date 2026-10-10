@@ -1467,3 +1467,37 @@ fn a_disposable_answer_stops_counting_once_the_folder_grows_by_half() {
     assert!(area.unknown, "{area:?}");
     assert_eq!(cap(&d), Some(Verdict::Review));
 }
+
+// Traces: REVIEW-BUILD
+#[test]
+fn a_move_elsewhere_answer_sends_the_whole_folder_once_there_is_a_destination() {
+    let d = Disk::new();
+    let renders = d.folder(r"work\renders", "frames.bin", 2 * GIB);
+    d.fresh(&format!(r"{renders}\frames.bin"), DAY);
+    let kept = d.folder(r"work\kept", "old.bin", 6 * GIB);
+    let vid = d.index();
+    let conn = d.db.conn().unwrap();
+    answer(&conn, &d.env, &renders, Answer::MoveElsewhere, NOW - HOUR).unwrap();
+    answer(&conn, &d.env, &kept, Answer::Keep, NOW - HOUR).unwrap();
+
+    let r = d.review(Scope::Volume(vid), NOW);
+    assert!(
+        d.card(&r, "archive").is_none(),
+        "no destination to send it to"
+    );
+
+    d.nas();
+    let r = d.review(Scope::Volume(vid), NOW + HOUR);
+    let a = d.card(&r, "archive").expect("the answer is enough");
+    assert_eq!(a.destination.as_ref().map(|x| x.name.as_str()), Some("NAS"));
+    assert_eq!(
+        items(&a),
+        [(renders.clone(), false)],
+        "the whole folder although it was written yesterday and is under 5 GiB; a Keep answer is no photos or documents"
+    );
+    assert_eq!(a.items[0].verdict, Some(Verdict::Review));
+    assert_eq!(
+        a.items[0].reason.as_deref(),
+        Some("You want this folder moved to another drive, not deleted.")
+    );
+}
