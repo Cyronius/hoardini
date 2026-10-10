@@ -621,14 +621,10 @@ fn a_copy_hint_only_says_where_to_look() {
     let out = check(&fx, &env, &reg, &f);
     let r = out.results.first().expect("the hint makes the check apply");
     assert_eq!(r.confidence, Confidence::None);
-    let search = hub
-        .requests()
-        .into_iter()
-        .find(|q| q.contains("search="))
-        .unwrap();
-    assert!(
-        search.starts_with("/api/models?search=acme%20x"),
-        "{search}"
+    assert_eq!(
+        hub.requests(),
+        ["/api/models?author=acme&limit=10"],
+        "the hint names the org; `x` alone is too short to search for"
     );
 }
 

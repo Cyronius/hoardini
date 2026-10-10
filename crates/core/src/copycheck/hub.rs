@@ -299,11 +299,26 @@ impl HubCheck {
         }
     }
 
-    fn search(&self, base: &str, term: &str, gguf: bool) -> anyhow::Result<Vec<String>> {
-        let mut url = format!("{base}/api/models?search={}&limit=10", enc(term));
-        if gguf {
-            url.push_str("&filter=gguf");
+    // `author` narrows to one org, which is how a knowledge hint naming a publisher is used.
+    fn search(
+        &self,
+        base: &str,
+        term: Option<&str>,
+        author: Option<&str>,
+        gguf: bool,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut q = Vec::new();
+        if let Some(a) = author {
+            q.push(format!("author={}", enc(a)));
         }
+        if let Some(t) = term {
+            q.push(format!("search={}", enc(t)));
+        }
+        q.push("limit=10".into());
+        if gguf {
+            q.push("filter=gguf".into());
+        }
+        let url = format!("{base}/api/models?{}", q.join("&"));
         let resp = client().get(&url).send()?;
         if !resp.status().is_success() {
             anyhow::bail!("Hugging Face search answered {}", resp.status());
@@ -433,16 +448,17 @@ fn file_candidates(cx: &Cx<'_>, hub: &HubCheck, s: &Subject) -> anyhow::Result<V
         );
     }
     if list.iter().all(|c| c.rel.is_none()) {
-        let mut term = search_term(s.name());
-        if let Some(h) = s.hint.as_ref().filter(|h| h.names(HubCheck::NAME))
-            && let Some(place) = h.place.as_ref().filter(|p| !p.contains('/'))
-        {
-            term = format!("{place} {term}");
-        }
-        if term.len() >= 3 {
+        let term = Some(search_term(s.name())).filter(|t| t.len() >= 3);
+        let author = s
+            .hint
+            .as_ref()
+            .filter(|h| h.names(HubCheck::NAME))
+            .and_then(|h| h.place.as_deref())
+            .filter(|p| !p.contains('/'));
+        if term.is_some() || author.is_some() {
             let gguf = ext_of(&s.path) == "gguf";
             for r in hub
-                .search(&cx.env.hub_base, &term, gguf)?
+                .search(&cx.env.hub_base, term.as_deref(), author, gguf)?
                 .into_iter()
                 .take(MAX_SEARCH_REPOS)
             {

@@ -136,7 +136,7 @@ over all watched volumes in meta `copy_online_waiting` after each full pass (`se
 - `run_volume` hashes the four big files, the 120 MiB pair first; each `file_hash` row equals the SHA-256 of the file's bytes, and afterwards each file's `dup` answer is `identical` with its twin as the locator. A second pass hashes nothing; after one file is appended to, the next pass hashes only that file.
 - When `go` turns false inside the first hash, `run_volume` reports `stopped` with nothing hashed and no `file_hash` row; the next pass hashes both files.
 - A file named like a hub blob whose bytes do not match its name keeps the name as its hash, and no `file_hash` row is written for it.
-- With a glob row `**\*.q4nx` carrying `{"copy_hint": "huggingface:acme"}`, the Hugging Face check applies to `x.q4nx` and its search term starts with `acme`; without the row it does not apply.
+- With a glob row `**\*.q4nx` carrying `{"copy_hint": "huggingface:acme"}`, the Hugging Face check applies to `x.q4nx` and its one request is `/api/models?author=acme&limit=10`; without the row it does not apply.
 
 ### EVID-COPY-CONSENT: Online checks wait for consent; offline checks always run
 **Applies to:** hoardini
@@ -242,8 +242,9 @@ touching the file, so git answers are asked again on every pass.
 Studio's `models\<publisher>\<repo>\...`, to model folders (a `config.json` beside weights), and to paths a knowledge
 hint names it for. It looks for the repo in this order, each source only a place to look: the folder layout (the cache
 repo and revision; LM Studio's publisher and repo), the GGUF header (EVID-GGUF-SOURCE), a sibling `config.json`
-`_name_or_path` or README `base_model`, the hint, and, when none of those names the file's exact path,
-`GET /api/models?search=<file name without its quant tag>&limit=10` (`&filter=gguf` for GGUF), taking up to 8 repos. For
+`_name_or_path` or README `base_model`, a hint naming a repo, and, when none of those names the file's exact path,
+`GET /api/models?search=<file name without its quant tag>&limit=10` (`&filter=gguf` for GGUF; a hint naming an org adds
+`author=<org>`, and a term under 3 characters is left out), taking up to 8 repos. For
 each candidate it reads `GET /api/models/{repo}/tree/{rev}?recursive=1` (following `Link: rel="next"`; a missing revision
 falls back to `main`; trees are cached for an hour) and takes the entry with the same path (or the same file name, or
 for a hub blob the same LFS oid) and the same size: `same-name-and-size` pending `hash` until the local SHA-256 is known,
