@@ -384,7 +384,7 @@ Each built-in candidate (`runtime::MODELS`) shall be measured on CPU through the
 
 **Verification (manual):**
 1. Point `HOARDINI_DATA_DIR` at a scratch folder and build `cargo build --release -p hoardini`.
-2. For each candidate id: `hoardini eval --provider-id builtin --model <id> --repeat 2 --out <id>.json` (downloads and verifies the runtime and model, starts llama-server, runs the cases twice (19, or 18 for a small profile), stops the child, removes its `subst` drive).
+2. For each candidate id: `hoardini eval --provider-id builtin --model <id> --repeat 2 --out <id>.json` (downloads and verifies the runtime and model, starts llama-server, runs the cases twice (the 20 of `eval::cases`, or 19 for a small profile, which skips the one web-search case), stops the child, removes its `subst` drive).
 3. Run one reference: `hoardini eval --base-url http://localhost:1234/v1 --model minicpm5-2b --small --out ref.json`.
 4. `hoardini eval --compare *.json` prints one table; apply the rule above, set `RECOMMENDED` in `crates/server/src/builtin.rs`, and record the table and decision below and in `.claude/plans/m6-eval-results.md`.
 5. Delete the scratch folder (models and runtime).

@@ -640,6 +640,29 @@ fn a_copy_hint_only_says_where_to_look() {
         ["/api/models?author=acme&limit=10"],
         "the hint names the org; `x` alone is too short to search for"
     );
+
+    for alias in [
+        "hf:acme",
+        "modelhub:acme",
+        "model-hub:acme",
+        "HuggingFace:acme",
+    ] {
+        assert_eq!(
+            copycheck::Hint::parse(&json!(alias)),
+            Some(copycheck::Hint {
+                check: HubCheck::NAME.into(),
+                place: Some("acme".into())
+            }),
+            "{alias}"
+        );
+    }
+    for alias in ["cloud", "onedrive", "dropbox"] {
+        assert_eq!(
+            copycheck::Hint::parse(&json!(alias)).map(|h| h.check),
+            Some("sync".to_string()),
+            "{alias}"
+        );
+    }
 }
 
 fn smol_in_lmstudio(fx: &Fx) -> PathBuf {
@@ -915,20 +938,13 @@ fn git_copies_are_tracked_unchanged_and_pushed() {
     git(&work, &["add", "."]);
     git(&work, &["commit", "-q", "-m", "first"]);
     git(&work, &["push", "-q", "origin", "HEAD"]);
-    git(
-        &work,
-        &[
-            "branch",
-            "-q",
-            "--set-upstream-to",
-            &format!("origin/{}", current_branch(&work)),
-        ],
-    );
+    let upstream = format!("origin/{}", current_branch(&work));
+    git(&work, &["branch", "-q", "--set-upstream-to", &upstream]);
     let env = fx.env();
 
     let r = answer(&fx, &env, "git", &work.join("model.bin")).unwrap();
     assert_eq!(r.confidence, Confidence::Identical, "{}", note(&r));
-    assert!(r.locator.as_deref().unwrap().starts_with("origin/"));
+    assert_eq!(r.locator.as_deref(), Some(upstream.as_str()));
     assert!(
         note(&r).starts_with("tracked and pushed to origin/"),
         "{}",
@@ -970,10 +986,9 @@ fn git_copies_are_tracked_unchanged_and_pushed() {
     git(&work, &["commit", "-q", "-am", "second"]);
     let r = answer(&fx, &env, "git", &work.join("model.bin")).unwrap();
     assert_eq!(r.confidence, Confidence::None);
-    assert!(
-        note(&r).starts_with("changed in 1 commit(s) not pushed"),
-        "{}",
-        note(&r)
+    assert_eq!(
+        note(&r),
+        format!("changed in 1 commit(s) not pushed to {upstream}")
     );
     let r = answer(&fx, &env, "git", &work.join("readme.txt")).unwrap();
     assert_eq!(

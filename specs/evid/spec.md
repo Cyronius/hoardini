@@ -139,7 +139,9 @@ package unit, an archived folder), biggest first, at most 2,000.
 
 A knowledge row (memory) whose `detail_json.copy_hint` names a check (`"huggingface"`, `"huggingface:<org>"`,
 `"huggingface:<org>/<repo>"`, `"winget:<name>"`, or `{"check", "where"}`) makes that check apply to the paths the row
-covers and tells it where to look first. A hint never sets or raises a confidence.
+covers and tells it where to look first. Check names are read in any letter case, and `hf`, `modelhub` and `model-hub`
+name `huggingface`, and `cloud`, `onedrive` and `dropbox` name `sync` (`copycheck::Hint::parse`). A hint never sets or
+raises a confidence.
 
 `run_volume(db, env, registry, root, go)` is one background pass: first the volume's stored answers for paths that no
 longer exist are deleted (`copycheck::prune`, counted as `RunReport.pruned`; nothing is pruned while the volume root
@@ -164,6 +166,7 @@ over all watched volumes in meta `copy_online_waiting` after each full pass (`se
 - An archived folder that is `identical` becomes `same-name-and-size` after a file inside is rewritten with the same size, and `identical_for` no longer returns it; an LM Studio folder `identical` to its repo is no longer `identical` once its small LFS file is rewritten in place.
 - A file named like a hub blob whose bytes do not match its name keeps the name as its hash, and no `file_hash` row is written for it.
 - With a glob row `**\*.q4nx` carrying `{"copy_hint": "huggingface:acme"}`, the Hugging Face check applies to `x.q4nx` and its one request is `/api/models?author=acme&limit=10`; without the row it does not apply.
+- `hf:acme`, `modelhub:acme`, `model-hub:acme` and `HuggingFace:acme` parse as the `huggingface` check with place `acme`; `cloud`, `onedrive` and `dropbox` as `sync`.
 
 ### EVID-COPY-CONSENT: Online checks wait for consent; offline checks always run
 **Applies to:** hoardini
@@ -271,7 +274,7 @@ touching the file, so git answers are asked again on every pass.
 **Acceptance criteria (against real temporary repositories; the test fails if `git` is not on PATH):**
 - After a commit pushed to a bare remote, a tracked file is `identical` with the clone's upstream as the locator, and the work tree folder is `identical`.
 - An untracked file is `none` "not tracked by git" and makes the folder `none`; an ignored file has no answer; a modified tracked file is `none` "changed since the last commit".
-- After a local commit that changes the file and is not pushed, the file is `none` naming the unpushed commit, while another tracked file the commit did not touch stays `identical`.
+- After a local commit that changes the file and is not pushed, the file is `none` "changed in 1 commit(s) not pushed to <upstream>", while another tracked file the commit did not touch stays `identical`.
 - With `core.ignorecase` true, `model.bin` renamed on disk to `Model.bin` and rewritten is `none` "tracked by git under another letter case", and `sub` renamed to `Sub` with a file inside changed is `none`; a tracked `notes.txt` marked assume-unchanged and rewritten is `none` "git is told to skip changes to it (assume-unchanged or skip-worktree)".
 - `https://user:token@host/org/repo.git` shows as `host/org/repo` (in-crate test).
 
