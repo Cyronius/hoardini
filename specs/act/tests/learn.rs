@@ -217,6 +217,11 @@ fn the_card_anchor_names_the_new_row_and_undo_takes_back_only_this_job() {
         !undo(&conn, &p.id, made.id).unwrap(),
         "nothing left to undo"
     );
+    assert!(undo(&conn, &q.id, made.id).unwrap());
+    assert!(
+        get(&conn, made.id).unwrap().is_none(),
+        "a job's row goes once no job's entry is left"
+    );
 
     let third = fx.file(r"solo\a.bin", &data(9_000, 3));
     let r = fx.propose(ProposalKind::Delete, &[&third], None).unwrap();

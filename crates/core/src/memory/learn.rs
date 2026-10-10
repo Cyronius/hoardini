@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::knowledge::{self, Detail, Knowledge, knowledge_at, set_detail};
-use super::location::{Cleaned, Kept, cleaned_entries, kept_entries, short_date};
+use super::location::{Cleaned, Kept, cleaned_entries, is_job, kept_entries, short_date};
 use super::{
     COLS, Kind, Memory, Scope, compile_glob, delete, from_row, get, normalize_key_with,
     path_and_ancestors,
@@ -423,7 +423,7 @@ pub fn undo(conn: &Connection, proposal_id: &str, memory_id: i64) -> anyhow::Res
     if d.cleaned.len() + d.kept.len() == before {
         return Ok(false);
     }
-    if m.source == format!("job:{proposal_id}") && !d.has_job_content() && !m.pinned {
+    if is_job(&m.source) && !d.has_job_content() && !m.pinned {
         delete(conn, memory_id)?;
     } else {
         set_detail(conn, memory_id, &d)?;

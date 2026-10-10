@@ -260,7 +260,7 @@ Reading them back:
 kept entries (`2 items you left unticked in C:\code are kept` when there are only those). The text names the shared
 rule (`.log files`, `target folders`), else the one item's name, else `N items`. The proposal JSON carries it as
 `learned` for `done`, `partial` and `failed` proposals other than dedupe (SRV-LEARNED). `learn::undo(conn,
-proposal_id, memory_id)` removes that job's entries from the row and deletes the row when the job made it, nothing is
+proposal_id, memory_id)` removes that job's entries from the row and deletes the row when a job made it, nothing is
 left in it, and it is not pinned; it returns false when the row holds nothing of that job.
 
 **Acceptance criteria:**
@@ -276,7 +276,8 @@ left in it, and it is not pinned; it returns false when the row holds nothing of
   follow-up has none.
 - With the proposal's `anchor` set to `work\cards`, a deleted `cards\deep\x\file.bin` gives a row at `work\cards`
   (`You cleaned file.bin here.`); a second job's file under it joins that row. Undo of the first job leaves the row
-  with the second job's entry; a second undo returns false; undo of a job that made a row alone deletes the row.
+  with the second job's entry; a second undo returns false; undo of the second job then deletes the row, and so does
+  undo of a job that made a row alone.
 - An archive whose copy fails verification, a declined delete, and a delete dedupe leave no `learned`, no `job:` row
   and no entry naming a job.
 - With kept `D:\code\big.iso` at 1,000 bytes: `was_kept` is true at 1,000 and 1,499 (any case) and false at 1,500,
