@@ -10,8 +10,8 @@ pub struct SuggestNext;
 
 pub const MAX_PILLS: usize = 3;
 // Each kind needs a working UI action; add one here only together with its button.
-pub const PILL_KINDS: [&str; 3] = ["ask", "clean_up", "explore"];
-const NEEDS_PATH: [&str; 2] = ["clean_up", "explore"];
+pub const PILL_KINDS: [&str; 4] = ["ask", "clean_up", "explore", "what_is"];
+const NEEDS_PATH: [&str; 3] = ["clean_up", "explore", "what_is"];
 const MAX_LABEL_CHARS: usize = 80;
 
 struct Pill {
@@ -47,7 +47,7 @@ impl Tool for SuggestNext {
     }
 
     fn description(&self) -> &'static str {
-        "Offer up to 3 next steps as buttons under your answer. Call it last. kind \"ask\": the label is sent as the user's next question. kind \"clean_up\": looks for what can go in `path` (a folder from the index). kind \"explore\": opens `path` in the Explore treemap."
+        "Offer up to 3 next steps as buttons under your answer. Call it last. kind \"ask\": the label is sent as the user's next question. kind \"clean_up\": looks for what can go in `path` (a folder from the index). kind \"explore\": opens `path` in the Explore treemap. kind \"what_is\": asks the user what `path` is (keep it, it can go, or move it elsewhere), for a big folder nobody has identified."
     }
 
     fn parameters(&self) -> Value {
@@ -57,7 +57,7 @@ impl Tool for SuggestNext {
                 "properties": {
                     "label": {"type": "string", "description": "Button text, a few words"},
                     "kind": {"type": "string", "enum": PILL_KINDS},
-                    "path": {"type": "string", "description": "Folder or file it is about, e.g. ~\\.cache; required for clean_up and explore"}
+                    "path": {"type": "string", "description": "Folder or file it is about, e.g. ~\\.cache; required for clean_up, explore and what_is"}
                 },
                 "required": ["label", "kind"]
             }}

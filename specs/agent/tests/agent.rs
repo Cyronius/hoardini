@@ -1495,6 +1495,27 @@ fn suggest_next_keeps_at_most_three_pills_whose_paths_are_in_the_index() {
     ] {
         assert!(content.contains(why), "{why}: {content}");
     }
+    let what = reg
+        .call(
+            &ctx(&h, FAKE_PROFILE, "c3"),
+            "suggest_next",
+            &json!({"items": [
+                {"label": "Say what big is", "kind": "what_is", "path": r"~\code\big"},
+                {"label": "Say what it is", "kind": "what_is"},
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+    let Outcome::Text { content, data, .. } = what else {
+        panic!("suggest_next returned a proposal")
+    };
+    assert_eq!(
+        data.expect("pills"),
+        json!({"v": 1, "kind": "pills", "items": [
+            {"label": "Say what big is", "kind": "what_is", "path": r"C:\Users\zq_owner\code\big"},
+        ]})
+    );
+    assert!(content.contains("what_is needs a path"), "{content}");
     let none = reg
         .call(
             &ctx(&h, FAKE_PROFILE, "c2"),
