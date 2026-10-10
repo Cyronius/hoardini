@@ -1,12 +1,11 @@
 import { useEffect } from "react";
 import { routes, streamStatus } from "./api/client";
 import { AiNotices } from "./components/AiNotices";
-import { ChatSession } from "./components/Chat";
 import { FirstRun } from "./components/FirstRun";
-import { OnlineChecksConsent } from "./components/OnlineChecksConsent";
 import { Header } from "./components/Header";
 import { Stage } from "./components/mascot/Stage";
 import { Drawer } from "./drawer/Drawer";
+import { Shell } from "./shell/Shell";
 import { useStore } from "./store";
 import { applyTheme, resolveTheme } from "./theme";
 
@@ -80,8 +79,6 @@ function useLiveStatus() {
 export function App() {
   useThemeSync();
   useLiveStatus();
-  const nonce = useStore((s) => s.threadNonce);
-  const seed = useStore((s) => s.seedMessages);
   const loadThread = useStore((s) => s.loadThread);
   useEffect(() => {
     void loadThread();
@@ -90,8 +87,7 @@ export function App() {
     <div className="flex h-full flex-col bg-ink-900 text-paper">
       <Header />
       <AiNotices />
-      <OnlineChecksConsent />
-      {nonce > 0 ? <ChatSession key={nonce} seed={seed} /> : <div className="flex-1" />}
+      <Shell />
       <Drawer />
       <FirstRun />
       <Stage />

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type { CardData, ChangeRow, ChangesData, FilesData, FoldersData, More } from "../api/types";
 import { useExploreLink } from "../explore/context";
 import { useExplorePalette } from "../explore/palette";
+import { useReview } from "../review/state";
 import { TreemapCanvas } from "../explore/TreemapCanvas";
 import { digits, fileName, humanAge, humanBytes, isUnder, samePath, shortDate, signedBytes, sinceLabel } from "../format";
 import { useStore } from "../store";
@@ -11,7 +12,7 @@ import { ChangesChart, RANGE_RE } from "./ToolChip";
 const SHOWN = 8;
 
 export const askAbout = (path: string) => `What is ${path} and is it safe to remove?`;
-export const cleanUpIn = (path: string) => `What can I clean up in ${path}?`;
+export const cleanUpTitle = (path: string) => `Review what can go in ${path}`;
 
 export function isCardData(d: unknown): d is CardData {
   const k = (d as { kind?: unknown; v?: unknown } | null)?.kind;
@@ -32,13 +33,14 @@ function where(path: string, scope: string | null): string {
 
 export function AskButtons({ path, dir, onAsk }: { path: string; dir: boolean; onAsk: Ask }) {
   const busy = useStore((s) => s.chatBusy);
+  const cleanUp = useReview((s) => s.cleanUp);
   return (
     <>
       <button type="button" className={actionBtn} disabled={busy} title={askAbout(path)} onClick={() => onAsk(askAbout(path))}>
         Ask
       </button>
       {dir && (
-        <button type="button" className={actionBtn} disabled={busy} title={cleanUpIn(path)} onClick={() => onAsk(cleanUpIn(path))}>
+        <button type="button" className={actionBtn} title={cleanUpTitle(path)} onClick={() => void cleanUp(path)}>
           Clean up
         </button>
       )}

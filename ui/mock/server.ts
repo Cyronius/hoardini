@@ -25,7 +25,7 @@ const status: T.Status = {
     state: "refreshing",
     mode: "background",
     progress: { phase: "walk", dirs: 120_000, files: 2_300_000, bytes: 700 * GB, fraction: 0.4 },
-    last_refresh_ms: now() - 3 * 86_400_000,
+    last_refresh_ms: process.env.MOCK_NO_INDEX ? null : now() - 3 * 86_400_000,
     generation: 12,
   },
   jobs: [],
@@ -74,11 +74,13 @@ function startRefresh(mode: "background" | "fast", from = 0) {
       status.index.progress = null;
       status.index.last_refresh_ms = now();
       status.index.generation += 1;
+      rebuildIfUntouched();
     }
   }, 700);
   dirty = true;
 }
-if (!process.env.MOCK_IDLE) startRefresh("background", 0.4);
+if (process.env.MOCK_NO_INDEX) startRefresh("fast", 0);
+else if (!process.env.MOCK_IDLE) startRefresh("background", 0.4);
 else {
   status.index.state = "idle";
   status.index.mode = null;
@@ -285,6 +287,13 @@ function followUp(p: T.Proposal): void {
   p.follow_up_id = f.id;
 }
 
+function commonFolder(paths: string[]): string {
+  const parts = paths.map((x) => x.split("\\").slice(0, -1));
+  const out: string[] = [];
+  for (let i = 0; parts.every((q) => q[i] != null && q[i]!.toLowerCase() === parts[0]![i]!.toLowerCase()); i++) out.push(parts[0]![i]!);
+  return out.join("\\") || paths[0] || "~";
+}
+
 // Like MEM-LEARN-JOB: done items become `cleaned`, items left unticked `kept`, on one row the job made.
 function learnFrom(p: T.Proposal): void {
   if (p.kind === "dedupe") return;
@@ -293,14 +302,14 @@ function learnFrom(p: T.Proposal): void {
   if (!done.length && !kept.length) return;
   const ms = now();
   const mmdd = new Date(ms).toISOString().slice(5, 10);
-  const where = "~\\.lmstudio";
+  const tilde = (path: string) => path.replace(/^C:\\Users\\josha/i, "~");
+  const where = commonFolder(p.items.map((i) => tilde(i.path)));
   const n = (k: number) => `${k} item${k === 1 ? "" : "s"}`;
   const keptText = (lead: string) => `${n(kept.length)} you left unticked${lead} ${kept.length === 1 ? "is" : "are"} kept`;
   const bytes = done.reduce((a, i) => a + i.alloc, 0);
   const text = done.length
     ? `${n(done.length)} in ${where} — cleaned ${(bytes / GB).toFixed(1)} GB on ${mmdd}${kept.length ? `; ${keptText("")}` : ""}`
     : keptText(` in ${where}`);
-  const tilde = (path: string) => path.replace(/^C:\\Users\\josha/i, "~");
   const m: T.Memory = {
     id: ++memSeq,
     scope: "path",
@@ -439,14 +448,13 @@ const tree = build("", [
                             ["c--code-based", 17.6, [["0d4be7f2", 17.6, [["llama-3.3-8b-NPU2.q4nx", 8.2], ["mistral-small-24b-Q4_K_M.gguf", 9.1]]]]],
                           ],
                         ],
+                        ["WinGet", 3.1],
                       ],
                     ],
+                    ["Packages", 122, [["CanonicalGroupLimited.Ubuntu24.04LTS_79rhkp1fndgsc", 121.5, [["LocalState", 121.2, [["ext4.vhdx", 121]]]]]]],
                     ["Docker", 82, [["wsl", 81.5, [["disk", 81.5, [["docker_data.vhdx", 78.2]]]]]]],
-                    ["Packages", 61, [["CanonicalGroupLimited.Ubuntu24.04LTS_79rhkp1fndgsc", 59.5, [["LocalState", 59.2, [["ext4.vhdx", 57.1]]]]]]],
-                    ["Programs", 48, [["cursor", 14.2], ["Ollama", 11.8], ["LM Studio", 9.6], ["Microsoft VS Code", 4.1]]],
-                    ["Microsoft", 22],
-                    ["NVIDIA", 21, [["DXCache", 14.5], ["GLCache", 6.3]]],
-                    ["Google", 18, [["Chrome", 18, [["User Data", 17.9]]]]],
+                    ["Google", 46, [["Chrome", 46, [["User Data", 45.9, [["Default", 45.6, [["Service Worker", 42.4, [["CacheStorage", 42.1]]], ["Cache", 2.4]]]]]]]]],
+                    ["Microsoft", 13.6],
                   ],
                 ],
                 ["Roaming", 7],
@@ -454,21 +462,21 @@ const tree = build("", [
             ],
             [".flm", 104, [["models", 103.6, [["Qwen3.6-35B-A3B-NPU2", 38.1, [["model.q4nx", 37.6]]], ["Qwen3.8-27B-NPU2", 29.2, [["model.q4nx", 28.9]]], ["gemma-4-12b-NPU2", 14.1, [["model.q4nx", 13.8]]], ["Qwen3-Coder-30B-NPU2", 9.4, [["model.q4nx", 9.2]]], ["llama-3.3-8b-NPU2", 8.2, [["model.q4nx", 8]]], ["phi-5-mini-NPU2", 4.5, [["model.q4nx", 4.4]]]]]]],
             [".lmstudio", 96.1, [["models", 95.4, [["llama-3.3-70b-Q4_K_M.gguf", 42.5], ["qwen3.8-27b-Q8_0.gguf", 27.1], ["gemma-4-12b-Q8_0.gguf", 12.4], ["mistral-small-24b-Q6_K.gguf", 9.9]]], ["cache", 0.6]]],
-            [".cache", 48, [["huggingface", 31, [["hub", 31, [["models--Qwen--Qwen3-8B-GGUF", 17.2, [["Qwen3-8B-Q8_0.gguf", 8.7], ["Qwen3-8B-Q6_K.gguf", 6.7]]], ["models--black-forest-labs--FLUX.1-dev", 13.6, [["flux1-dev.safetensors", 11.9]]]]]]], ["pip", 6.2], ["uv", 4.6]]],
+            [".cache", 48, [["huggingface", 31, [["hub", 31, [["models--Qwen--Qwen3-8B-GGUF", 17.2, [["Qwen3-8B-Q8_0.gguf", 8.7], ["Qwen3-8B-Q6_K.gguf", 6.7]]], ["models--black-forest-labs--FLUX.1-dev", 13.6, [["flux1-dev.safetensors", 11.9]]]]]]], ["uv", 13.6], ["pip", 3.2]]],
             ["Downloads", 31, [["Win11_25H2_English_x64.iso", 7], ["ubuntu-24.04.3-desktop-amd64.iso", 5.9], ["proxmox-ve_9.0-1.iso", 1.4], ["OllamaSetup.exe", 1.1]]],
             ["Documents", 22, [["Videos", 14, [["wedding-2019.mp4", 4.2]]]]],
             [".hipfire", 21],
-            ["Pictures", 18],
+            ["Pictures", 18, [["2019", 11.2], ["2024", 4.1], ["2026", 2.3]]],
             ["OneDrive", 8],
           ],
         ],
       ],
     ],
-    ["code", 312, [["covenant-agent", 161, [["target", 98], ["data", 41], ["models", 17], ["node_modules", 3.2], ["src", 0.4]]], ["hoardini", 58, [["target", 52], ["ui", 4.1]]], ["llama.cpp", 31], ["based", 22], ["lm-admin", 14], ...smallRepos]],
+    ["code", 312, [["covenant-agent", 161, [["models", 53.6], ["target", 61], ["data", 41], ["node_modules", 3.6], ["src", 0.4]]], ["hoardini", 58, [["target", 52], ["ui", 4.1]]], ["llama.cpp", 31, [["models", 22.4], ["build", 6.2]]], ["based", 22, [[".venv", 4.1]]], ["lm-admin", 14], ...smallRepos]],
     ["Games", 300],
     ["Program Files", 170],
     ["AI", 140],
-    ["Windows", 52],
+    ["Windows", 52, [["System32", 18.2], ["WinSxS", 9.8], ["Installer", 6.1], ["SoftwareDistribution", 4.6, [["Download", 4.2]]], ["Temp", 1.3]]],
     ["ProgramData", 44],
     ["hiberfil.sys", 25],
     ["pagefile.sys", 16],
@@ -528,7 +536,7 @@ function grow(n: TreeNode): void {
     left -= size;
     const isFile = (i === 0 && n.size < 4 * GB) || (i === 1 && h % 3 === 0);
     const name = isFile ? `${NAMES[(h + i) % NAMES.length]}-${i}.${exts[i % exts.length]}` : `${NAMES[(h + i) % NAMES.length]}${i > 3 ? `-${i}` : ""}`;
-    return { path: join(n.path, name), name, kind: isFile ? "file" : "dir", size, files: isFile ? 1 : 10 + ((h >> i) % 3000), mtime_ms: now() - ((h >> i) % 200) * DAY, parent: n };
+    return { path: join(n.path, name), name, kind: isFile ? "file" : "dir", size, files: isFile ? 1 : 10 + ((h >>> i) % 3000), mtime_ms: now() - ((h >>> i) % 200) * DAY, parent: n };
   });
   n.small = { count: 30 + (h % 500), bytes: Math.round(n.size * 0.015) };
 }
@@ -566,19 +574,20 @@ const revealed: string[] = [];
 type ItemSeed = { path: string; gb: number; verdict: T.Verdict; reason: string; kind?: "dir" | "file"; memory_note?: string };
 type CardSeed = { card: string; title: string; kind: T.ProposalKind; ticked: boolean; summary: string; items: ItemSeed[] };
 
+const claude = "~\\AppData\\Local\\Temp\\claude";
 const cardSeeds = (): CardSeed[] => [
   {
     card: "temp",
     title: "Temp and Windows leftovers",
     kind: "delete",
     ticked: true,
-    summary: "Temporary files, crash dumps and logs that nothing has used for a day.",
+    summary: "Old Claude Code scratch sessions and other temp files nothing has used for a day.",
     items: [
-      { path: "~\\AppData\\Local\\Temp\\claude", gb: 92, verdict: "safe", reason: "User temp folder: untouched for 9 days." },
-      { path: "~\\AppData\\Local\\Temp\\WinGet", gb: 3.1, verdict: "safe", reason: "User temp folder: untouched for 21 days." },
-      { path: "~\\AppData\\Local\\Temp\\chocolatey", gb: 0.8, verdict: "safe", reason: "User temp folder: untouched for 40 days. You cleaned this on 08-14." },
-      { path: "~\\AppData\\Local\\CrashDumps\\Code.exe.18244.dmp", gb: 1.2, verdict: "safe", reason: "Crash dumps: Process and kernel crash dumps and WER reports.", kind: "file" },
-      { path: "~\\AppData\\Local\\Temp\\vs_setup.log", gb: 0.004, verdict: "safe", reason: "User temp folder: untouched for 3 days.", kind: "file" },
+      { path: `${claude}\\c--code-covenant-agent\\51e2aa90`, gb: 33, verdict: "safe", reason: "User temp folder: untouched for 12 days." },
+      { path: `${claude}\\c--code-hoardini\\3f9c2d1e`, gb: 23, verdict: "safe", reason: "User temp folder: untouched for 6 days." },
+      { path: `${claude}\\c--code-hoardini\\8a71b0c4`, gb: 17.8, verdict: "safe", reason: "User temp folder: untouched for 3 days." },
+      { path: `${claude}\\c--code-based\\0d4be7f2`, gb: 17.6, verdict: "safe", reason: "User temp folder: untouched for 21 days." },
+      { path: "~\\AppData\\Local\\Temp\\WinGet", gb: 3.1, verdict: "safe", reason: "User temp folder: untouched for 21 days. You cleaned this on 08-14." },
     ],
   },
   {
@@ -586,12 +595,12 @@ const cardSeeds = (): CardSeed[] => [
     title: "Caches",
     kind: "delete",
     ticked: true,
-    summary: "Browser, shader, app and package caches; their apps rebuild or download them again.",
+    summary: "Browser and package caches; their apps download or rebuild them as needed.",
     items: [
-      { path: "~\\AppData\\Local\\npm-cache", gb: 3.8, verdict: "safe", reason: "npm cache: Tarballs npm downloaded; npm fetches them again on the next install." },
+      { path: "~\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Service Worker\\CacheStorage", gb: 42.1, verdict: "safe", reason: "Chrome Service Worker cache: Data websites keep for offline use; Chrome fetches it again." },
+      { path: "~\\.cache\\uv", gb: 13.6, verdict: "safe", reason: "uv cache: Python packages uv downloaded; uv fetches them again." },
+      { path: "~\\.cache\\pip", gb: 3.2, verdict: "safe", reason: "pip cache: Wheels and HTTP responses pip downloaded." },
       { path: "~\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache", gb: 2.4, verdict: "safe", reason: "Google Chrome cache: Web page cache; Chrome rebuilds it as you browse." },
-      { path: "~\\AppData\\Local\\pip\\cache", gb: 1.6, verdict: "safe", reason: "pip cache: Wheels and HTTP responses pip downloaded." },
-      { path: "~\\AppData\\Local\\D3DSCache", gb: 1.1, verdict: "safe", reason: "DirectX shader cache: Compiled shaders; games rebuild them." },
     ],
   },
   {
@@ -599,12 +608,13 @@ const cardSeeds = (): CardSeed[] => [
     title: "Build output",
     kind: "delete",
     ticked: true,
-    summary: "Build output and dependency folders; each project rebuilds them.",
+    summary: "Build output and dependency folders in C:\\code; each project rebuilds them.",
     items: [
-      { path: "C:\\code\\hoardini\\target", gb: 38.2, verdict: "safe", reason: "Rust target directory: Cargo build output when the parent folder has Cargo.toml (also Maven when it has pom.xml)." },
-      { path: "C:\\code\\k2-diffusion\\.venv", gb: 6.4, verdict: "redownload", reason: "Project virtualenv: Per-project Python environment." },
-      { path: "C:\\code\\glint\\node_modules", gb: 1.9, verdict: "redownload", reason: "node_modules: Installed npm packages; `npm install` restores them.", memory_note: "Safe to delete when the project has not been touched in 60 days; npm install brings it back." },
-      { path: "C:\\code\\OpenFlowLM-Next2\\build", gb: 4.7, verdict: "review", reason: "Build folder: Output of a CMake or similar build." },
+      { path: "C:\\code\\covenant-agent\\target", gb: 61, verdict: "safe", reason: "Rust target directory: Cargo build output when the parent folder has Cargo.toml (also Maven when it has pom.xml)." },
+      { path: "C:\\code\\hoardini\\target", gb: 52, verdict: "safe", reason: "Rust target directory: Cargo build output when the parent folder has Cargo.toml (also Maven when it has pom.xml)." },
+      { path: "C:\\code\\llama.cpp\\build", gb: 6.2, verdict: "review", reason: "CMake build folder: Output of a CMake build; check nothing else lives in it." },
+      { path: "C:\\code\\based\\.venv", gb: 4.1, verdict: "redownload", reason: "Project virtualenv: Per-project Python environment." },
+      { path: "C:\\code\\covenant-agent\\node_modules", gb: 3.6, verdict: "redownload", reason: "node_modules: Installed npm packages; `npm install` restores them.", memory_note: "Safe to delete when the project has not been touched in 60 days; npm install brings it back." },
     ],
   },
   {
@@ -612,10 +622,12 @@ const cardSeeds = (): CardSeed[] => [
     title: "Installers and archives in Downloads",
     kind: "delete",
     ticked: false,
-    summary: "Installers, disk images and archives you downloaded; most can be downloaded again.",
+    summary: "Disk images and installers you downloaded; each can be downloaded again.",
     items: [
-      { path: "~\\Downloads\\Win11_24H2_English_x64.iso", gb: 5.8, verdict: "redownload", reason: "Downloaded installers and ISOs: Installers and disk images in Downloads.", kind: "file" },
-      { path: "~\\Downloads\\dataset-2025.zip", gb: 2.2, verdict: "review", reason: "Downloaded archives: Archives in Downloads; the extracted copy may be elsewhere.", kind: "file" },
+      { path: "~\\Downloads\\Win11_25H2_English_x64.iso", gb: 7, verdict: "redownload", reason: "Downloaded installers and ISOs: Installers and disk images in Downloads.", kind: "file" },
+      { path: "~\\Downloads\\ubuntu-24.04.3-desktop-amd64.iso", gb: 5.9, verdict: "redownload", reason: "Downloaded installers and ISOs: Installers and disk images in Downloads.", kind: "file" },
+      { path: "~\\Downloads\\proxmox-ve_9.0-1.iso", gb: 1.4, verdict: "redownload", reason: "Downloaded installers and ISOs: Installers and disk images in Downloads.", kind: "file" },
+      { path: "~\\Downloads\\OllamaSetup.exe", gb: 1.1, verdict: "redownload", reason: "Downloaded installers and ISOs: Installers and disk images in Downloads.", kind: "file" },
     ],
   },
   {
@@ -623,26 +635,61 @@ const cardSeeds = (): CardSeed[] => [
     title: "Send elsewhere",
     kind: "archive",
     ticked: false,
-    summary: "Photos, videos and documents nobody has opened for 180 days: copied to the destination, checked, then removed here.",
-    items: [{ path: "~\\Pictures\\2019", gb: 31.4, verdict: "review", reason: "Your photos and videos: nothing in it opened or changed for 412 days." }],
+    summary: "Photos nobody has opened for 180 days: copied to the destination, checked, then removed here.",
+    items: [{ path: "~\\Pictures\\2019", gb: 11.2, verdict: "review", reason: "Your photos and videos: nothing in it opened or changed for 412 days." }],
   },
 ];
 
 const ADMIN = "Needs admin; Hoardini will offer this with Windows cleanups.";
-const areaSeeds = (): T.ReviewArea[] => [
-  { path: "C:\\code\\covenant-agent", size: 161 * GB, label: "unknown", category: "unknown", verdict: null, why_not: "Not identified: no catalog entry matches, and no kind of file makes up 80% of it. Something in it changed in the last 30 days.", hint: null, unknown: true, actions: [] },
-  { path: "~\\AppData\\Local\\Docker\\wsl\\disk\\docker_data.vhdx", size: Math.round(134.8 * GB), label: "Virtual hard disk", category: "vm-disk", verdict: "review", why_not: "A virtual machine's disk: deleting it deletes the machine inside.", hint: null, unknown: false, actions: ["delete", "dedupe", "archive", "compress"] },
-  { path: "~\\.lmstudio\\models", size: 96 * GB, label: "LM Studio models", category: "model-store", verdict: "redownload", why_not: "Model files: Hoardini proposes them once it can show where else a copy exists.", hint: null, unknown: false, actions: ["delete", "dedupe", "archive", "compress"] },
-  { path: "C:\\Program Files", size: 48 * GB, label: "installed programs", category: "system", verdict: "keep", why_not: "Installed programs: Hoardini never deletes anything here.", hint: null, unknown: false, actions: [] },
-  { path: "C:\\hiberfil.sys", size: Math.round(25.4 * GB), label: "Hibernation file", category: "system", verdict: "keep", why_not: "Hibernation file: Hibernate and Fast Startup image, typically 40-75% of RAM.", hint: "Windows recreates it at boot; turning hibernation off removes it.", unknown: false, actions: [] },
-  { path: "C:\\Windows", size: 21 * GB, label: "the Windows folder", category: "system", verdict: "keep", why_not: "The Windows folder: Hoardini never deletes anything here.", hint: null, unknown: false, actions: [] },
-  { path: "~\\Pictures", size: 18 * GB, label: "your photos and videos", category: "photos", verdict: "keep", why_not: "Your photos and videos: 94% of its bytes are images or video.", hint: null, unknown: false, actions: ["archive"] },
-  { path: "C:\\pagefile.sys", size: 16 * GB, label: "Page file", category: "system", verdict: "keep", why_not: "Page file: Virtual-memory backing files, in use by the OS.", hint: "Windows manages its size.", unknown: false, actions: [] },
-  { path: "C:\\code\\scratch-models", size: Math.round(12.3 * GB), label: "unknown", category: "unknown", verdict: null, why_not: "Not identified: no catalog entry matches, and no kind of file makes up 80% of it.", hint: null, unknown: true, actions: [] },
-  { path: "C:\\Windows\\WinSxS", size: Math.round(9.8 * GB), label: "WinSxS component store", category: "system", verdict: "keep", why_not: "WinSxS component store: Component store; mostly hardlinks, so its apparent size overstates real use.", hint: "Windows can trim this itself.", unknown: false, actions: [] },
-  { path: "C:\\Windows\\SoftwareDistribution\\Download", size: Math.round(4.2 * GB), label: "Windows Update download cache", category: "windows-leftover", verdict: "safe", why_not: "Windows Update download cache: Update packages Windows already installed.", hint: ADMIN, unknown: false, actions: [] },
-  { path: "C:\\Windows\\Temp", size: Math.round(1.3 * GB), label: "System temp folder", category: "temp", verdict: "safe", why_not: "System temp folder: Windows and services' scratch space.", hint: ADMIN, unknown: false, actions: [] },
+const MODELS = "Model files: Hoardini proposes them once it can show where else a copy exists.";
+const VM = "A virtual machine's disk: deleting it deletes the machine inside.";
+const RECENT = " Something in it changed in the last 30 days.";
+const ALL: T.ReviewArea["actions"] = ["delete", "dedupe", "archive", "compress"];
+const area = (path: string, gb: number, label: string, category: string, verdict: T.Verdict | null, why_not: string, hint: string | null = null, actions: T.ReviewArea["actions"] = []): T.ReviewArea => ({
+  path,
+  size: Math.round(gb * GB),
+  label,
+  category,
+  verdict,
+  why_not,
+  hint,
+  unknown: category === "unknown",
+  actions,
+});
+const areaSeeds = (): T.ReviewArea[] =>
+  [
+    area("C:\\Games", 300, "Steam library", "game-library", "redownload", "Installed games: remove them through their launcher.", null, ALL),
+    area("C:\\Program Files", 170, "installed programs", "system", "keep", "Installed programs: Hoardini never deletes anything here; uninstall an app to free its space."),
+    area("C:\\AI", 140, "model weights", "model-weights", "review", MODELS, null, ALL),
+    area("~\\AppData\\Local\\Packages\\CanonicalGroupLimited.Ubuntu24.04LTS_79rhkp1fndgsc\\LocalState\\ext4.vhdx", 121, "WSL Ubuntu disk", "vm-disk", "review", VM, null, ALL),
+    area("~\\.flm\\models", 103.6, "FastFlowLM models", "model-store", "redownload", MODELS, null, ALL),
+    area("C:\\code\\covenant-agent", 95, "unknown", "unknown", null, `Not identified: no catalog entry matches, and no kind of file makes up 80% of it.${RECENT}`),
+    area("~\\.lmstudio\\models", 95.4, "LM Studio models", "model-store", "redownload", MODELS, null, ALL),
+    area("~\\AppData\\Local\\Docker\\wsl\\disk\\docker_data.vhdx", 78.2, "Docker Desktop's WSL disk", "vm-disk", "review", VM, null, ALL),
+    area("C:\\ProgramData", 44, "app data for every user", "app-data", "keep", "App data for every user: programs keep their shared settings and data here.", ADMIN.replace(/;.*/, ".")),
+    area("C:\\Windows", 36.7, "the Windows folder", "system", "keep", "The Windows folder: Hoardini never deletes anything here."),
+    area("~\\.cache\\huggingface", 31, "Hugging Face cache", "model-store", "redownload", MODELS, null, ALL),
+    area("C:\\hiberfil.sys", 25, "Hibernation file", "system", "keep", "Hibernation file: Hibernate and Fast Startup image, typically 40-75% of RAM.", "Windows recreates it at boot; turning hibernation off removes it."),
+    area("C:\\code\\llama.cpp", 24.8, "unknown", "unknown", null, "Not identified: no catalog entry matches, and no kind of file makes up 80% of it."),
+    area("~\\Documents", 22, "your documents", "documents", "keep", "Your documents: 88% of its bytes are documents, photos or video.", null, ["archive"]),
+    area("~\\.hipfire", 21, "unknown", "unknown", null, `Not identified: no catalog entry matches, and no kind of file makes up 80% of it.${RECENT}`),
+    area("C:\\pagefile.sys", 16, "Page file", "system", "keep", "Page file: Virtual-memory backing files, in use by the OS.", "Windows manages its size."),
+    area("C:\\Windows\\WinSxS", 9.8, "WinSxS component store", "system", "keep", "WinSxS component store: Component store; mostly hardlinks, so its apparent size overstates real use.", "Windows can trim this itself."),
+    area("C:\\$WINDOWS.~BT", 9.2, "Windows upgrade leftovers", "windows-leftover", "safe", "Windows upgrade leftovers: Files a feature update left behind.", ADMIN),
+    area("~\\Pictures", 6.8, "your photos and videos", "photos", "keep", "Your photos and videos: 94% of its bytes are images or video.", null, ["archive"]),
+    area("C:\\Windows\\SoftwareDistribution\\Download", 4.2, "Windows Update download cache", "windows-leftover", "safe", "Windows Update download cache: Update packages Windows already installed.", ADMIN),
+    area("C:\\Windows\\Temp", 1.3, "System temp folder", "temp", "safe", "System temp folder: Windows and services' scratch space.", ADMIN),
+  ].sort((a, b) => b.size - a.size);
+
+// GET /api/apps/rarely-used (SRV-APPS): this PC's big programs that have not run for 90 days.
+const apps: T.RarelyUsedApp[] = [
+  { id: "steam-1091500", name: "Cyberpunk 2077", publisher: "CD PROJEKT RED", source: "steam", path: "C:\\Games\\steamapps\\common\\Cyberpunk 2077", size: Math.round(71.3 * GB), last_run_ms: now() - 133 * DAY, last_run_from: "Steam LastPlayed" },
+  { id: "reg-6f1c0a9be2d47c31", name: "Visual Studio Community 2022", publisher: "Microsoft Corporation", source: "registry", path: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community", size: Math.round(38.4 * GB), last_run_ms: null, last_run_from: null },
+  { id: "reg-a03d5e7714c2b980", name: "HIP SDK Core", publisher: "Advanced Micro Devices, Inc.", source: "registry", path: "C:\\Program Files\\AMD\\ROCm\\6.4", size: Math.round(21.7 * GB), last_run_ms: null, last_run_from: null },
+  { id: "reg-2b8e44f0c19a6d57", name: "Visual Studio Build Tools 2022", publisher: "Microsoft Corporation", source: "registry", path: "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools", size: Math.round(9.6 * GB), last_run_ms: now() - 214 * DAY, last_run_from: "last run of c:\\program files (x86)\\microsoft visual studio\\2022\\buildtools\\common7\\tools\\vsdevcmd.bat" },
+  { id: "reg-91d7c3e5a0f26b48", name: "LLVM", publisher: "LLVM", source: "registry", path: "C:\\Program Files\\LLVM", size: Math.round(4.2 * GB), last_run_ms: now() - 160 * DAY, last_run_from: "last run of c:\\program files\\llvm\\bin\\clang.exe" },
 ];
+const uninstalled: string[] = [];
 
 type MockReview = { id: string; created_ms: number; volume: string; scope_path: string | null; scan_ms: number | null; cards: T.ReviewCardRef[]; areas: T.ReviewArea[] };
 const reviews: MockReview[] = [];
@@ -699,6 +746,13 @@ function buildReview(scope: string | null): MockReview {
 }
 
 const latestVolumeReview = () => [...reviews].reverse().find((r) => r.volume === selectedDrive().root && !r.scope_path);
+
+function rebuildIfUntouched(): void {
+  const last = latestVolumeReview();
+  if (!last || last.scan_ms === status.index.last_refresh_ms) return;
+  if ([...proposals.values()].some((p) => p.review_id === last.id && (p.touched || p.status !== "pending"))) return;
+  buildReview(null);
+}
 
 function reviewView(r: MockReview): T.ReviewView {
   const props = [...proposals.values()].filter((p) => p.review_id === r.id);
@@ -1022,7 +1076,8 @@ async function agentRun(input: { runId: string; messages: { id?: string; role: s
         const path = text.slice(8).split("? ")[0] ?? "";
         await say(s, `Let me look inside \`${path}\`.\n\n`);
         await readTool(s, "top_dirs", { under: path, depth: 1, limit: 10 }, `${path} 161.0 GB\n  models 100.0 GB (2 files)\n  data 61.0 GB (1 files)`, 700);
-        await say(s, "It is a project folder with two big data files you wrote recently. Nothing says it is regenerable, so **keep it**, or move it elsewhere if you no longer work on it.");
+        const id = await say(s, "It is a project folder with two big data files you wrote recently. Nothing says it is regenerable, so **keep it**, or move it elsewhere if you no longer work on it.");
+        await suggest(s, id, [{ label: `Say what ${path.split("\\").pop()} is`, kind: "what_is", path }]);
       } else if (/^remember|remember that/i.test(text)) {
         await say(s, "Got it.");
         const toolCallId = await readTool(s, "remember", { scope: "global", kind: "preference", text }, JSON.stringify({ id: ++memSeq }), 300);
@@ -1162,7 +1217,9 @@ async function route(req: Request): Promise<Response> {
     case "mock": {
       if (seg[1] === "revealed") return json(revealed);
       if (seg[1] === "focus") return json({ path: exploreFocus });
-      const b = await body<{ fill?: number; running_runs?: number; idle?: boolean; next_job?: NextJob; online_waiting?: number }>();
+      if (seg[1] === "uninstalled") return json(uninstalled);
+      const b = await body<{ fill?: number; running_runs?: number; idle?: boolean; next_job?: NextJob; online_waiting?: number; rebuild?: boolean }>();
+      if (b.rebuild) buildReview(null);
       if (b.next_job) nextJob = b.next_job;
       if (b.online_waiting != null) onlineWaiting = b.online_waiting;
       if (b.fill != null) setFill(b.fill);
@@ -1273,6 +1330,7 @@ async function route(req: Request): Promise<Response> {
       break;
     }
     case "review": {
+      if (status.index.last_refresh_ms == null && seg[1] !== "look-closer") return err("index not found", 404);
       if (seg[1] === "open" && method === "POST") {
         const last = latestVolumeReview();
         const stale = !last || now() - last.created_ms > SESSION_GAP_MS || (status.index.last_refresh_ms ?? 0) !== (last.scan_ms ?? 0);
@@ -1294,6 +1352,15 @@ async function route(req: Request): Promise<Response> {
       const id = url.searchParams.get("id");
       const r = id ? reviews.find((x) => x.id === id) : latestVolumeReview();
       return r ? json(reviewView(r)) : err("review not found", 404);
+    }
+    case "apps": {
+      if (seg[1] === "rarely-used") return json(apps);
+      const app = apps.find((a) => a.id === seg[1]);
+      if (seg[2] !== "uninstall" || method !== "POST") break;
+      if (!app) return err("app not found", 404);
+      uninstalled.push(app.id);
+      console.log(`uninstall ${app.name}`);
+      return json({ started: true, id: app.id, name: app.name });
     }
     case "locations": {
       if (seg[1] !== "answer" || method !== "POST") break;

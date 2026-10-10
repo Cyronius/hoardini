@@ -79,7 +79,11 @@ interface Els {
   flash: RefObject<HTMLDivElement | null>;
 }
 
-const cardEl = (id: string) => document.querySelector<HTMLElement>(`[data-proposal-id="${CSS.escape(id)}"]`);
+// Review and chat cards stay mounted behind hidden tabs; only one on screen can carry him.
+function cardEl(id: string): HTMLElement | null {
+  const all = [...document.querySelectorAll<HTMLElement>(`[data-proposal-id="${CSS.escape(id)}"]`)];
+  return all.find((el) => el.getClientRects().length > 0) ?? all[0] ?? null;
+}
 
 function scrollerOf(el: Element): Element | null {
   for (let p = el.parentElement; p; p = p.parentElement) {

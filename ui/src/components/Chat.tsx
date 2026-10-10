@@ -6,7 +6,7 @@ import type { ProviderView } from "../api/types";
 import { resolveMaxSteps, resolveStallMs, WATCHDOG_BACKSTOP_MS } from "../agent/aiTimeouts";
 import { useActivity } from "../agent/activityStore";
 import { setRestoredSink } from "../agent/decisions";
-import { currentRunId, requestHandler } from "../agent/events";
+import { currentRunId, requestHandler, rerouteNextRun } from "../agent/events";
 import { proposalTools } from "../agent/proposalTools";
 import { classifySettledTurn, describeRunError, isAbortError } from "../agent/runError";
 import { isProposeTool } from "../agent/toolDefs";
@@ -14,7 +14,7 @@ import { friendlyToolName, humanElapsed } from "../format";
 import { useExploreLink } from "../explore/context";
 import { THREAD_ID, useStore } from "../store";
 import { FollowUps, followUps } from "./FollowUps";
-import { Greeting } from "./Greeting";
+import { Starters } from "./Greeting";
 import { EraserIcon, SendIcon, SpinnerIcon, StopIcon } from "./icons";
 import { IconButton } from "./IconButton";
 import { LearnedChip } from "./LearnedChip";
@@ -122,7 +122,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
     if (el) stuckRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   };
 
-  const sendText = async (text: string) => {
+  const sendText = async (text: string, lookCloser?: string) => {
     if (isStreaming || sendingRef.current) return;
     sendingRef.current = true;
     stoppedRef.current = false;
@@ -136,14 +136,17 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
       addMessage(userMsg);
       useActivity.getState().clear();
       agentClient.startNewRun();
+      if (lookCloser) rerouteNextRun({ url: "/api/review/look-closer", body: { path: lookCloser } });
       await agentClient.runAgent(
         [...messages, userMsg],
         Object.values(toolDefs).map((t) => t.definition),
         agentSubscriber,
         getForwardedProps(),
       );
+      // The server stored its own copy of the question under its own id; reload so the window boundary finds it.
+      if (lookCloser) void loadThread(meta?.showing_all ?? false);
       // A stopped run ends with the question unanswered on purpose; that is not "no output".
-      if (!stoppedRef.current) setLastTurnMs(performance.now() - startedAt);
+      else if (!stoppedRef.current) setLastTurnMs(performance.now() - startedAt);
     } catch (err) {
       // A run that dies before the stream opens rejects instead of emitting RUN_ERROR.
       if (!isAbortError(err)) {
@@ -178,6 +181,15 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
     });
     return () => setRestoredSink(null);
   });
+
+  const outbox = useStore((s) => s.outbox);
+  const takeOutbox = useStore((s) => s.takeOutbox);
+  useEffect(() => {
+    if (!outbox || isStreaming || sendingRef.current) return;
+    takeOutbox(outbox.n);
+    void sendText(outbox.text, outbox.lookCloser);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sendText is recreated every render
+  }, [outbox, isStreaming, takeOutbox]);
 
   const send = async () => {
     const text = input.trim();
@@ -393,7 +405,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
             </Prompt>
           )}
           {boundaryAtEnd && <Boundary />}
-          {(meta ? meta.fresh : messages.length === 0) && !isStreaming && <Greeting onAsk={(t) => void sendText(t)} />}
+          {(meta ? meta.fresh : messages.length === 0) && !isStreaming && <Starters onAsk={(t) => void sendText(t)} />}
         </div>
       </div>
       <div className="border-t border-line-soft bg-ink-900 px-4 py-3">

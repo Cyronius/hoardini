@@ -51,10 +51,10 @@ export function OnlineChecksConsent({ waiting: given }: { waiting?: number }) {
   };
 
   return (
-    <div role="region" aria-label="Online checks" className="border-b border-line-soft bg-ink-850 px-4 py-2 text-[length:var(--fs-sm)]">
-      <div className="mx-auto max-w-3xl">
-        <div className="font-bold">Check big files against Hugging Face and winget?</div>
-        <p className="mt-0.5 text-muted">
+    <div role="region" aria-label="Online checks" className="fade-up rounded-2xl border border-info/35 bg-info/8 px-4 py-3 text-[length:var(--fs-sm)]">
+      <div>
+        <div className="font-bold text-paper">Check big files against Hugging Face and winget?</div>
+        <p className="mt-0.5 text-paper-dim">
           Hoardini can confirm that {n} big {n === 1 ? "file" : "files"} can be downloaded again by looking them up online. It sends file names and
           package or repo names, never file contents or hashes: the published hash is fetched and compared on this PC. Checks against your own copies,
           git, and cloud sync always run.

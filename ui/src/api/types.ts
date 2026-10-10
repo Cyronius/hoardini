@@ -129,6 +129,8 @@ export type ReviewView = {
   cards: ReviewCardRef[];
   areas: ReviewArea[];
   proposals: Record<string, Proposal>;
+  // From servers that fold the rarely used apps into the review; else the UI asks /api/apps/rarely-used.
+  apps?: RarelyUsedApp[];
 };
 export type LocationAnswer = "keep" | "disposable" | "move-elsewhere" | "never-touch";
 
@@ -324,7 +326,7 @@ export type ChangesData = {
   omitted: { grew: number; new: number; shrank: number; removed: number };
   range_ms: [number, number];
 };
-export type PillKind = "ask" | "clean_up" | "explore";
+export type PillKind = "ask" | "clean_up" | "explore" | "what_is";
 export type Pill = { label: string; kind: PillKind; path?: string };
 export type PillsData = { v: 1; kind: "pills"; items: Pill[] };
 export type LearnedData = { v: 1; kind: "learned"; items: Learned[] };

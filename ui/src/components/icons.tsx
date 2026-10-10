@@ -107,3 +107,14 @@ export const ExplorerIcon = () => (
     <path d="M10 14h6M13.5 11.5 16 14l-2.5 2.5" />
   </Svg>
 );
+export const ChatIcon = () => (
+  <Svg>
+    <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.6A8 8 0 1 1 21 12Z" />
+  </Svg>
+);
+export const PanelCloseIcon = () => (
+  <Svg>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M15 4v16M8 10l2 2-2 2" />
+  </Svg>
+);

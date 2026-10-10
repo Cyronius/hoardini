@@ -4,6 +4,7 @@ import type { Job, Proposal, ProposalItem, Verdict } from "../api/types";
 import { settle } from "../agent/decisions";
 import { fileName, humanBytes } from "../format";
 import { useStore } from "../store";
+import { ItemTree, RevealButton, Toggle } from "./ItemTree";
 import { LearnedChip } from "./LearnedChip";
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -106,11 +107,15 @@ function ItemRow({
   locked: boolean;
   onToggle: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   const blocked = !!item.block_reason || item.status === "blocked";
   const verdict = item.verdict;
+  const name = fileName(item.path);
   return (
     <li className="py-1.5">
-      <label className={`flex items-start gap-2 ${blocked || locked ? "opacity-80" : "cursor-pointer"}`}>
+      <div className="flex items-start gap-1.5">
+        <span className="mt-1 w-4 shrink-0">{item.kind === "dir" && <Toggle open={open} onClick={() => setOpen((o) => !o)} label={name} />}</span>
+        <label className={`flex min-w-0 flex-1 items-start gap-2 ${blocked || locked ? "opacity-80" : "cursor-pointer"}`}>
         <input
           type="checkbox"
           className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-brass)]"
@@ -121,7 +126,7 @@ function ItemRow({
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
             <span className="min-w-0 truncate font-semibold" title={item.path}>
-              {fileName(item.path)}
+              {name}
             </span>
             <span className="ml-auto shrink-0 tabular-nums text-muted">{humanBytes(item.alloc)}</span>
             {item.small && <span className="shrink-0 rounded-full border border-line px-2 py-px text-[length:var(--fs-xs)] text-faint">small</span>}
@@ -148,7 +153,18 @@ function ItemRow({
             <span className="block text-[length:var(--fs-xs)] text-ok">{item.status === "done" ? "done" : "skipped"}</span>
           )}
         </span>
-      </label>
+        </label>
+        {item.status !== "done" && (
+          <span className="-mr-1 flex shrink-0 items-center">
+            <RevealButton path={item.path} />
+          </span>
+        )}
+      </div>
+      {open && (
+        <div className="ml-5">
+          <ItemTree path={item.path} rootSize={item.alloc} />
+        </div>
+      )}
     </li>
   );
 }
@@ -206,6 +222,8 @@ function outcomeLine(p: Proposal, job: Job | undefined): { text: string; tone: s
   switch (p.status) {
     case "declined":
       return { text: "Declined. Nothing was changed.", tone: "text-muted" };
+    case "superseded":
+      return { text: "Replaced by a newer review. Nothing was changed.", tone: "text-muted" };
     case "done":
       return { text: `Done${job ? `. Freed ${humanBytes(job.freed_bytes)}` : ""}.`, tone: "text-ok" };
     case "partial":
@@ -225,11 +243,12 @@ const VERB: Record<Proposal["kind"], string> = {
   system_cleanup: "Cleaned up",
   online_only: "Made online-only",
 };
-const ENDED: Proposal["status"][] = ["declined", "done", "partial", "failed"];
+const ENDED: Proposal["status"][] = ["declined", "done", "partial", "failed", "superseded"];
 
 function collapsedLine(p: Proposal, job: Job | undefined): string {
   const n = (k: number) => `${k} item${k === 1 ? "" : "s"}`;
   if (p.status === "declined") return `Declined · ${n(p.items.length)}`;
+  if (p.status === "superseded") return `Replaced by a newer review · ${n(p.items.length)}`;
   const done = p.items.filter((i) => i.status === "done");
   const freed = job ? job.freed_bytes : done.reduce((a, i) => a + i.alloc, 0);
   if (p.status === "failed" && done.length === 0) return `${VERB[p.kind]} nothing · failed${job?.error ? `: ${job.error}` : ""}`;
@@ -237,17 +256,18 @@ function collapsedLine(p: Proposal, job: Job | undefined): string {
   return `${VERB[p.kind]} ${count} · ${p.kind === "compress" ? "saved" : "freed"} ${humanBytes(freed)}`;
 }
 
-export function ProposalCard({ proposalId }: { proposalId: string }) {
+// `title` names a review card (REVIEW-BUILD); chat cards are headed by their kind.
+export function ProposalCard({ proposalId, title }: { proposalId: string; title?: string }) {
   const proposal = useStore((s) => s.proposals[proposalId]);
   return (
     <>
-      <ProposalBody proposalId={proposalId} />
-      {proposal?.follow_up_id && <ProposalCard key={proposal.follow_up_id} proposalId={proposal.follow_up_id} />}
+      <ProposalBody proposalId={proposalId} title={title} />
+      {proposal?.follow_up_id && <ProposalCard key={proposal.follow_up_id} proposalId={proposal.follow_up_id} title={title} />}
     </>
   );
 }
 
-function ProposalBody({ proposalId }: { proposalId: string }) {
+function ProposalBody({ proposalId, title }: { proposalId: string; title?: string }) {
   const proposal = useStore((s) => s.proposals[proposalId]);
   const job = useStore((s) => (proposal?.job_id ? s.jobs[proposal.job_id] : undefined));
   const loadProposal = useStore((s) => s.loadProposal);
@@ -256,15 +276,18 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const tickSeq = useRef(0);
 
   useEffect(() => {
     if (!proposal) void loadProposal(proposalId);
   }, [proposal, proposalId, loadProposal]);
 
+  // A review card keeps its ticks on the server, so Ready to free and a reload agree with them (SRV-PROPOSAL-SELECTION).
+  const persisted = !!proposal?.review_id;
   const selected = useMemo(() => {
     if (!proposal) return new Set<number>();
-    return picked ?? new Set(proposal.items.filter((i) => i.selected && !i.block_reason && i.status !== "blocked").map((i) => i.id));
-  }, [proposal, picked]);
+    return (persisted ? null : picked) ?? new Set(proposal.items.filter((i) => i.selected && !i.block_reason && i.status !== "blocked").map((i) => i.id));
+  }, [proposal, picked, persisted]);
 
   if (!proposal) {
     return (
@@ -279,7 +302,17 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    setPicked(next);
+    if (!persisted) return setPicked(next);
+    const seq = ++tickSeq.current;
+    putProposal({ ...proposal, touched: true, items: proposal.items.map((i) => (i.status === "pending" ? { ...i, selected: next.has(i.id) } : i)) });
+    setError(null);
+    routes.selectItems(proposalId, [...next]).then(
+      (p) => seq === tickSeq.current && putProposal(p),
+      (e: unknown) => {
+        setError(e instanceof Error ? e.message : String(e));
+        void loadProposal(proposalId);
+      },
+    );
   };
 
   const approve = async () => {
@@ -312,7 +345,7 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
 
   const dest = proposal.destination?.name ?? "destination";
   const system = proposal.kind === "system_cleanup";
-  const heading =
+  const heading = title ?? (
     proposal.kind === "delete"
       ? "Delete"
       : proposal.kind === "archive"
@@ -323,7 +356,7 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
             ? "Clean up with Windows"
             : proposal.kind === "online_only"
               ? "Make online-only"
-              : "Remove duplicates";
+              : "Remove duplicates");
   const outcome = outcomeLine(proposal, job);
   const compressNote = proposal.kind === "compress" ? compressNoteFor(proposal.format) : null;
   const dedupe = proposal.kind === "dedupe" ? proposal.dedupe : null;
@@ -332,6 +365,9 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
   const unknownSize = pickedOps.some((o) => !o.estimate_known);
   const irreversible = pickedOps.filter((o) => o.irreversible);
   const permanentDelete = proposal.kind === "delete" || dedupe?.mode === "delete" || irreversible.length > 0;
+  // "free 0 B" reads like a broken card; with nothing ticked the heading says what could go.
+  const nothingPicked = pending && selected.size === 0;
+  const choosable = proposal.items.filter((i) => !i.block_reason && i.status === "pending").reduce((a, i) => a + i.alloc, 0);
 
   const marks = { "data-proposal-id": proposalId, "data-status": proposal.status, "data-follow-up": proposal.follow_up_id ?? undefined };
   const learned = ended
@@ -364,11 +400,11 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
 
   return (
     <>
-    <div className="fade-up my-2 rounded-2xl border border-brass/40 bg-ink-850 p-3 shadow-sm" {...marks}>
+    <div className="@container fade-up my-2 rounded-2xl border border-brass/40 bg-ink-850 p-3 shadow-sm" {...marks}>
       <div className="flex items-baseline gap-2">
         <span className="font-[family-name:var(--font-display)] text-[length:var(--fs-md)] font-bold">
-          {heading} · {proposal.kind === "compress" ? "up to" : system && unknownSize ? "free at least" : "free"}{" "}
-          {humanBytes(pending ? total : proposal.total_alloc)}
+          {heading} · {proposal.kind === "compress" || nothingPicked ? "up to" : system && unknownSize ? "free at least" : "free"}{" "}
+          {humanBytes(nothingPicked ? choosable : pending ? total : proposal.total_alloc)}
         </span>
         {ended ? (
           <button type="button" className="ml-auto text-[length:var(--fs-xs)] text-faint hover:text-paper" onClick={() => setOpen(false)}>
