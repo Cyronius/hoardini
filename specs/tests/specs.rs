@@ -1,3 +1,4 @@
+#![allow(clippy::duplicate_mod)] // policy/support.rs is shared by three test roots
 #[path = "../index/tests/index.rs"]
 mod index;
 #[path = "../hist/tests/hist.rs"]
