@@ -122,14 +122,14 @@ function AreaRow({ area, max }: { area: ReviewArea; max: number }) {
                 {area.label}
               </span>
             ) : (
-              area.unknown && <span className="shrink-0 rounded-full border border-brass/40 px-2 py-px text-[length:var(--fs-xs)] font-bold text-brass">unknown</span>
+              area.unknown && <span className="shrink-0 rounded-full border border-brass/60 px-2 py-px text-[length:var(--fs-xs)] font-bold text-paper-dim">unknown</span>
             )}
             <span className="min-w-0 flex-1 truncate text-[length:var(--fs-xs)] text-faint" title={area.path}>
               {parent}
             </span>
             <span className="shrink-0 font-bold tabular-nums text-paper">{humanBytes(area.size)}</span>
           </div>
-          <div className="relative mt-1 flex h-5 items-center">
+          <div className="relative my-0.5 flex h-4 items-center">
             <span className="block h-1 w-full overflow-hidden rounded-full bg-ink-800" aria-hidden="true">
               <span className={`block h-full rounded-full ${area.unknown ? "bg-brass/60" : "bg-muted/50"}`} style={{ width: `${Math.max(1, (area.size / max) * 100)}%` }} />
             </span>

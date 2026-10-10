@@ -61,7 +61,7 @@ function Tabs({ wide }: { wide: boolean }) {
       {tab(
         "review",
         "Review",
-        ready > 0 && <span className="rounded-full bg-brass/15 px-1.5 py-px text-[length:var(--fs-xs)] tabular-nums text-brass">{humanBytes(ready, 0)}</span>,
+        ready > 0 && <span className="rounded-full bg-brass px-1.5 py-px text-[length:var(--fs-xs)] tabular-nums text-on-accent">{humanBytes(ready, 0)}</span>,
       )}
       {tab("explore", "Explore")}
       {!wide && tab("chat", "Chat", busy && front !== "chat" && <span className="h-2 w-2 rounded-full bg-brass pulse-soft" aria-label="answering" />)}
