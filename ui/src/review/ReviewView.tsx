@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Proposal, ReviewCardRef, ReviewView as Review } from "../api/types";
 import { Hello } from "../components/Greeting";
+import { letter as drive } from "../components/header/Volumes";
 import { RefreshIcon, SpinnerIcon } from "../components/icons";
 import { selectedVolume } from "../components/mascot/girth";
 import { OnlineChecksConsent } from "../components/OnlineChecksConsent";
@@ -11,8 +12,6 @@ import { LargeAreas, SectionHead, WhatIsCard } from "./LargeAreas";
 import { chainOf, orderCards, readyBytes } from "./order";
 import { RarelyUsedApps } from "./RarelyUsedApps";
 import { useReview } from "./state";
-
-const drive = (root: string) => root.replace(/\\$/, "");
 
 // Opens the drive's review at start and on a drive switch; a rebuild elsewhere shows up as a new status.review id.
 function useReviewSync() {

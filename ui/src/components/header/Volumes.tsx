@@ -7,7 +7,7 @@ import { CheckIcon, ChevronDownIcon, SpinnerIcon } from "../icons";
 import { selectedVolume } from "../mascot/girth";
 
 // A watched folder (test setups) shows its last segment; a drive shows "D:".
-const letter = (root: string) => {
+export const letter = (root: string) => {
   const r = root.replace(/\\$/, "");
   return r.length <= 2 ? r : `…\\${r.split("\\").pop()}`;
 };

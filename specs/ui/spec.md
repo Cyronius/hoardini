@@ -139,6 +139,7 @@ Test: `specs/ui/tests/shell-layout.test.ts`.
 15. Repeat steps 2, 3, 7 and 10 in Marshmallow Night and in Rosewood (midtone), and at 430 px wide: text reads on every surface, nothing scrolls sideways, and Look closer opens the Chat tab.
 16. Against `hoardini serve --port 72xx --token dev` with a scratch `HOARDINI_DATA_DIR` and `--db` and an index of a scratch folder: the Review tab shows that folder's review from `POST /api/review/open`, a tick survives a reload, and What is this? on an unknown area updates its row.
 (2026-10-09: steps 1–15 pass against the mock in headless Chromium through Playwright; step 15 in Marshmallow, Marshmallow Night and Rosewood at 1440 and 430 px found no element wider than the window, and the Review tab's size badge and the "unknown" tag were changed to solid and neutral colors after Rosewood showed them faint.)
+(2026-10-09: step 16 passes against a debug `hoardini serve --no-refresh` with scratch data watching a scratch folder that holds a Rust `target`, a `node_modules` and a 1.5 GB file: the Review tab showed "Hi, I'm Hoardini." until the folder's fast scan ended, then "Review of …\root" with its Build output card; unticking node_modules survived a reload, with Ready to free 700 MB on screen and from the server. The folder sits under %TEMP%, so its one Large area was a known temp row and What is this? was answered from Explore's card for `mystery` instead, storing a `user` row; Look closer from that card streamed a scripted OpenAI-compatible model's answer into the chat through `/api/review/look-closer`, and the boundary sat above that question after the reload.)
 
 ### UI-REVIEW-ORDER: Card order and Ready to free
 **Applies to:** hoardini
@@ -212,6 +213,7 @@ the Review tab shows "Hi, I'm Hoardini." with the first scan's progress, until t
 5. Start the mock with `MOCK_NO_INDEX=1` (UI-REVIEW step 14): "Hi, I'm Hoardini." and the scan's percentage show in the Review tab until the fast scan ends, then the review header.
 (2026-10-09: steps 1–4 passed in the same session as UI-CONTEXT-BOUNDARY, when this was the greeting card in the chat.)
 (2026-10-09: step 5 passes against the mock in headless Chromium: "Hi, I'm Hoardini." at 48%, then the review header about 10 s later.)
+(2026-10-09: steps 1–4 pass against the `hoardini serve` of UI-REVIEW step 16 with a scripted OpenAI-compatible model: Free space over time was sent and hid the starters, Clear chat brought them back, and with the 4 stored messages moved 7 hours back they showed again after a reload.)
 
 ### UI-CLEAR-HISTORY: Clear chat history deletes only the chat text
 **Applies to:** hoardini

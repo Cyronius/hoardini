@@ -1,5 +1,6 @@
 import { humanBytes } from "../format";
 import { useStore } from "../store";
+import { letter } from "./header/Volumes";
 import { selectedVolume } from "./mascot/girth";
 
 export const starter = "rounded-full border border-brass/40 bg-brass/10 px-3 py-1 text-[length:var(--fs-sm)] font-bold text-brass hover:bg-brass/20";
@@ -34,7 +35,7 @@ export function Hello() {
   const vol = selectedVolume(status?.volumes);
   const idx = status?.index;
   const pct = idx?.progress?.fraction;
-  const drive = vol ? vol.root.replace(/\\$/, "") : "this PC";
+  const drive = vol ? letter(vol.root) : "this PC";
   return (
     <div className="fade-up rounded-2xl border border-line bg-ink-850 p-5">
       <div className="font-[family-name:var(--font-display)] text-[22px] font-extrabold leading-tight text-paper">Hi, I'm Hoardini.</div>
