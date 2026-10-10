@@ -421,7 +421,8 @@ impl Walker<'_> {
                 let mut st = self.conn.prepare(
                     "WITH RECURSIVE d(id, top) AS (SELECT id, id FROM node WHERE parent_id = ?1 \
                      UNION ALL SELECT n.id, d.top FROM node n JOIN d ON n.parent_id = d.id) \
-                     SELECT d.top, MAX(MAX(COALESCE(n.mtime, n.ctime), COALESCE(n.ctime, n.mtime)))                      FROM d JOIN node n ON n.id = d.id GROUP BY d.top",
+                     SELECT d.top, MAX(MAX(COALESCE(n.mtime, n.ctime), COALESCE(n.ctime, n.mtime))) \
+                     FROM d JOIN node n ON n.id = d.id GROUP BY d.top",
                 )?;
                 st.query_map([node.id], |r| {
                     Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?))

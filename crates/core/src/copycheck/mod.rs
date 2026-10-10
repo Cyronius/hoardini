@@ -946,7 +946,8 @@ pub fn prune(conn: &Connection, volume_root: &str) -> anyhow::Result<usize> {
         return Ok(0);
     }
     let mut st = conn.prepare(
-        "SELECT DISTINCT c.path FROM copy_check c JOIN volume v ON v.id = c.volume_id          WHERE v.root = ?1 COLLATE NOCASE",
+        "SELECT DISTINCT c.path FROM copy_check c JOIN volume v ON v.id = c.volume_id \
+         WHERE v.root = ?1 COLLATE NOCASE",
     )?;
     let paths = st
         .query_map([&root], |r| r.get::<_, String>(0))?
