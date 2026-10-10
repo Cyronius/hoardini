@@ -30,7 +30,6 @@ struct Tally {
 }
 
 impl OnlineOnlyRunner {
-    // Only an in-sync placeholder is touched; anything else stays exactly as it is.
     fn one(&self, cx: &mut ItemCx<'_>, p: &Path, t: &mut Tally) {
         match self.cloud.state(p) {
             Ok(Some(st)) if st.in_sync => {

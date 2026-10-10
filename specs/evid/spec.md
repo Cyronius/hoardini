@@ -113,8 +113,8 @@ copy). A check that finds the path is not its business (`Find::Skip`) drops its 
 that applies is waiting on consent (EVID-COPY-CONSENT). `note_for(path)` is the best answer's note, or "only copy we know
 of". `candidates(cx, registry, volume_root)` lists the volume's indexed files of at least 100 MiB (not placeholders,
 denied, or hard-link duplicates) and its folders of at least 1 GiB that some check covers (a git work tree, a Hugging
-Face `models--*` or LM Studio repo folder, a folder under a sync root, a catalog launcher or package unit, an archived
-folder), biggest first, at most 2,000.
+Face `models--*` or LM Studio repo folder, a sync root or a folder up to two levels below one, a catalog launcher or
+package unit, an archived folder), biggest first, at most 2,000.
 
 A knowledge row (memory) whose `detail_json.copy_hint` names a check (`"huggingface"`, `"huggingface:<org>"`,
 `"huggingface:<org>/<repo>"`, `"winget:<name>"`, or `{"check", "where"}`) makes that check apply to the paths the row

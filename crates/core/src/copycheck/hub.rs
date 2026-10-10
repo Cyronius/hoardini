@@ -60,7 +60,6 @@ pub fn parse_tree(body: &str) -> anyhow::Result<Vec<TreeEntry>> {
         .collect())
 }
 
-// `GET /api/models?search=`: repo ids in the order the hub ranks them.
 pub fn parse_search(body: &str) -> anyhow::Result<Vec<String>> {
     let raw: Vec<Value> = serde_json::from_str(body)?;
     Ok(raw

@@ -15,7 +15,7 @@ impl GitCheck {
 const MAX_DEPTH: usize = 64;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-// The nearest folder at or above `path` holding `.git` (a folder, or a file for worktrees and submodules).
+// `.git` is a file, not a folder, in worktrees and submodules.
 pub fn work_tree(path: &Path) -> Option<PathBuf> {
     let mut cur = Some(path);
     for _ in 0..MAX_DEPTH {
@@ -72,7 +72,6 @@ pub struct Status {
     pub changed: usize,
 }
 
-// `git status --porcelain=v1 -z` entries: "XY path"; `??` untracked, `!!` ignored, anything else changed.
 pub fn parse_status(out: &str) -> Status {
     let mut s = Status::default();
     let mut it = out.split('\0').filter(|e| !e.is_empty());

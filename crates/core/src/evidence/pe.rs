@@ -134,7 +134,7 @@ pub fn signature_blob<R: Read + Seek>(mut r: R, file_len: u64) -> Option<Vec<u8>
     Some(cert[8..len].to_vec())
 }
 
-// The signer's display name, read through the atime-preserving handle.
+// Through the atime-preserving handle, like every other header read.
 pub fn signer(path: &std::path::Path) -> Option<String> {
     let f = hoardini_win::open_read_preserving_atime(path).ok()?;
     let len = f.metadata().ok()?.len();

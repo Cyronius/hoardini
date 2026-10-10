@@ -28,7 +28,7 @@ impl Drop for Handles {
     }
 }
 
-// The signer's display name from a PE's embedded PKCS#7 blob (the WIN_CERTIFICATE payload); the caller reads the bytes.
+// The caller reads the blob, so the file is opened the atime-preserving way.
 pub fn pkcs7_signer(pkcs7: &[u8]) -> io::Result<Option<String>> {
     let blob = CRYPT_INTEGER_BLOB {
         cbData: u32::try_from(pkcs7.len()).map_err(|_| io::Error::other("signature too large"))?,

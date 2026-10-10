@@ -11,7 +11,6 @@ use crate::supervisor::Supervisor;
 // Journal refreshes come every few minutes; copy checks after them need not.
 const MIN_GAP: Duration = Duration::from_secs(15 * 60);
 
-// Copy checks and hashing for every watched drive, one pass at a time, on a background-priority thread.
 pub struct CopyWorker {
     db: Db,
     supervisor: Weak<Supervisor>,

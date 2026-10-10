@@ -25,7 +25,7 @@ pub(crate) fn file_in_sync(state: Option<CloudState>) -> bool {
     state.is_some_and(|s| s.in_sync)
 }
 
-// Every file under the folder (bounded); a file that is not a placeholder counts as not in sync.
+// A file that is no placeholder has no cloud copy yet.
 pub fn folder_sync(cloud: &dyn Cloud, dir: &Path) -> FolderSync {
     let mut out = FolderSync::default();
     let mut stack = vec![dir.to_path_buf()];
@@ -68,8 +68,13 @@ impl CopyCheck for SyncCheck {
         root_for(&cx.env.cloud.roots(), &s.path).is_some()
     }
 
+    // Deeper folders would each walk the same files again on every pass.
     fn covers_dir(&self, cx: &Cx<'_>, path: &str) -> bool {
-        root_for(&cx.env.cloud.roots(), path).is_some()
+        let roots = cx.env.cloud.roots();
+        root_for(&roots, path).is_some_and(|r| {
+            path.get(r.path.len()..)
+                .is_some_and(|rest| rest.matches('\\').count() <= 2)
+        })
     }
 
     // A file inside can fall out of sync without the folder's own id, size or mtime moving.

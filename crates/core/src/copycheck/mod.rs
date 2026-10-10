@@ -85,7 +85,6 @@ pub fn effect(c: Confidence) -> Effect {
     }
 }
 
-// The verdict a result allows; None means it never changes one.
 pub fn verdict_for(r: &CopyResult) -> Option<Verdict> {
     match effect(r.confidence) {
         Effect::MayStartTicked if r.check == SyncCheck::NAME => Some(Verdict::Synced),
@@ -242,7 +241,7 @@ pub fn hint_for(conn: &Connection, path: &str, profile: &str) -> Option<Hint> {
     best.map(|(_, h)| h)
 }
 
-// One file or folder as the checks see it; the cache key is volume + path + check, valid while id, size and mtime hold.
+// Answers are stored per volume + path + check and hold while id, size and mtime do.
 #[derive(Clone, Debug)]
 pub struct Subject {
     pub volume_id: i64,
@@ -497,7 +496,6 @@ fn stored_rows(conn: &Connection, s: &Subject) -> Vec<StoredRow> {
     .unwrap_or_default()
 }
 
-// Rows whose file id, size and mtime still match the subject; anything else is stale.
 pub fn current(conn: &Connection, s: &Subject) -> Vec<CopyResult> {
     stored_rows(conn, s)
         .into_iter()
@@ -555,7 +553,6 @@ pub struct Outcome {
     pub needs_hash: bool,
 }
 
-// Runs every check that applies and is allowed, reusing stored answers while the subject is unchanged.
 pub fn check_subject(cx: &Cx<'_>, reg: &Registry, s: &Subject) -> Outcome {
     let mut out = Outcome::default();
     let stored = current(cx.conn, s);
@@ -617,7 +614,6 @@ pub fn check_path(cx: &Cx<'_>, reg: &Registry, path: &str) -> Outcome {
     }
 }
 
-// Stored answers for a path as it is now; nothing runs.
 pub fn results_for(conn: &Connection, path: &str) -> Vec<CopyResult> {
     Subject::load(conn, path)
         .map(|s| current(conn, &s))
@@ -657,7 +653,6 @@ pub fn only_copy(conn: &Connection, path: &str) -> bool {
     !waiting_on_consent(conn, &s, &CheckEnv::system(conn))
 }
 
-// One line for item notes and evidence; None when nothing was checked.
 pub fn note_for(conn: &Connection, path: &str) -> Option<String> {
     let rs = results_for(conn, path);
     let b = best(&rs)?;
@@ -696,7 +691,6 @@ pub struct Candidate {
     pub size: u64,
 }
 
-// Files of at least 100 MiB and folder items of at least 1 GiB that some check covers, biggest first.
 pub fn candidates(
     cx: &Cx<'_>,
     reg: &Registry,
@@ -778,7 +772,7 @@ pub struct RunReport {
     pub stopped: bool,
 }
 
-// One background pass over a volume: checks first, then SHA-256 of whatever waits on a hash, biggest first.
+// Checks before hashes, so a pass stopped early has still answered everything that needs no hash.
 pub fn run_volume(
     db: &Db,
     env: &CheckEnv,

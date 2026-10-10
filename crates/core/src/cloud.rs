@@ -25,7 +25,6 @@ pub trait Cloud: Send + Sync {
     fn roots(&self) -> Vec<SyncRoot>;
     // None: an ordinary file, not a cloud placeholder.
     fn state(&self, path: &Path) -> std::io::Result<Option<CloudState>>;
-    // Unpins and drops the local data of one in-sync file; returns the bytes freed.
     fn free(&self, path: &Path) -> std::io::Result<u64>;
 }
 

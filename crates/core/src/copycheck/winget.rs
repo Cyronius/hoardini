@@ -167,7 +167,6 @@ fn is_version(t: &str) -> bool {
             .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
-// `balenaEtcher-2.1.7.Setup.exe` -> ("balenaEtcher", Some("2.1.7")).
 pub fn name_and_version(file_name: &str) -> (String, Option<String>) {
     let stem = file_name.rsplit_once('.').map_or(file_name, |(s, _)| s);
     let noise = [

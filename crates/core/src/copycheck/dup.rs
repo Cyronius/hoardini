@@ -17,7 +17,7 @@ struct Twin {
     subject: Subject,
 }
 
-// Other indexed files with the same logical size and a different file id (hard links are one file).
+// Hard links share a file id: one file, not a copy.
 fn same_size(cx: &Cx<'_>, s: &Subject) -> anyhow::Result<Vec<Twin>> {
     let mut st = cx.conn.prepare_cached(
         "SELECT id, file_id FROM node WHERE kind = ?1 AND logical = ?2 AND (flags & ?3) = 0",

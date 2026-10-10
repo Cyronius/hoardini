@@ -37,7 +37,6 @@ fn chain(path: &str) -> Vec<String> {
     out
 }
 
-// The newest archive of this path or of a folder above it.
 fn entry_for(cx: &Cx<'_>, path: &str) -> Option<Entry> {
     let mut st = cx
         .conn
@@ -72,7 +71,6 @@ fn is_remote(uri: &str) -> bool {
     uri.starts_with(crate::destinations::rclone::URI_PREFIX)
 }
 
-// Total logical bytes and newest mtime under a folder, bounded.
 fn tree_stats(dir: &Path) -> (u64, i64) {
     let (mut bytes, mut newest, mut seen) = (0u64, 0i64, 0usize);
     let mut stack = vec![dir.to_path_buf()];

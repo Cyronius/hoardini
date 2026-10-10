@@ -60,7 +60,6 @@ pub fn save(conn: &Connection, c: &OnlineConsent) -> anyhow::Result<()> {
     set_meta(conn, KEY, &serde_json::to_string(c)?)
 }
 
-// Applies a partial `{asked?, services: {huggingface?, winget?}}`; anything else is an error and nothing changes.
 pub fn patch(current: OnlineConsent, v: &serde_json::Value) -> Result<OnlineConsent, String> {
     let o = v
         .as_object()

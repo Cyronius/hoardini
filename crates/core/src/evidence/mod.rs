@@ -261,7 +261,6 @@ impl Evidence {
         parts.join("; ")
     }
 
-    // The strongest copy-check answer, or "only copy we know of" when every check came up empty.
     pub fn copy_phrase(&self) -> Option<String> {
         let best = crate::copycheck::best(&self.copies)?;
         if best.confidence == crate::copycheck::Confidence::None {

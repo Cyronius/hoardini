@@ -96,7 +96,6 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-// Hashes the subject unless a current hash exists; the file must still be what the subject describes.
 pub fn hash_subject(
     conn: &Connection,
     s: &Subject,
