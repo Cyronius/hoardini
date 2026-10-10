@@ -287,8 +287,16 @@ fn op_refusal(c: &CleanupCandidate) -> Option<String> {
     }
 }
 
-// Items are operations: the path is what each one works on, alloc its estimate (0 when unknown).
 pub fn create_system_cleanup(db: &Db, req: NewSystemCleanup) -> anyhow::Result<Proposal> {
+    create_system_cleanup_card(db, req, None)
+}
+
+// Items are operations: the path is what each one works on, alloc its estimate (0 when unknown).
+pub fn create_system_cleanup_card(
+    db: &Db,
+    req: NewSystemCleanup,
+    card: Option<&ReviewCard>,
+) -> anyhow::Result<Proposal> {
     let mut dropped = req.dropped;
     let mut ops: Vec<CleanupCandidate> = Vec::new();
     for c in req.ops {
@@ -323,8 +331,9 @@ pub fn create_system_cleanup(db: &Db, req: NewSystemCleanup) -> anyhow::Result<P
     let mut conn = db.conn()?;
     let tx = conn.transaction()?;
     tx.execute(
-        "INSERT INTO proposal(id, conversation_id, tool_call_id, kind, params_json, status, total_alloc, created_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7)",
+        "INSERT INTO proposal(id, conversation_id, tool_call_id, kind, params_json, status, total_alloc, created_ms,
+                              review_id, card)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8, ?9)",
         params![
             id,
             req.conversation_id,
@@ -333,8 +342,11 @@ pub fn create_system_cleanup(db: &Db, req: NewSystemCleanup) -> anyhow::Result<P
             serde_json::to_string(&params)?,
             total,
             now_ms(),
+            card.map(|c| c.review_id.as_str()),
+            card.map(|c| c.card.as_str()),
         ],
     )?;
+    let untick = card.is_some_and(|c| !c.ticked);
     for (seq, c) in ops.iter().enumerate() {
         let kind = match c.op {
             SystemOp::Hibernation | SystemOp::CompactVhdx { .. } => ItemKind::File,
@@ -353,7 +365,7 @@ pub fn create_system_cleanup(db: &Db, req: NewSystemCleanup) -> anyhow::Result<P
                 to_i64(c.size.unwrap_or(0)),
                 verdict.as_str(),
                 c.note,
-                default_tick(false, Some(verdict), false),
+                !untick && default_tick(false, Some(verdict), false),
             ],
         )?;
     }
@@ -518,7 +530,14 @@ fn build(
         } else {
             item.verdict
         };
-        let note = memory::note_covering_with(&conn, &path, &env.profile)?.map(|m| m.text);
+        let note = memory::note_covering_with(&conn, &path, &env.profile)?
+            .map(|m| m.text)
+            .filter(|n| {
+                !item
+                    .reason
+                    .as_deref()
+                    .is_some_and(|r| r.to_lowercase().contains(&n.to_lowercase()))
+            });
         rows.push(Row {
             verdict: verdict.map(|v| v.capped(ex.cap)),
             reason: item.reason.clone(),

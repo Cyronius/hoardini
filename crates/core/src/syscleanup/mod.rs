@@ -7,12 +7,23 @@ use crate::index::{self, NodeKind, TopFilesQuery, normalize_path};
 use crate::paths::humanize_bytes;
 use crate::policy::Verdict;
 
-pub use helper::{OpResult, count_shadows, helper_params, parse_helper_args, run_helper};
+pub use helper::{
+    Cleared, OpResult, clear_contents, count_shadows, helper_params, parse_helper_args, run_helper,
+};
 
 pub const MIN_SAVING: u64 = 1 << 30;
 pub const MIN_WINSXS: u64 = 2 << 30;
 pub const MIN_UNSEEN: u64 = 2 << 30;
 pub const MIN_VHDX: u64 = 5 << 30;
+pub const LEFTOVER_AGE_HOURS: i64 = 24;
+// Catalog entries whose machine-wide folders only an administrator may clear; nothing else is ever cleared.
+pub const LEFTOVER_ENTRIES: [&str; 5] = [
+    "temp-system",
+    "wu-download",
+    "delivery-optimization",
+    "crash-dumps",
+    "windows-logs",
+];
 pub const OP_NAMES: [&str; 5] = [
     "component_store",
     "restore_points",
@@ -29,6 +40,7 @@ pub enum SystemOp {
     Hibernation,
     CompactVhdx { path: String },
     RecycleBin,
+    Leftovers,
 }
 
 impl SystemOp {
@@ -39,6 +51,7 @@ impl SystemOp {
             SystemOp::Hibernation => "hibernation",
             SystemOp::CompactVhdx { .. } => "compact_vhdx",
             SystemOp::RecycleBin => "recycle_bin",
+            SystemOp::Leftovers => "leftovers",
         }
     }
 
@@ -70,6 +83,9 @@ impl SystemOp {
                 path.rsplit('\\').next().unwrap_or(path.as_str())
             ),
             SystemOp::RecycleBin => "Empty the Recycle Bin".into(),
+            SystemOp::Leftovers => {
+                "Windows temp files, update downloads, crash dumps and logs".into()
+            }
         }
     }
 
@@ -90,6 +106,9 @@ impl SystemOp {
             SystemOp::RecycleBin => {
                 "Windows empties the Recycle Bin on every drive. The files in it are gone for good. This one needs no administrator prompt."
             }
+            SystemOp::Leftovers => {
+                "Hoardini empties Windows' own temp, update download, Delivery Optimization, crash dump and servicing log folders, which only an administrator may clear. Only files untouched for a day go; files in use and the folders themselves stay. Windows downloads again anything it still needs."
+            }
         }
     }
 
@@ -108,6 +127,8 @@ impl SystemOp {
                 "reason": "compacting changes nothing inside the disk; there is nothing to undo"}),
             SystemOp::RecycleBin => serde_json::json!({"kind": "none",
                 "reason": "the Recycle Bin was emptied; its files are gone"}),
+            SystemOp::Leftovers => serde_json::json!({"kind": "none",
+                "reason": "the temp files, update downloads, crash dumps and logs were deleted; Windows makes new ones as it needs them"}),
         }
     }
 
@@ -120,6 +141,12 @@ impl SystemOp {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpPart {
+    pub path: String,
+    pub size: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OpView {
     #[serde(flatten)]
@@ -130,6 +157,9 @@ pub struct OpView {
     pub irreversible: bool,
     pub estimate_known: bool,
     pub size: Option<u64>,
+    // Shown only; the elevated helper derives its own targets (leftover_targets).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<OpPart>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -139,6 +169,8 @@ pub struct CleanupCandidate {
     pub estimate: Option<u64>,
     pub size: Option<u64>,
     pub note: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<OpPart>,
 }
 
 impl CleanupCandidate {
@@ -150,9 +182,63 @@ impl CleanupCandidate {
             irreversible: self.op.irreversible(),
             estimate_known: self.estimate.is_some(),
             size: self.size,
+            parts: self.parts.clone(),
             op: self.op.clone(),
         }
     }
+}
+
+fn after_var<'a>(pattern: &'a str, var: &str) -> Option<&'a str> {
+    let head = pattern.get(..var.len())?;
+    if !head.eq_ignore_ascii_case(var) {
+        return None;
+    }
+    pattern[var.len()..].strip_prefix('\\')
+}
+
+// Both the review and the elevated helper use this list, so the helper never takes a path from outside.
+pub fn leftover_targets(windows_dir: &str, program_data: &str) -> Vec<String> {
+    let catalog = crate::catalog::Catalog::embedded();
+    let mut out: Vec<String> = Vec::new();
+    for id in LEFTOVER_ENTRIES {
+        let Some(e) = catalog.get(id) else {
+            continue;
+        };
+        for p in &e.patterns {
+            let full = match (after_var(p, "%SystemRoot%"), after_var(p, "%ProgramData%")) {
+                (Some(rest), _) => join(windows_dir, rest),
+                (_, Some(rest)) => join(program_data, rest),
+                _ => continue,
+            };
+            if full.contains(['*', '?', '%']) || full.split('\\').any(|c| c == "..") {
+                continue;
+            }
+            let full = normalize_path(&full);
+            if !out.iter().any(|o| o.eq_ignore_ascii_case(&full)) {
+                out.push(full);
+            }
+        }
+    }
+    out
+}
+
+pub fn leftovers_candidate(mut parts: Vec<OpPart>) -> Option<CleanupCandidate> {
+    parts.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
+    let total: u64 = parts.iter().map(|p| p.size).sum();
+    let target = parts.first()?.path.clone();
+    Some(CleanupCandidate {
+        op: SystemOp::Leftovers,
+        target,
+        estimate: Some(total),
+        size: Some(total),
+        note: format!(
+            "{} of Windows temp files, update downloads, crash dumps and logs untouched for a day, in {} place{}",
+            humanize_bytes(total),
+            parts.len(),
+            if parts.len() == 1 { "" } else { "s" }
+        ),
+        parts,
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -265,6 +351,7 @@ pub fn candidates(conn: &Connection, facts: &SystemFacts) -> anyhow::Result<Vec<
                 "WinSxS holds {} that is not hard-linked into Windows itself; Windows decides how much of it is superseded",
                 humanize_bytes(size)
             ),
+            parts: Vec::new(),
         });
     }
     let volume = facts.system_drive.trim_end_matches('\\').to_string();
@@ -284,6 +371,7 @@ pub fn candidates(conn: &Connection, facts: &SystemFacts) -> anyhow::Result<Vec<
                 "{} on {volume} is used but outside what the index can see; restore points are the usual cause",
                 humanize_bytes(unseen)
             ),
+            parts: Vec::new(),
         });
     }
     let hiberfil = join(&facts.system_drive, "hiberfil.sys");
@@ -304,6 +392,7 @@ pub fn candidates(conn: &Connection, facts: &SystemFacts) -> anyhow::Result<Vec<
                 humanize_bytes(size),
                 humanize_bytes(ram / 5)
             ),
+            parts: Vec::new(),
         });
     }
     let mut disks: Vec<(String, String)> = facts
@@ -351,6 +440,7 @@ pub fn candidates(conn: &Connection, facts: &SystemFacts) -> anyhow::Result<Vec<
             target: n.path,
             estimate: None,
             size: Some(n.size),
+            parts: Vec::new(),
         });
     }
     if let Some(bin) = facts.recycle_bin
@@ -367,6 +457,7 @@ pub fn candidates(conn: &Connection, facts: &SystemFacts) -> anyhow::Result<Vec<
                 if bin.items == 1 { "" } else { "s" },
                 humanize_bytes(bin.bytes)
             ),
+            parts: Vec::new(),
         });
     }
     Ok(out)

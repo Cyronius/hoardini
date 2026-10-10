@@ -35,6 +35,7 @@ fn token(op: &SystemOp) -> String {
         SystemOp::Hibernation => "hibernation-reduced".into(),
         SystemOp::CompactVhdx { path } => format!("compact-vhdx={path}"),
         SystemOp::RecycleBin => "recycle-bin".into(),
+        SystemOp::Leftovers => "leftovers".into(),
     }
 }
 
@@ -80,6 +81,7 @@ pub fn parse_helper_args(args: &[String]) -> anyhow::Result<(PathBuf, Vec<System
         let op = match a.split_once('=') {
             None if a == "component-store" => SystemOp::ComponentStore,
             None if a == "hibernation-reduced" => SystemOp::Hibernation,
+            None if a == "leftovers" => SystemOp::Leftovers,
             Some(("restore-points", v)) if volume_ok(v) => SystemOp::RestorePoints {
                 volume: v.to_ascii_uppercase(),
             },
@@ -226,6 +228,122 @@ fn compact_vhdx(path: &str) -> anyhow::Result<Option<String>> {
     Ok(None)
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Cleared {
+    pub files: u64,
+    pub bytes: u64,
+    pub in_use: u64,
+    pub recent: u64,
+    pub failed: u64,
+}
+
+impl Cleared {
+    pub fn summary(&self) -> String {
+        let mut s = format!(
+            "{} file{} deleted ({})",
+            self.files,
+            if self.files == 1 { "" } else { "s" },
+            crate::paths::humanize_bytes(self.bytes)
+        );
+        let left: Vec<String> = [
+            (self.in_use, "in use"),
+            (self.recent, "newer than a day"),
+            (self.failed, "could not be deleted"),
+        ]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{n} {what}"))
+        .collect();
+        if !left.is_empty() {
+            s.push_str(&format!("; left: {}", left.join(", ")));
+        }
+        s
+    }
+}
+
+// The same age the review counts parts by: the last write (REVIEW-UNITS).
+fn touched_ms(md: &std::fs::Metadata) -> i64 {
+    md.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(i64::MAX, |d| d.as_millis() as i64)
+}
+
+fn is_link(md: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    md.file_type().is_symlink()
+        || md.file_attributes() & hoardini_win::FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+fn clear_file(path: &Path, md: &std::fs::Metadata, cutoff_ms: i64, out: &mut Cleared) {
+    if touched_ms(md) > cutoff_ms {
+        out.recent += 1;
+        return;
+    }
+    match hoardini_win::delete_unless_open(path) {
+        Ok(true) => {
+            out.files += 1;
+            out.bytes += md.len();
+        }
+        Ok(false) => out.in_use += 1,
+        Err(_) => out.failed += 1,
+    }
+}
+
+fn clear_dir(dir: &Path, cutoff_ms: i64, out: &mut Cleared) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        out.failed += 1;
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        let Ok(md) = std::fs::symlink_metadata(&p) else {
+            continue;
+        };
+        if is_link(&md) {
+            continue;
+        }
+        if md.is_dir() {
+            let old = touched_ms(&md) <= cutoff_ms;
+            clear_dir(&p, cutoff_ms, out);
+            if old {
+                let _ = std::fs::remove_dir(&p);
+            }
+        } else {
+            clear_file(&p, &md, cutoff_ms, out);
+        }
+    }
+}
+
+// Contents only: the folder itself stays, links inside are never followed or removed.
+pub fn clear_contents(target: &Path, cutoff_ms: i64, out: &mut Cleared) -> std::io::Result<()> {
+    let md = std::fs::symlink_metadata(target)?;
+    if is_link(&md) {
+        return Ok(());
+    }
+    if md.is_dir() {
+        clear_dir(target, cutoff_ms, out);
+    } else {
+        clear_file(target, &md, cutoff_ms, out);
+    }
+    Ok(())
+}
+
+fn leftovers() -> anyhow::Result<Option<String>> {
+    let windows = hoardini_win::windows_directory()?;
+    let program_data = hoardini_win::program_data_directory()?;
+    let cutoff = crate::store::now_ms() - super::LEFTOVER_AGE_HOURS * 3_600_000;
+    let mut out = Cleared::default();
+    for t in super::leftover_targets(&windows.to_string_lossy(), &program_data.to_string_lossy()) {
+        if let Err(e) = clear_contents(Path::new(&t), cutoff, &mut out)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            out.failed += 1;
+        }
+    }
+    Ok(Some(out.summary()))
+}
+
 fn free_bytes(volume: &str) -> Option<u64> {
     hoardini_win::volume_info(Path::new(volume))
         .ok()
@@ -240,6 +358,7 @@ fn run_op(op: &SystemOp, system_drive: &str) -> OpResult {
         SystemOp::RestorePoints { volume } => restore_points(volume),
         SystemOp::Hibernation => hibernation(),
         SystemOp::CompactVhdx { path } => compact_vhdx(path),
+        SystemOp::Leftovers => leftovers(),
         SystemOp::RecycleBin => Err(anyhow::anyhow!("the Recycle Bin is emptied as the user")),
     };
     let freed = match (before, free_bytes(&volume)) {

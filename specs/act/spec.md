@@ -141,11 +141,21 @@ Recycle Bin), so ticks follow POLICY-DEFAULT-TICK with nothing counted small, an
 not an existing `.vhdx` file, or a `restore_points` whose volume is not a drive letter, goes to `dropped`; a request
 with nothing left fails. `syscleanup::propose(db, facts, wanted, ...)` keeps the wanted operation names (all when
 empty) and lists a wanted one that was not detected in `dropped`. A `system_cleanup` request through
-`proposals::create` (paths) is refused. Tests: `specs/act/tests/system.rs`.
+`proposals::create` (paths) is refused.
+
+The review (REVIEW-BUILD) adds one more operation, `leftovers`: `syscleanup::leftover_targets(windows_dir, program_data)`
+lists the exact machine-wide paths of the catalog entries `temp-system`, `wu-download`, `delivery-optimization`,
+`crash-dumps` and `windows-logs` (their `%SystemRoot%` and `%ProgramData%` patterns, none with a wildcard; the user's own
+CrashDumps and WER folders are cleared as the user in the `temp` card), and `syscleanup::leftovers_candidate(parts)` makes
+the operation from the parts the review found there: target the biggest part, estimate and size their sum, verdict
+`safe`, elevated, not irreversible, undo none, and `parts: [{path, size}]` in its op view (shown only).
+`proposals::create_system_cleanup_card(db, req, card)` stores a system cleanup with the review's `review_id` and `card`.
+The model's `propose_system_cleanup` does not offer `leftovers`. Tests: `specs/act/tests/system.rs`.
 
 **Acceptance criteria:**
 - On a fake `C:\` with a 6 GiB WinSxS, a 25 GiB `hiberfil.sys`, a 60 GiB Ubuntu disk, a 40 GiB `docker_data.vhdx`, a 1 GiB Docker `ext4.vhdx`, and over 2 GiB unaccounted, with 64 GiB RAM, hibernation on, and 3 GiB in 12 Recycle Bin items: the candidates are, in order, component store (size 6 GiB), restore points on `C:` (size = the gap), hibernation (estimate 25 GiB − 12.8 GiB), the Ubuntu disk, the Docker data disk, and the Recycle Bin (3 GiB, note starting "12 items").
 - With a 1 GiB WinSxS, a gap under 2 GiB, 128 GiB RAM, a 500 MiB Recycle Bin, and no WSL or Docker disks there are none, also with 16 GiB RAM and hibernation off; with hibernation unknown, the 25 GiB file is offered at 25 − 3.2 GiB. `propose` then fails with "nothing Windows can clean up".
+- `leftover_targets(X:\Windows, X:\ProgramData)` is exactly `Temp`, `SoftwareDistribution\Download`, the two Delivery Optimization caches, `ProgramData\Microsoft\Windows\WER`, `Minidump`, `MEMORY.DMP`, `LiveKernelReports`, `Logs\CBS`, `Logs\DISM` and `Panther`, in catalog order; `leftovers` is elevated, not irreversible, and serializes as `{op: "leftovers"}`. Two parts of 2 and 3 GiB make an operation with target the 3 GiB part and estimate 5 GiB; stored as a review card it is one ticked item whose op view lists both parts.
 - Proposing restore points, hibernation, Recycle Bin, and compaction gives three items in that order with ticks off, on, off, the irreversible flag on restore points and the Recycle Bin, `elevated` off only for the Recycle Bin, `estimate_known` off only for restore points, `small` off, `total_alloc` = the two estimates, and both vhdx files (absent on disk) in `dropped`. The JSON has `kind: "system_cleanup"` and `op: {op: "restore_points", volume: "C:", explain: "...cannot be brought back."}`.
 
 ### ACT-WINDOWS-CLEANUP-RUN: One administrator prompt per job, each operation journaled
@@ -158,9 +168,9 @@ Approving a `system_cleanup` proposal (no file revalidation: the items are opera
 one `SystemRunner::elevated` call: `WindowsRunner` runs `wsl --shutdown` as the user when a disk is to be compacted,
 then relaunches the current exe once with the `runas` verb (one UAC prompt) as
 `system-cleanup --result "<temp file>" "<op>"...`, where each op is `component-store`, `restore-points=<X:>`,
-`hibernation-reduced`, or `compact-vhdx=<absolute local .vhdx path>` (`syscleanup::helper_params`); the elevated side
-(`syscleanup::run_helper`, wired into both the CLI and the app's `main`) accepts nothing else
-(`syscleanup::parse_helper_args`), runs each operation, and appends one JSON result per operation (`ok`, `freed` = the
+`hibernation-reduced`, `compact-vhdx=<absolute local .vhdx path>`, or `leftovers` (`syscleanup::helper_params`); the
+elevated side (`syscleanup::run_helper`, wired into both the CLI and the app's `main`) accepts nothing else
+(`syscleanup::parse_helper_args`; `leftovers` takes no value), runs each operation, and appends one JSON result per operation (`ok`, `freed` = the
 volume's free space after minus before, `error`, `detail`) that the job reads as they arrive. A declined prompt fails
 every elevated item with "The administrator prompt was declined; nothing ran". Each item ends `done` with its action
 row's `freed_bytes` and `undo_json` written first (ACT-JOURNAL; hibernation's undo is `powercfg /h /type full`, the
@@ -168,13 +178,22 @@ others say there is no undo), or `failed` with the error; the proposal ends `don
 jobs do, and gets no follow-up. Cancel takes effect before the prompt; once the elevated helper runs, the Windows tools
 run to their end. Restore points are counted from `vssadmin list shadows` by their
 `\Device\HarddiskVolumeShadowCopyN` device paths, which are not localized (`syscleanup::count_shadows`).
+For `leftovers` the elevated side derives its targets itself, from the catalog compiled into the exe and the Windows and
+ProgramData folders as Windows reports them (`hoardini_win::windows_directory`, `program_data_directory`), never from
+the command line, the proposal or the environment (`leftover_targets`). Inside each target (`syscleanup::clear_contents`)
+it deletes only files whose last write is more than 24 hours old, each opened with no sharing so a file anything holds
+open is left (`hoardini_win::delete_unless_open`, which also clears read-only); it never follows or removes a link or
+junction, removes a subfolder only when it was untouched for 24 hours and is empty afterwards, keeps the targets
+themselves, and reports `N files deleted (<size>); left: <n> in use, <n> newer than a day, <n> could not be deleted`.
 `Executor::set_system_runner` replaces `WindowsRunner` in tests. Tests: `specs/act/tests/system.rs`.
 
 **Acceptance criteria:**
 - With a fake runner, approving all five operations calls the user side once with the Recycle Bin and the elevated side exactly once with component store, restore points on `C:`, hibernation, and the vhdx, in that order; the results (3, 5, 12 GiB, and a diskpart failure) leave four items `done` (with their details) and the vhdx `failed` with the error; the proposal is `partial`, the job `done` with 21 GiB freed, five action rows carry 3, 5, 12, 0, and 1 GiB, the restore-point undo says they cannot be brought back, hibernation's undo is `["powercfg.exe","/h","/type","full"]`, the failed row has none, and there is no follow-up. At every job event, every `done` item already has a `done` row with undo info.
 - A declined prompt fails the four elevated items with the declined message (four failed action rows), the Recycle Bin still runs, and the job frees 1 GiB.
 - Approving only the Recycle Bin never calls the elevated side.
-- The helper command line for four operations is exactly `system-cleanup --result "<file>" "component-store" "restore-points=D:" "hibernation-reduced" "compact-vhdx=C:\wsl\Ubuntu Disk\ext4.vhdx"` and parses back to the same operations; the Recycle Bin cannot be put on it; `recycle-bin`, `format-c`, `restore-points=C:\`, a non-`.vhdx` path, a relative path, a UNC path, and a relative result file are refused.
+- The helper command line for five operations is exactly `system-cleanup --result "<file>" "component-store" "restore-points=D:" "hibernation-reduced" "compact-vhdx=C:\wsl\Ubuntu Disk\ext4.vhdx" "leftovers"` and parses back to the same operations; the Recycle Bin cannot be put on it; `recycle-bin`, `format-c`, `restore-points=C:\`, a non-`.vhdx` path, a relative path, a UNC path, `leftovers=C:\Users\me\Documents`, `leftovers:C:\Users`, `clear-folder=C:\Users`, and a relative result file are refused.
+- Approving a review card's `leftovers` with a fake runner hands the elevated side exactly `[leftovers]`, and the item ends `done` with the helper's detail and freed bytes.
+- `clear_contents` of a scratch `Temp` deletes the three files written 3 days ago (one read-only, one in an old subfolder, which goes too) and reports `3 files deleted (8 B); left: 1 in use, 1 newer than a day`; a file this test holds open with no sharing, a file written now, the folder itself, and a junction inside and the file it points to are all still there. A 5-day-old `MEMORY.DMP` target is deleted on its own.
 - A `vssadmin` listing with two shadow device paths (one under a German label) counts 2; "No items found" counts 0.
 
 ### ACT-WINDOWS-CLEANUP: Windows' own tools free the space, behind one admin prompt
@@ -186,7 +205,9 @@ Each approved operation runs the Windows tool that owns it: component store, `Di
 drive except the newest via `vssadmin delete shadows /for=<X:> /oldest /quiet`, repeated (deleting old points is chosen
 over capping shadow storage, because a cap can only be set blind without elevation and may grow the allowance instead);
 hibernation, `powercfg /h /type reduced` (reduced rather than off: Fast Startup keeps working, the Hibernate option goes
-away, and `powercfg /h /type full` undoes it); WSL and Docker disks, `wsl --shutdown` as the user, then `diskpart`
+away, and `powercfg /h /type full` undoes it); leftovers, Hoardini's own elevated helper clearing old files in the
+catalog's machine-wide temp, update download, Delivery Optimization, crash dump and log folders (ACT-WINDOWS-CLEANUP-RUN;
+Disk Cleanup's own handlers are not scriptable per folder); WSL and Docker disks, `wsl --shutdown` as the user, then `diskpart`
 (`select vdisk`, `attach vdisk readonly`, `compact vdisk`, and always a separate `detach vdisk`), which needs no Hyper-V
 module, chosen over `wsl --manage --set-sparse`, which WSL itself flags as experimental and which only frees space as
 Linux trims it later; the Recycle Bin, `SHEmptyRecycleBinW` as the user. Child tools run without a console window. The
@@ -200,7 +221,8 @@ cannot be brought back. The freed bytes reported are the volume's free space aft
 4. `vssadmin list shadows /for=C:` (as admin) shows one shadow copy left; `powercfg /a` shows hibernation unavailable with Fast Startup available and `hiberfil.sys` at about a fifth of RAM; the vhdx file is smaller and the distro starts with its files intact.
 5. The collapsed card reads "Cleaned up N items · freed X"; X matches the drop in used space (`fsutil volume diskfree C:` before and after, within what else changed).
 6. `SELECT kind, status, freed_bytes, undo_json, error FROM action WHERE kind = 'system_cleanup'` shows one row per operation with its undo info.
-(2026-10-09, partial: none of steps 1–6 were run on this PC, which must not be cleaned up. Run instead: `hoardini system-cleanup --result <scratch file>` with no operations exited 0 and wrote an empty file; with `format-c`, `recycle-bin`, or a relative result file it exited 2 and ran nothing. Detection on a copy of this PC's index (read-only facts) offered component store (19.2 GB WinSxS), restore points (91.2 GB unaccounted), hibernation (35.1 GB file, about 17.5 GB to free with 87.6 GB RAM), and three WSL/Docker disks of 7.5, 121, and 6.1 GB; the Recycle Bin held 40 KB and was not offered.)
+7. For `leftovers` (from a review's `windows` card): approve it; after the one UAC prompt the item reads `N files deleted (...); left: ...`, files written within the day and files in use (an open log in `Windows\Logs\CBS`) are still there, and the folders themselves exist.
+(2026-10-09, partial: none of steps 1–7 were run on this PC, which must not be cleaned up. Run instead: `hoardini system-cleanup --result <scratch file>` with no operations exited 0 and wrote an empty file; with `format-c`, `recycle-bin`, or a relative result file it exited 2 and ran nothing. Detection on a copy of this PC's index (read-only facts) offered component store (19.2 GB WinSxS), restore points (91.2 GB unaccounted), hibernation (35.1 GB file, about 17.5 GB to free with 87.6 GB RAM), and three WSL/Docker disks of 7.5, 121, and 6.1 GB; the Recycle Bin held 40 KB and was not offered.)
 
 ### ACT-ARCHIVE-VERIFY: Archive deletes the source only after the copy verifies
 **Applies to:** hoardini
@@ -328,7 +350,8 @@ virtual disk (`vhdx`, `vhd`, `avhdx`, `vmdk`, `vdi`, `qcow2`), which WSL and Hyp
 Each candidate carries the cached `lzx` estimate (`compress_estimate` table, schema v6) while its size and newest
 modification time are unchanged. `compress::estimate_top(db, candidates, limit)` runs `compress::estimate`
 (ACT-COMPRESS-ESTIMATE) for the first `limit` candidates without a current estimate and stores each; the review runs it
-for the top 10 (`ESTIMATE_TOP`) on a background thread (`compress::spawn_estimates`). A candidate is proposable when
+for the top 10 (`ESTIMATE_TOP`) on a background thread after each review build (`review::compress_estimates`,
+REVIEW-TRIGGER); `compress::spawn_estimates` runs the same on a thread of its own. A candidate is proposable when
 the estimate saves at least 1 GiB and at least 20% of its size (`compress::proposable(saved, logical)`); the card is an
 in-place `lzx` compress of those folders. Tests: `specs/act/tests/candidates.rs`.
 
