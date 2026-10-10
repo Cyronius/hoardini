@@ -83,6 +83,11 @@ export const routes = {
   approve: (id: string, item_ids: number[]) =>
     api<T.ApproveResponse>(`/api/proposals/${enc(id)}/approve`, { body: { item_ids } }),
   decline: (id: string) => api<T.DeclineResponse>(`/api/proposals/${enc(id)}/decline`, { body: {} }),
+  selectItems: (id: string, item_ids: number[]) => put<T.Proposal>(`/api/proposals/${enc(id)}/selection`, { item_ids }),
+  reviewOpen: () => api<T.ReviewView>("/api/review/open", { body: {} }),
+  reviewRun: (path?: string) => api<T.ReviewView>("/api/review/run", { body: path ? { path } : {} }),
+  review: (id?: string) => api<T.ReviewView>(`/api/review${id ? `?id=${enc(id)}` : ""}`),
+  answerLocation: (path: string, answer: T.LocationAnswer) => api<T.Memory>("/api/locations/answer", { body: { path, answer } }),
   jobs: () => api<T.Job[]>("/api/jobs"),
   cancelJob: (id: string) => api<{ ok: true }>(`/api/jobs/${enc(id)}/cancel`, { body: {} }),
 
