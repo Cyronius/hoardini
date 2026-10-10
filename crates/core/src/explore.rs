@@ -319,6 +319,20 @@ fn chain(conn: &Connection, node_id: i64) -> Result<Vec<(i64, String)>> {
     Ok(out)
 }
 
+fn prefixes(path: &str) -> Vec<String> {
+    if path.starts_with(r"\\") {
+        return vec![path.to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    for comp in path.split('\\').filter(|c| !c.is_empty()) {
+        out.push(match out.last() {
+            Some(p) => index::join_path(p, comp),
+            None => normalize_path(comp),
+        });
+    }
+    out
+}
+
 fn name_of(path: &str) -> String {
     match path.trim_end_matches('\\').rsplit_once('\\') {
         Some((_, n)) if !n.is_empty() => n.to_string(),
@@ -379,8 +393,9 @@ pub fn map(
         label: None,
         verdict: None,
     };
-    for (_, p) in &line {
-        (ctx, tag) = tagger.step(&ctx, p);
+    // Knowledge above a watched folder still applies, so the walk starts at the drive, not the index root.
+    for p in prefixes(&root.path) {
+        (ctx, tag) = tagger.step(&ctx, &p);
     }
     let ancestors: Vec<Crumb> = line[..line.len().saturating_sub(1)]
         .iter()

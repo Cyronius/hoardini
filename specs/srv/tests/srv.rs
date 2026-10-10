@@ -1865,6 +1865,25 @@ async fn index_map_tags_each_block_with_what_hoardini_knows() {
         tag(kid(&root["tree"], "Windows")),
         json!({"state": "system", "label": "the Windows folder", "verdict": "keep"})
     );
+
+    let inner = hoardini_core::index::FakeFs::new(r"C:\x\node_modules\lib");
+    inner.file_alloc(r"C:\x\node_modules\lib\a.bin", 2 * MIB, 2 * MIB);
+    let out = hoardini_core::index::refresh(
+        &conn,
+        &inner,
+        inner.root(),
+        &hoardini_core::index::RefreshOptions::default(),
+    )
+    .unwrap();
+    assert!(out.completed);
+    let (_, watched) = f
+        .call(
+            "GET",
+            "/api/index/map?path=C%3A%5Cx%5Cnode_modules%5Clib&w=100&h=100",
+            None,
+        )
+        .await;
+    assert_eq!(tag(&watched["tree"]), deps, "{watched}");
     let _ = f.h.shutdown.send(());
 }
 
@@ -1935,6 +1954,24 @@ async fn index_types_lists_extensions_with_what_each_one_is() {
             {"ext": "jpg", "bytes": 2 * MIB, "files": 1, "category": "photos"},
             {"ext": null, "bytes": 12288, "files": 2, "small": true},
         ])
+    );
+    let (_, drive) = f.call("GET", "/api/index/types?path=C%3A%5C", None).await;
+    let summary: Vec<(Value, Value)> = drive
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| (t["ext"].clone(), t["bytes"].clone()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (json!("gguf"), json!(400 * MIB)),
+            (json!("iso"), json!(200 * MIB)),
+            (json!("bin"), json!(82 * MIB)),
+            (json!("dll"), json!(50 * MIB)),
+            (json!("jpg"), json!(2 * MIB)),
+            (Value::Null, json!(12288)),
+        ]
     );
     let (st, _) = f
         .call("GET", "/api/index/types?path=C%3A%5Cdata%5Cbig.iso", None)
