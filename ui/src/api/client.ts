@@ -83,6 +83,7 @@ export const routes = {
   approve: (id: string, item_ids: number[]) =>
     api<T.ApproveResponse>(`/api/proposals/${enc(id)}/approve`, { body: { item_ids } }),
   decline: (id: string) => api<T.DeclineResponse>(`/api/proposals/${enc(id)}/decline`, { body: {} }),
+  undoLearned: (id: string, memoryId: number) => del(`/api/proposals/${enc(id)}/learned/${memoryId}`),
   jobs: () => api<T.Job[]>("/api/jobs"),
   cancelJob: (id: string) => api<{ ok: true }>(`/api/jobs/${enc(id)}/cancel`, { body: {} }),
 
@@ -91,6 +92,7 @@ export const routes = {
   updateMemory: (id: number, m: T.MemoryInput) => put<T.Memory>(`/api/memory/${id}`, m),
   deleteMemory: (id: number) => del(`/api/memory/${id}`),
   restoreMemory: (id: number) => api<T.Memory>(`/api/memory/${id}/restore`, { body: {} }),
+  confirmMemory: (id: number) => api<T.Memory>(`/api/memory/${id}/confirm`, { body: {} }),
   memoryLimit: () => api<{ limit: number }>("/api/memory/limit"),
   setMemoryLimit: (limit: number) => put<{ limit: number }>("/api/memory/limit", { limit }),
 

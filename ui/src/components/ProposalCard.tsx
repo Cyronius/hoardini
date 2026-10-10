@@ -4,6 +4,7 @@ import type { Job, Proposal, ProposalItem, Verdict } from "../api/types";
 import { settle } from "../agent/decisions";
 import { fileName, humanBytes } from "../format";
 import { useStore } from "../store";
+import { LearnedChip } from "./LearnedChip";
 
 const VERDICT_LABEL: Record<Verdict, string> = {
   safe: "safe",
@@ -281,8 +282,19 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
   const permanentDelete = proposal.kind === "delete" || dedupe?.mode === "delete";
 
   const marks = { "data-proposal-id": proposalId, "data-status": proposal.status, "data-follow-up": proposal.follow_up_id ?? undefined };
+  const learned = ended
+    ? (proposal.learned ?? []).map((l) => (
+        <LearnedChip
+          key={l.memory_id}
+          text={l.text}
+          onUndo={() => routes.undoLearned(proposalId, l.memory_id)}
+          onPin={(pinned) => routes.updateMemory(l.memory_id, { pinned })}
+        />
+      ))
+    : null;
   if (ended && !open) {
     return (
+      <>
       <button
         type="button"
         {...marks}
@@ -293,10 +305,13 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
         <span className="min-w-0 flex-1 truncate">{collapsedLine(proposal, job)}</span>
         <span className="shrink-0 text-faint">details ▸</span>
       </button>
+      {learned}
+      </>
     );
   }
 
   return (
+    <>
     <div className="fade-up my-2 rounded-2xl border border-brass/40 bg-ink-850 p-3 shadow-sm" {...marks}>
       <div className="flex items-baseline gap-2">
         <span className="font-[family-name:var(--font-display)] text-[length:var(--fs-md)] font-bold">
@@ -367,5 +382,7 @@ function ProposalBody({ proposalId }: { proposalId: string }) {
       {error && <div className="mt-2 text-[length:var(--fs-sm)] text-err">{error}</div>}
       </div>
     </div>
+    {learned}
+    </>
   );
 }

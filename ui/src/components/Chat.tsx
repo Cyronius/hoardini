@@ -16,6 +16,7 @@ import { FollowUps, followUps } from "./FollowUps";
 import { Greeting } from "./Greeting";
 import { EraserIcon, SendIcon, SpinnerIcon, StopIcon } from "./icons";
 import { IconButton } from "./IconButton";
+import { LearnedChip } from "./LearnedChip";
 import { Markdown } from "./Markdown";
 import { ToolCard, isCardData } from "./ToolCards";
 import { ToolChip } from "./ToolChip";
@@ -237,6 +238,16 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
           : name && isCardData(data)
             ? <ToolCard name={name} args={args} result={result} data={data} onAsk={ask} />
             : name && <ToolChip id={tc.id} name={name} args={args} result={result} />}
+        {data?.kind === "learned" &&
+          data.items.map((l) => (
+            <LearnedChip
+              key={l.memory_id}
+              text={l.text}
+              url={l.url}
+              onUndo={() => routes.deleteMemory(l.memory_id)}
+              onConfirm={() => routes.confirmMemory(l.memory_id)}
+            />
+          ))}
       </div>
     );
   };
