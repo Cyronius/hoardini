@@ -153,15 +153,24 @@ function Empty({ title, used, free }: { title: string; used: number | null; free
 
 const isPending = (p: Proposal | undefined) => p?.status === "pending" || p?.status === "approved" || p?.status === "running";
 
-function DriveReview() {
-  const { main, status, error, building, carry, runNow } = useReview();
+function useShownCards(): ReviewCardRef[] {
+  const main = useReview((s) => s.main);
+  const carry = useReview((s) => s.carry);
   const proposals = useStore((s) => s.proposals);
-  const shown = useMemo(() => {
+  return useMemo(() => {
     if (!main) return [];
     // A replaced card stays only while it shows something: the user's ticks, a job, or the replaced line.
     const kept = carry.filter((c) => proposals[c.proposal_id] && (proposals[c.proposal_id]!.status !== "pending" || proposals[c.proposal_id]!.touched));
     return [...kept, ...main.cards];
   }, [main, carry, proposals]);
+}
+
+export const useDriveReady = () => useReady(useShownCards());
+
+function DriveReview() {
+  const { main, status, error, building, runNow } = useReview();
+  const proposals = useStore((s) => s.proposals);
+  const shown = useShownCards();
   const ready = useReady(shown);
 
   if (status === "no-index") return <Hello />;

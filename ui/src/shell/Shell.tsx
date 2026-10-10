@@ -6,8 +6,7 @@ import { selectedVolume } from "../components/mascot/girth";
 import { ExploreLinkContext } from "../explore/context";
 import { ExploreView } from "../explore/ExploreView";
 import { humanBytes } from "../format";
-import { chainOf, readyBytes } from "../review/order";
-import { ReviewView } from "../review/ReviewView";
+import { ReviewView, useDriveReady } from "../review/ReviewView";
 import { useReview } from "../review/state";
 import { useStore, type HomeTab } from "../store";
 import { CHAT_DEFAULT_PX, CHAT_MIN_PX, chatWidthFor, isWide } from "./layout";
@@ -24,11 +23,6 @@ function useWindowWidth(): number {
   return w;
 }
 
-function useReadyOnScreen(): number {
-  const cards = useReview((s) => s.main?.cards);
-  return useStore((s) => readyBytes((cards ?? []).flatMap((c) => chainOf(c.proposal_id, s.proposals))));
-}
-
 const tabCls = (on: boolean) =>
   `relative -mb-px inline-flex items-center gap-1.5 border-b-2 px-3 pb-2 pt-1.5 text-[length:var(--fs-base)] font-bold transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-brass ${
     on ? "border-brass text-paper" : "border-transparent text-muted hover:text-paper"
@@ -40,7 +34,7 @@ function Tabs({ wide }: { wide: boolean }) {
   const busy = useStore((s) => s.chatBusy);
   const setHome = useStore((s) => s.setHome);
   const showChat = useStore((s) => s.showChat);
-  const ready = useReadyOnScreen();
+  const ready = useDriveReady();
   const front = !wide && chatFront ? "chat" : home;
   const tab = (id: HomeTab | "chat", label: string, extra?: ReactNode) => (
     <button
