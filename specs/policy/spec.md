@@ -99,8 +99,9 @@ it shall not execute. The proposal ends `partial` when some approved items ran a
 check is the slow one, so it runs first; the deny list and the kind, size, mtime, file-ID, and link comparisons run
 after it, immediately before the item executes, so a path swapped for a junction during the slow check is caught.
 An item of a review card (REVIEW-BUILD) inside a catalog `contents` location with a minimum age (`%TEMP%`,
-`Windows\Temp`: a part, REVIEW-UNITS, which was old when proposed; a chat card's item is the user's own request and is not walked) is walked again, links not followed and at most 250,000 entries, because a file new deep inside changes no time the
-proposal compared: when the path or anything in it was written or created within that age the item is skipped with
+`Windows\Temp`: a part, REVIEW-UNITS, which was old when proposed; a chat card's item is the user's own request and is
+not walked) is walked again, links not followed and at most 250,000 entries, because a file new deep inside changes no
+time the proposal compared: when the path or anything in it was written or created within that age the item is skipped with
 `Changed since the proposal: something in it was written or created in the last <hours> hours`, and when the walk cannot
 finish (too many entries, or a folder it cannot list) with `Too many files inside, or one unreadable, to confirm nothing
 in it is new`. Last, a delete whose stored cap is `redownload` on a path no catalog entry knows (a cap a copy relaxed,
