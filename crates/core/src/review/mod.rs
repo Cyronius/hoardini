@@ -742,8 +742,7 @@ pub fn get(conn: &Connection, id: &str) -> anyhow::Result<Option<Review>> {
     let Some((volume_id, volume, scope_path, scan_id, created_ms, areas_json)) = head else {
         return Ok(None);
     };
-    // A touched card of an earlier review stays live, so it is listed here (in a volume review, the drive's folder
-    // reviews' too); so is a live follow-up of a finished one.
+    // Touched cards of earlier reviews (a volume review's include folder reviews') stay live, so they are listed here.
     let mut st = conn.prepare(
         "SELECT p.id, p.card, p.review_id != ?1 FROM proposal p WHERE p.review_id = ?1 AND p.parent_id IS NULL \
          UNION ALL \

@@ -665,8 +665,7 @@ fn hidden_call(c: &ToolCallMsg) -> bool {
     c.function.name.starts_with("propose_") && proposal_id_of(c).is_none()
 }
 
-// A chip confirmed after its run was stored would otherwise offer Confirm again on reload; one whose row is gone
-// (ids are reused) is dropped, so its Undo can never reach another row.
+// Read again on reload: a confirmed chip offers no Confirm, and one whose row is gone (ids are reused) is dropped.
 fn learned_now(conn: &Connection, profile: Option<&str>, mut v: Value) -> Value {
     if v.get("kind").and_then(Value::as_str) != Some("learned") {
         return v;

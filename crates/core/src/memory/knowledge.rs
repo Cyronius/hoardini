@@ -175,8 +175,7 @@ pub fn upsert_with(
     Ok((m, true))
 }
 
-// The user vouches for what a row says the folder or type is; a verdict still needs the catalog, a job or the user's
-// answer, so one a classifier or a job gave stays (a user row is never reassessed) and any other goes.
+// A user row is never reassessed, so a classifier's or a job's verdict stays; a web or model verdict never rises.
 pub fn confirm(
     conn: &Connection,
     id: i64,

@@ -655,7 +655,6 @@ fn find_model_dir(cx: &Cx<'_>, hub: &HubCheck, s: &Subject) -> anyhow::Result<Fi
     }))
 }
 
-// The smaller files a folder answer waits on the hash phase for.
 pub(crate) fn hash_files(s: &Subject, r: &CopyResult) -> Vec<String> {
     r.detail["hash_files"]
         .as_array()

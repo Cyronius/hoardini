@@ -191,7 +191,6 @@ impl Walker<'_> {
         Ok(memory::protect_covering_quiet(self.conn, path, &self.env.profile)?.is_some())
     }
 
-    // What a protect note, a Disposable answer or a keep row makes of a catalog unit's child.
     fn guarded(&self, node: &NodeInfo) -> anyhow::Result<Option<Why>> {
         if self.protected(&node.path)? {
             return Ok(Some(Why::Kept));

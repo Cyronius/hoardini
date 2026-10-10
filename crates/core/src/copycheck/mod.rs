@@ -620,7 +620,6 @@ pub struct Outcome {
     pub results: Vec<CopyResult>,
     pub waiting: Vec<Service>,
     pub needs_hash: bool,
-    // Files inside a folder subject that its answer waits on the hash phase for.
     pub hash_files: Vec<String>,
 }
 

@@ -77,7 +77,6 @@ export type ProposalItem = {
   memory_note: string | null;
   op?: SystemOpView;
   copy_note?: string | null;
-  // A compress item: what its estimate says compressing saves.
   saves?: number | null;
 };
 export type RarelyUsedApp = {
