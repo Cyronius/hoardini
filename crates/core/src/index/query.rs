@@ -230,10 +230,19 @@ pub fn child_rows(conn: &Connection, node_id: i64, limit: usize) -> Result<Ranke
         more_count: 0,
         more_bytes: 0,
     };
-    for n in children(conn, node_id)? {
+    // A second link to a file counted elsewhere adds nothing here, so the sizes add up to the folder's (as in explore).
+    let mut kids: Vec<(u64, u64, NodeInfo)> = children(conn, node_id)?
+        .into_iter()
+        .map(|n| match n.kind == NodeKind::File && n.hardlink_dup {
+            true => (0, 0, n),
+            false => (n.size, n.files, n),
+        })
+        .collect();
+    kids.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.name.cmp(&b.2.name)));
+    for (size, files, n) in kids {
         if out.items.len() >= limit {
             out.more_count += 1;
-            out.more_bytes += n.size;
+            out.more_bytes += size;
             continue;
         }
         let has_children = n.kind == NodeKind::Dir
@@ -242,8 +251,8 @@ pub fn child_rows(conn: &Connection, node_id: i64, limit: usize) -> Result<Ranke
             path: n.path,
             name: n.name,
             kind: n.kind,
-            size: n.size,
-            files: n.files,
+            size,
+            files,
             mtime_ms: n.mtime_ms,
             denied: n.denied,
             has_children,

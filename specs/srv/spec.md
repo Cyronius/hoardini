@@ -141,12 +141,13 @@ inclusive; with neither, every point is returned. With no indexed volume the res
 **Applies to:** hoardini-server
 **Verification:** test
 
-`GET /api/index/children?path=<folder>&limit=<n>` (default 50, at most 1000) shall return `{path, size, files, children, small, more}` for an indexed folder. `children` are its direct children from the index, biggest first (ties by name), each `{path, name, kind ("dir" | "file" | "link"), size, files, mtime_ms, denied, has_children}`; `has_children` is true for a folder with any child row or folded small files. `small` is `{count, bytes}` of the files folded into this folder by the row threshold (INDEX-SMALL-FOLD), and `more` is `{count, bytes}` of the children past the limit. `path` may start with `~`, matches the index without regard to case, and every returned path shows the profile as `~`. A missing or non-absolute path is 400, a file is 400, and a path not in the index is 404.
+`GET /api/index/children?path=<folder>&limit=<n>` (default 50, at most 1000) shall return `{path, size, files, children, small, more}` for an indexed folder. `children` are its direct children from the index, biggest first (ties by name), each `{path, name, kind ("dir" | "file" | "link"), size, files, mtime_ms, denied, has_children}`; `has_children` is true for a folder with any child row or folded small files. A file that is a hard-link duplicate (INDEX-HARDLINK-ONCE) lists, and ranks, with `size` and `files` 0, so the rows add up to the folder's size as in the treemap (SRV-INDEX-MAP). `small` is `{count, bytes}` of the files folded into this folder by the row threshold (INDEX-SMALL-FOLD), and `more` is `{count, bytes}` of the children past the limit. `path` may start with `~`, matches the index without regard to case, and every returned path shows the profile as `~`. A missing or non-absolute path is 400, a file is 400, and a path not in the index is 404.
 
 **Acceptance criteria:**
 - `C:\data` holding `models\` (300 + 100 MiB), `big.iso` (200 MiB), `cache\` (50 MiB), an empty folder, and two small files (4 KiB and 8 KiB allocated): `limit=2` returns `models` (`dir`, 400 MiB, 2 files, `has_children`) then `big.iso` (`file`, 1 file, no children), `small` `{count: 2, bytes: 12288}`, `more` `{count: 2, bytes: 50 MiB}`, `size` 650 MiB + 12288 and `files` 6.
 - `path=c:\DATA` with no limit lists `models`, `big.iso`, `cache`, `empty` in that order; `empty` has no children and `more` is zero.
 - `path=C:\data\big.iso` is 400, `C:\nope` is 404, and no `path` is 400.
+- With `C:\a\copy.gguf` owning a 200 MiB file that `C:\b\model.gguf` hard-links, `C:\b` (with a 5 MiB `other.bin`) lists `other.bin` (5 MiB) then `model.gguf` (0 bytes, 0 files), summing to the folder's 5 MiB; with `limit=1`, `more` is `{count: 1, bytes: 0}` (`index::child_rows`, `specs/index/tests/index.rs`).
 
 Test: `specs/srv/tests/srv.rs`.
 
