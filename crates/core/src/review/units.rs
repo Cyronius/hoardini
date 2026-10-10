@@ -191,6 +191,22 @@ impl Walker<'_> {
         Ok(memory::protect_covering_quiet(self.conn, path, &self.env.profile)?.is_some())
     }
 
+    // What a protect note, a Disposable answer or a keep row makes of a catalog unit's child.
+    fn guarded(&self, node: &NodeInfo) -> anyhow::Result<Option<Why>> {
+        if self.protected(&node.path)? {
+            return Ok(Some(Why::Kept));
+        }
+        if node.kind == NodeKind::Dir
+            && self
+                .disposable
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(&node.path))
+        {
+            return Ok(Some(Why::Disposable));
+        }
+        Ok(self.kept(&node.path).then_some(Why::Kept))
+    }
+
     fn kept(&self, path: &str) -> bool {
         self.kept_locations
             .iter()
@@ -335,17 +351,36 @@ impl Walker<'_> {
                     level = next;
                 }
                 for c in level.iter().filter(|c| c.kind != NodeKind::Link) {
-                    self.push(
-                        c,
-                        UnitKind::Children,
-                        Why::Catalog,
-                        Some(e),
-                        Some(&node.path),
-                    );
+                    match self.guarded(c)? {
+                        Some(why) => {
+                            let own = self.env.catalog().lookup_exact(&c.path);
+                            self.push(c, UnitKind::Whole, why, own, Some(&node.path));
+                        }
+                        None => self.push(
+                            c,
+                            UnitKind::Children,
+                            Why::Catalog,
+                            Some(e),
+                            Some(&node.path),
+                        ),
+                    }
                 }
             }
             UnitKind::Contents => {
-                let parts = self.contents(node, e.min_age_hours)?;
+                let mut parts = self.contents(node, e.min_age_hours)?;
+                // A part the user protects or keeps is a kept unit of its own, never an item of the folder's.
+                let mut held = Vec::new();
+                for p in &parts {
+                    if self.protected(&p.path)? || self.kept(&p.path) {
+                        held.push(p.path.clone());
+                    }
+                }
+                parts.retain(|p| !held.contains(&p.path));
+                for h in &held {
+                    if let Some(n) = index::node_by_path(self.conn, h)? {
+                        self.push(&n, UnitKind::Whole, Why::Kept, None, Some(&node.path));
+                    }
+                }
                 self.out.push(Unit {
                     path: node.path.clone(),
                     kind: UnitKind::Contents,

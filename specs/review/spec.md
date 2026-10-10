@@ -23,7 +23,9 @@ the `parts` past the entry's minimum age. At each folder, in order:
    `unit_depth = 2`); `contents` makes one unit of the folder whose `parts` are its children, and with `min_age_hours`
    only the children not modified for that long (a child counts as modified when it or any indexed folder or file inside
    it was); a modified child folder of 1 GiB or more is split the same way, down to three levels, so the old scratch
-   folders beside a live one still count. A file a `contents` entry names is a `self` unit.
+   folders beside a live one still count. A file a `contents` entry names is a `self` unit. Rule 1 applies to each
+   `children` unit and each `contents` part too: a child or part a protect note or a `keep` row covers is a `kept`
+   unit of its own (and no part), and a child folder answered Disposable is a `disposable` unit.
 3. A Windows system area of the deny list (POLICY-DENY: the Windows folder, Program Files, `ProgramData\Microsoft`,
    `System Volume Information`, `$Recycle.Bin`, paging files, Hoardini's data) or a catalog entry with verdict `keep`
    makes it one `kept` unit. The walk then visits the catalog locations named literally inside it (no wildcards) whose
@@ -51,8 +53,10 @@ the `parts` past the entry's minimum age. At each folder, in order:
 - `%SystemRoot%` is one `kept` unit, and `%SystemRoot%\Temp` inside it is still a `contents` unit (`temp-system`).
 - After the user answers Keep for `C:\code\proj`, a walk of `C:\code` gives that folder as one `kept` unit and not its `target`.
 - After the user answers Disposable for `old\junk`, a drive walk gives that folder as one `disposable` unit.
+- With a protect note on `%TEMP%\old-a`, `old-a` is a `kept` unit of its own, the `%TEMP%` unit's parts hold only `old-b`, and the review's `temp` card holds only `old-b`.
 
-Tests: `specs/review/tests/review.rs`; the split and the Disposable unit in `specs/review/tests/build.rs`.
+Tests: `specs/review/tests/review.rs`; the split, the Disposable unit and the protected part in
+`specs/review/tests/build.rs`.
 
 ### REVIEW-BUILD: The review proposes cards from its units
 **Applies to:** hoardini
@@ -93,7 +97,9 @@ device") and with local data; otherwise it walks on, down to three levels, throu
 
 **Compress in place** takes, for a unit that is not admin or `disposable`, each `compress::candidates` folder of the
 scope (ACT-COMPRESS-CANDIDATES) that is, holds, or lies inside the unit, is proposable from its cached estimate (1 GiB
-and 20% saved), and holds no `catalog` or `disposable` unit (those go to delete cards). The reason reads `Windows
+and 20% saved), and holds no `catalog` or `disposable` unit (those go to delete cards); once every unit has its card, a
+compress folder that holds or lies inside another card's item (a `redownload` file, say) is dropped, since it would be
+compressed and then deleted or moved. The reason reads `Windows
 compression would save about <saved> (<pct>% of it); the files stay usable.`
 
 **Cleanups only Windows can do** holds operations, not paths: first `leftovers` (SystemOp `Leftovers`,
@@ -116,7 +122,8 @@ smaller items (<size>) are not listed.`
 
 **Exclusions.** A unit or item that is, contains, or lies inside an item of another pending, approved or running proposal
 (a chat card, or a card of a review that stays) or of a proposal declined in the last 30 days is left out, of cards and
-of Large areas.
+of Large areas; a `contents` unit is left out only when such an item is the unit or holds it, and otherwise each part is
+left out on its own, so one temp part in a chat card leaves the others in the `temp` card.
 System cleanup proposals count by operation (above), not by the paths their items name.
 
 **Thresholds.** A volume review makes a card only when its items hold 500 MiB or more by the index (for `windows`, the
@@ -134,7 +141,8 @@ that have no `parent_id`, plus the cards earlier reviews carry into it (REVIEW-S
 - With 56 old temp parts, the `temp` card lists 50, the 40 GiB one first, and its summary ends ` 6 smaller items (375 MB) are not listed.`
 - `work\setup\tool-2.1.exe` with a stored `identical` winget answer is the `redownload` card, ticked, `redownload`, reason `In winget as Contoso.Tool 2.1.`; `work\copy\image.iso` with an `identical` duplicate answer is in no card. `old\junk`, answered Disposable, is the `disposable` card (title `Folders you said can go`), ticked, reason `You said this folder can go.`. Of two `node_modules` a job row keeps, the one still at its kept size is in no card, and the one grown from 1,000 to 1,600 MiB is in the `build` card with reason `node_modules: Installed JavaScript dependencies. You cleaned this on 01-15 (28.0 GB).` and no memory note.
 - Under a fake OneDrive root `~\OneDrive`, an in-sync `Videos\2019.mp4` untouched for 400 days is the `online_only` card, ticked, `synced`, reason `Synced to OneDrive; nothing in it opened or changed for 400 days.`, although `Videos` is a kept photos-and-video location and `2026.mp4` beside it was written yesterday; `2026.mp4` and the `raw.mov` that is not in sync are in no card, and the `node_modules` under the root is in no card at all.
-- `data\corpus` (3 GiB of text, untouched) is in no card until its estimate is stored; with 1.2 GiB of 3 GiB saved it is the `compress` card, `lzx`, unticked, reason `Windows compression would save about 1.2 GB (40% of it); the files stay usable.`
+- `data\corpus` (3 GiB of text, untouched) is in no card until its estimate is stored; with 1.2 GiB of 3 GiB saved it is the `compress` card, `lzx`, unticked, reason `Windows compression would save about 1.2 GB (40% of it); the files stay usable.` With an `identical` archive answer for `part0.txt` inside it, `part0.txt` is the `redownload` card and there is no compress card.
+- With `%TEMP%\old-a` in a pending chat card, the `temp` card holds `old-b`.
 - On a fake system drive `C:\` with fixed facts (64 GiB RAM, hibernation on), a 6 GiB WinSxS, 2 GiB of old `Windows\Temp` and a 25 GiB `hiberfil.sys`, the `windows` card's operations are `leftovers`, `component_store`, `hibernation`, in that order. With a pending chat card for hibernation the next review's card holds `leftovers` and `component_store`, and the earlier untouched card is `superseded`; once that card is declined, the next review has no `windows` card and no `Temp` area. On the fake `C:\` of REVIEW-AREAS the card holds one ticked `leftovers` item of 6.5 GiB whose parts are `SoftwareDistribution\Download\abc` (3 GiB), `Temp\setup` (2 GiB) and `ProgramData\Microsoft\Windows\WER\ReportArchive` (1.5 GiB).
 
 Test: `specs/review/tests/build.rs`; the leftovers card on the fake `C:\` in `specs/review/tests/areas.rs`.
@@ -208,13 +216,19 @@ SRV-APPS JSON) whose folder lies in the review's scope, so the UI can show "Apps
 `online` is the online-checks consent's `asked` and the last pass's `copy_online_waiting` (EVID-COPY-CONSENT; the same
 number `GET /api/copy-checks/waiting` answers, SRV-COPY-CHECKS), for the consent prompt; paths show the profile as `~`. One build runs at a time (`review::Builds`): `open` starts the drive's build in the background, or, while another
 drive's build runs, queues it to start when that one ends (a later request for a third drive takes the queued place);
-`run`, the launch rebuild and the rebuild after estimates wait for a running build and then build.
+`run`, the launch rebuild and the rebuild after estimates wait for a running build and then build. The build `open`
+starts (`review::build_if_stale`) first checks that the drive's latest review still needs a rerun, so one queued behind
+an exclusive build that left a fresh review builds nothing. A review becomes visible (`latest`, `get`, the status
+stream's `review.id`) only once all its cards exist: `build` makes the cards first, then, in one immediate transaction,
+supersedes what it replaces (REVIEW-SUPERSEDE) and inserts the review row; cards of a build that fails, or that a
+crash left with no review row, are dropped.
 `GET /api/status` and its stream carry `review: {id, created_ms}` for the selected drive's latest volume review (null
 when there is none) and `review_building`; the end of every build bumps the stream, so the UI sees the new review id.
 After a build, the server estimates the scope's top compress candidates on a background-priority thread
-(`review::compress_estimates`, ACT-COMPRESS-CANDIDATES); when that makes a folder proposable that the review's compress
-card does not hold, and the review is still the latest of its scope and untouched, it is built again
-(`review::rebuild_if_current`).
+(`review::compress_estimates`, ACT-COMPRESS-CANDIDATES); when that makes a folder proposable that was not proposable
+before the estimates, that the review's compress card does not hold, and that the review would not leave out (an item
+of another live or recently declined proposal holds or lies inside it, or it touches a sync root), and the review is
+still the latest of its scope and untouched, it is built again (`review::rebuild_if_current`).
 
 **Acceptance criteria:**
 - Before any index, `POST /api/review/open` is 404. On a fake `C:\` (1,200 GiB used, 800 GiB free) the first open answers `review: null`, `building: true`, the header root `C:\` and no cards; once the status says `review_building: false`, `GET /api/review` gives a review of `C:\` with no `scope_path`, header `{root: "C:\", used_bytes: 1200 GiB, free_bytes: 800 GiB, ready_bytes: 0}`, no cards, no proposals, `building: false`, `apps: []`, `online: {asked: false, waiting: 0}`, and the 161 GiB `C:\code\covenant-agent` area (`unknown`, label `unknown`, no verdict, no hint, no actions); a second open (`building: false`), `GET /api/review` and the status's `review.id` give the same id. With consent asked and `copy_online_waiting` 3, `online` is `{asked: true, waiting: 3}`.
@@ -223,7 +237,9 @@ card does not hold, and the review is still the latest of its scope and untouche
 - With a fake app source, a review of `D:\Apps` carries the same `apps` as `GET /api/apps/rarely-used`, and a review of `D:\Apps\Busy` carries none.
 - With a fake clock and a builder held at a gate: the first `Builds::open` answers building with no review and starts one build; a second open and a `start` for the same drive meanwhile start nothing; once the gate opens and the build is announced, open answers that review; 5 hours later the same one; 6 hours and 1 ms later the old one with building, then a new review built at that time. A build that fails ends and is announced too, and `exclusive` runs at the clock's time. A build for drive `b` asked for while `a`'s is held at the gate is queued (asking again changes nothing) and runs right after `a`'s, with `building` true until both are announced.
 - In core, `review::open` (the same rule, building on the caller's thread) returns the same review 5 hours later and a new one after 6 hours and 1 ms.
-- A volume review of 3 GiB of zeros in `data\corpus` has no compress card; `compress_estimates` then reports a newly proposable folder, `rebuild_if_current` builds a review with the card, a second `compress_estimates` reports nothing, and `rebuild_if_current` builds nothing for a review that a newer one replaced or that the user touched.
+- A volume review of 3 GiB of zeros in `data\corpus` has no compress card; `compress_estimates` then reports a newly proposable folder, `rebuild_if_current` builds a review with the card, a second `compress_estimates` reports nothing, and `rebuild_if_current` builds nothing for a review that a newer one replaced or that the user touched. With `data\corpus` proposable before and held by a pending chat card, `compress_estimates` reports nothing.
+- An `open` while an exclusive build is held at a gate queues `build_if_stale`; once the exclusive build has made a review, the queued one builds nothing (one review row) and the next open answers `Ready`.
+- While a second volume review builds (40 temp parts and two build folders), a thread polling `latest` sees either the first review or the second with all its cards, never the second beside the first's cards still pending.
 
 Tests: `specs/srv/tests/srv.rs` (routes), `specs/review/tests/build.rs` (`review::open`, `Builds`, estimates).
 
@@ -232,10 +248,14 @@ Tests: `specs/srv/tests/srv.rs` (routes), `specs/review/tests/build.rs` (`review
 **Verification:** test
 
 A proposal is `touched` once the user changes a tick (SRV-PROPOSAL-SELECTION), approves it, or declines it. A new volume
-review shall set every pending, untouched card of the drive's earlier volume reviews to status `superseded` and may
-propose their items again (a folder review does the same for earlier reviews of the same folder only); touched cards stay
-pending, and their items stay out of the new review. Those touched cards, and the touched follow-up of a card that is no
-longer live, while pending, approved or running, are listed in every later review of the same scope with `carried: true`
+review shall set every pending, untouched card of the drive's earlier reviews, volume and folder reviews alike, to status
+`superseded` and may propose their items again (a folder review does the same for earlier reviews of the same folder
+only); touched cards stay pending, and their items stay out of the new review. The supersede happens when the review is
+published (REVIEW-TRIGGER) and only for cards still untouched then: a card ticked, approved or declined while the review
+was built stays, and the new cards give up any item that is, holds or lies inside an item of a proposal live or
+declined at that moment (a card left empty is dropped; a `windows` card sharing an operation is dropped). Those touched
+cards, and the touched follow-up of a card that is no longer live, while pending, approved or running, are listed in
+every later review of the same scope (for a volume review, also those of the drive's folder reviews) with `carried: true`
 (REVIEW-BUILD `review::get`; its `proposals` and `ready_bytes` count them), so the review always shows every live card;
 they do not make the new review touched. When the refresh the server starts at launch finishes, and the
 selected drive's latest volume review was built from an older refresh and none of its cards was touched or decided, the
@@ -247,6 +267,8 @@ review is rebuilt (`review::rebuild_if_untouched`). A follow-up of a review card
 - `review::rebuild_if_untouched` returns nothing while no refresh finished since the review; after one it returns a new review and the old `temp` card is `superseded`; after ticking that new card's items off and one more refresh it returns nothing, and the card stays `pending`.
 - Approving one of a `temp` card's two items sets `touched`; the follow-up holds the other item unticked, with the review's `review_id`, card `temp` and conversation `review`, and the review still lists one card.
 - With a review built before one more completed refresh, starting the server with its launch refresh (a fake indexer) leads `GET /api/review` to a new review id.
+- Declining the first review's `temp` card while the second is being built (a hook in the fake lister) leaves the card `declined` and the second review with no `temp` card; ticking it instead leaves one live card holding the temp folder (the carried one) and `ready_bytes` 5 GiB.
+- An untouched `build` card of a review of `code` is `superseded` by the next volume review, which proposes `target` again; a touched `temp` card of a review of `~` stays pending and is listed in that volume review, carried, with no second `temp` card.
 
 Tests: `specs/review/tests/build.rs`; the launch rebuild in `specs/srv/tests/srv.rs`.
 

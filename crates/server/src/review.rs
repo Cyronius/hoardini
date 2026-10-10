@@ -166,8 +166,9 @@ fn after_build(s: &AppState, r: &Review) {
 }
 
 fn build_volume(s: &AppState, volume_id: i64, now: i64) -> anyhow::Result<()> {
-    let r = review::build(&s.db, &env(s), &WinLister, Scope::Volume(volume_id), now)?;
-    after_build(s, &r);
+    if let Some(r) = review::build_if_stale(&s.db, &env(s), &WinLister, volume_id, now)? {
+        after_build(s, &r);
+    }
     Ok(())
 }
 
