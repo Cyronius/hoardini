@@ -175,7 +175,8 @@ pub fn upsert_with(
     Ok((m, true))
 }
 
-// The user vouches for what a row says the folder or type is; a verdict still needs the catalog, a job or the user's answer.
+// The user vouches for what a row says the folder or type is; a verdict still needs the catalog, a job or the user's
+// answer, so one a classifier or a job gave stays (a user row is never reassessed) and any other goes.
 pub fn confirm(
     conn: &Connection,
     id: i64,
@@ -188,10 +189,15 @@ pub fn confirm(
     let Some(detail) = m.detail else {
         anyhow::bail!("memory {id} is a note; only location and file-type rows can be confirmed");
     };
-    let detail = Detail {
-        verdict: None,
-        actions: Vec::new(),
-        ..detail
+    let trusted = is_classifier(&m.source) || m.source == "job" || m.source.starts_with("job:");
+    let detail = if trusted {
+        detail
+    } else {
+        Detail {
+            verdict: None,
+            actions: Vec::new(),
+            ..detail
+        }
     };
     let k = Knowledge {
         scope: m.scope,

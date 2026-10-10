@@ -249,13 +249,16 @@ Proposal JSON (`GET /api/proposals/{id}` and the `proposals` map of `GET /api/th
 pending, approved, running and declined proposals and for dedupe. It is in place when the job's terminal frame is
 streamed. `DELETE /api/proposals/{id}/learned/{memory_id}` undoes that job's entries on that row (`learn::undo`) and
 answers `{ok: true}`, or 404 when the row holds nothing of that job. `POST /api/memory/{id}/confirm` re-saves a
-location or file-type row as `user`-sourced and pinned, keeping its text and identity and dropping any verdict
-(`knowledge::confirm`), and returns the row; a note answers 400 and an unknown id 404.
+location or file-type row as `user`-sourced and pinned, keeping its text and identity (`knowledge::confirm`); a verdict
+and actions a classifier (`deny`, `catalog`, `mix`, `index`) or a job gave stay, since a user row is never reassessed
+and dropping them would lift a kept folder's protection for good, and any other row's verdict is dropped (a web row has
+none). It returns the row; a note answers 400 and an unknown id 404.
 
 **Acceptance criteria:**
 - A pending two-file delete has `learned` `[]`. With one file approved, `learned` holds one entry by the time the job's terminal frame arrives, reading `go.bin in ~\...\work — cleaned 8.0 KB on <MM-DD>; 1 item you left unticked is kept` with `confirmed: false`, and `GET /api/thread` shows the same. After `POST /api/memory/{memory_id}/confirm` the proposal's entry has `confirmed: true`.
 - `DELETE` of that entry answers `{ok: true}`, the proposal's `learned` becomes `[]`, and a second `DELETE` answers 404.
 - Confirming a `web:` row for `q4nx` returns it with source `user`, `pinned` true, the same text and `detail.app`; confirming a note answers 400, and id 999999 answers 404.
+- Confirming the classified `~\Pictures` row (verdict `keep`, from the content mix) keeps `keep` and the `archive` action, and a photo inside is still blocked from deletes after a sweep 200 days later (`specs/mem/tests/knowledge.rs`).
 
 ### SRV-PROPOSAL-SELECTION: The server keeps a pending card's ticks
 **Applies to:** hoardini-server

@@ -68,6 +68,36 @@ fn detail(m: &Memory) -> &Detail {
     m.detail.as_ref().unwrap()
 }
 
+// Traces: SRV-LEARNED, MEM-LOCATION
+#[test]
+fn confirming_a_classified_row_keeps_its_keep_verdict() {
+    use hoardini_core::memory::knowledge::confirm;
+    use hoardini_core::memory::location::keep_block;
+    let d = Drive::new();
+    d.fs.file(r"C:\Users\tester\Pictures\2019\a.jpg", 30 * GIB);
+    d.fs.file(r"C:\Users\tester\Pictures\2018\b.jpg", 20 * GIB);
+    d.sweep(T0);
+    let row = d.row(r"C:\Users\tester\Pictures").expect("a photos row");
+    assert_eq!(detail(&row).verdict, Some(Verdict::Keep));
+    let photo = r"C:\Users\tester\Pictures\2019\a.jpg";
+    assert!(
+        keep_block(&d.c(), &d.env, photo, Action::Delete)
+            .unwrap()
+            .is_some()
+    );
+    let m = confirm(&d.c(), row.id, T0, P).unwrap().unwrap();
+    assert_eq!(m.source, "user");
+    assert_eq!(detail(&m).verdict, Some(Verdict::Keep));
+    assert!(detail(&m).actions.contains(&Action::Archive));
+    d.sweep(T0 + 200 * DAY);
+    assert!(
+        keep_block(&d.c(), &d.env, photo, Action::Delete)
+            .unwrap()
+            .is_some(),
+        "a confirmed photos folder stays protected"
+    );
+}
+
 // Traces: MEM-LOCATION
 #[test]
 fn large_folders_get_one_classified_row_each() {
