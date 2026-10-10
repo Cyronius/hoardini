@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { routes } from "../api/client";
-import type { Job, Proposal, ProposalItem, Verdict } from "../api/types";
+import type { Job, Proposal, ProposalItem, SystemOpView, Verdict } from "../api/types";
 import { settle } from "../agent/decisions";
 import { fileName, humanBytes } from "../format";
-import { useStore } from "../store";
+import { heldTicks, holdTicks, useStore } from "../store";
 import { ItemTree, RevealButton, Toggle } from "./ItemTree";
 import { LearnedChip } from "./LearnedChip";
 
@@ -96,6 +96,9 @@ function compressNoteFor(format: string | null): string | null {
   }
 }
 
+// A Re-downloadable or Online-only reason already quotes the copy note (REVIEW-BUILD).
+const saysCopy = (item: ProposalItem) => !!item.reason && item.reason.toLowerCase().includes(item.copy_note!.toLowerCase());
+
 function ItemRow({
   item,
   checked,
@@ -141,9 +144,8 @@ function ItemRow({
           </span>
           {item.reason && <span className="block text-[length:var(--fs-xs)] text-muted">{item.reason}</span>}
           {item.memory_note && <span className="block text-[length:var(--fs-xs)] text-faint">Noted: {item.memory_note}</span>}
-          {item.copy_note && <span className="block text-[length:var(--fs-xs)] text-faint">Copy: {item.copy_note}</span>}
-          {/* `reason` is the model's; the cap comes from policy code, so they are never joined into one sentence. */}
-          {/* A `redownload` or `synced` cap from a copy check is already explained by the Copy line. */}
+          {item.copy_note && !saysCopy(item) && <span className="block text-[length:var(--fs-xs)] text-faint">Copy: {item.copy_note}</span>}
+          {/* A copy check's `redownload` or `synced` cap is already explained by the Copy line. */}
           {item.cap && !blocked && (item.cap === "review" || item.cap === "keep" || !item.copy_note) && (
             <span className="block text-[length:var(--fs-xs)] text-brass">Capped to "{VERDICT_LABEL[item.cap]}" by a safety rule</span>
           )}
@@ -169,6 +171,34 @@ function ItemRow({
   );
 }
 
+function OpParts({ parts }: { parts: NonNullable<SystemOpView["parts"]> }) {
+  const [open, setOpen] = useState(false);
+  const n = parts.length;
+  return (
+    <div className="ml-6 mt-0.5">
+      <button type="button" className="inline-flex items-center gap-1 rounded-md py-0.5 pr-1.5 text-[length:var(--fs-xs)] font-bold text-brass hover:bg-brass/10" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className={`inline-block transition-transform duration-150 ${open ? "rotate-90" : ""}`} aria-hidden="true">
+          ▸
+        </span>
+        {open ? "Hide" : "Show"} the {n} {n === 1 ? "place" : "places"} it clears
+      </button>
+      {open && (
+        <ul className="mb-1 ml-1.5 border-l border-line pl-2.5" aria-label="Places it clears">
+          {parts.map((p) => (
+            <li key={p.path} className="group flex items-center gap-2 py-0.5 text-[length:var(--fs-xs)]" data-part={p.path}>
+              <span className="min-w-0 flex-1 truncate text-paper-dim [direction:rtl] text-left" title={p.path}>
+                <bdi>{p.path}</bdi>
+              </span>
+              <span className="shrink-0 tabular-nums text-muted">{humanBytes(p.size)}</span>
+              <RevealButton path={p.path} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function OpRow({ item, checked, locked, onToggle }: { item: ProposalItem; checked: boolean; locked: boolean; onToggle: () => void }) {
   const op = item.op!;
   return (
@@ -177,7 +207,7 @@ function OpRow({ item, checked, locked, onToggle }: { item: ProposalItem; checke
         <input type="checkbox" className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-brass)]" checked={checked} disabled={locked} onChange={onToggle} />
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
-            <span className="min-w-0 truncate font-semibold" title={item.path}>
+            <span className="min-w-0 font-semibold" title={item.path}>
               {op.label}
             </span>
             <span className="ml-auto shrink-0 tabular-nums text-muted">{op.estimate_known ? humanBytes(item.alloc) : "size unknown"}</span>
@@ -196,6 +226,7 @@ function OpRow({ item, checked, locked, onToggle }: { item: ProposalItem; checke
           )}
         </span>
       </label>
+      {op.parts && op.parts.length > 0 && item.status !== "done" && <OpParts parts={op.parts} />}
     </li>
   );
 }
@@ -257,17 +288,17 @@ function collapsedLine(p: Proposal, job: Job | undefined): string {
 }
 
 // `title` names a review card (REVIEW-BUILD); chat cards are headed by their kind.
-export function ProposalCard({ proposalId, title }: { proposalId: string; title?: string }) {
+export function ProposalCard({ proposalId, title, note }: { proposalId: string; title?: string; note?: string }) {
   const proposal = useStore((s) => s.proposals[proposalId]);
   return (
     <>
-      <ProposalBody proposalId={proposalId} title={title} />
+      <ProposalBody proposalId={proposalId} title={title} note={note} />
       {proposal?.follow_up_id && <ProposalCard key={proposal.follow_up_id} proposalId={proposal.follow_up_id} title={title} />}
     </>
   );
 }
 
-function ProposalBody({ proposalId, title }: { proposalId: string; title?: string }) {
+function ProposalBody({ proposalId, title, note }: { proposalId: string; title?: string; note?: string }) {
   const proposal = useStore((s) => s.proposals[proposalId]);
   const job = useStore((s) => (proposal?.job_id ? s.jobs[proposal.job_id] : undefined));
   const loadProposal = useStore((s) => s.loadProposal);
@@ -276,7 +307,7 @@ function ProposalBody({ proposalId, title }: { proposalId: string; title?: strin
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const tickSeq = useRef(0);
+  const sending = useRef(false);
 
   useEffect(() => {
     if (!proposal) void loadProposal(proposalId);
@@ -303,16 +334,28 @@ function ProposalBody({ proposalId, title }: { proposalId: string; title?: strin
     if (next.has(id)) next.delete(id);
     else next.add(id);
     if (!persisted) return setPicked(next);
-    const seq = ++tickSeq.current;
-    putProposal({ ...proposal, touched: true, items: proposal.items.map((i) => (i.status === "pending" ? { ...i, selected: next.has(i.id) } : i)) });
+    holdTicks(proposalId, next);
+    putProposal({ ...proposal, touched: true });
     setError(null);
-    routes.selectItems(proposalId, [...next]).then(
-      (p) => seq === tickSeq.current && putProposal(p),
-      (e: unknown) => {
-        setError(e instanceof Error ? e.message : String(e));
-        void loadProposal(proposalId);
-      },
-    );
+    if (!sending.current) void flushTicks();
+  };
+  // One PUT in flight per card; ticks made meanwhile go in the next one, so replies never land out of order.
+  const flushTicks = async () => {
+    sending.current = true;
+    try {
+      for (let want = heldTicks(proposalId); want; want = heldTicks(proposalId)) {
+        const p = await routes.selectItems(proposalId, [...want]);
+        if (heldTicks(proposalId) !== want) continue;
+        holdTicks(proposalId, null);
+        putProposal(p);
+      }
+    } catch (e) {
+      holdTicks(proposalId, null);
+      setError(e instanceof Error ? e.message : String(e));
+      void loadProposal(proposalId);
+    } finally {
+      sending.current = false;
+    }
   };
 
   const approve = async () => {
@@ -377,6 +420,8 @@ function ProposalBody({ proposalId, title }: { proposalId: string; title?: strin
           text={l.text}
           onUndo={() => routes.undoLearned(proposalId, l.memory_id)}
           onPin={(pinned) => routes.updateMemory(l.memory_id, { pinned })}
+          confirmed={l.confirmed}
+          pinned={l.pinned}
         />
       ))
     : null;
@@ -401,11 +446,16 @@ function ProposalBody({ proposalId, title }: { proposalId: string; title?: strin
   return (
     <>
     <div className="@container fade-up my-2 rounded-2xl border border-brass/40 bg-ink-850 p-3 shadow-sm" {...marks}>
-      <div className="flex items-baseline gap-2">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <span className="font-[family-name:var(--font-display)] text-[length:var(--fs-md)] font-bold">
           {heading} · {proposal.kind === "compress" || nothingPicked ? "up to" : system && unknownSize ? "free at least" : "free"}{" "}
           {humanBytes(nothingPicked ? choosable : pending ? total : proposal.total_alloc)}
         </span>
+        {note && (
+          <span data-note="" className="shrink-0 rounded-full border border-line bg-ink-900 px-2 py-px text-[length:var(--fs-xs)] font-semibold text-muted">
+            {note}
+          </span>
+        )}
         {ended ? (
           <button type="button" className="ml-auto text-[length:var(--fs-xs)] text-faint hover:text-paper" onClick={() => setOpen(false)}>
             hide ▴

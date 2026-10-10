@@ -17,12 +17,20 @@ const SPEEDS: { id: IndexSpeed; label: string; hint: string }[] = [
   { id: "fast", label: "Fast", hint: "Finishes sooner, uses more CPU" },
 ];
 
+// Each reply is the whole settings, so writes go one at a time and the last reply is the last write.
+let writes: Promise<unknown> = Promise.resolve();
+const putInTurn = (patch: Parameters<typeof routes.putSettings>[0]) => {
+  const run = writes.then(() => routes.putSettings(patch));
+  writes = run.catch(() => {});
+  return run;
+};
+
 export function SettingsTab() {
   const [s, setS] = useState<Settings | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const speed = useAutoSave(async (v: IndexSpeed) => {
     try {
-      setS(await routes.putSettings({ index_speed: v }));
+      setS(await putInTurn({ index_speed: v }));
     } catch (e) {
       routes.settings().then(setS).catch(() => {});
       throw e;
@@ -31,7 +39,7 @@ export function SettingsTab() {
 
   const online = useAutoSave(async (patch: { service: OnlineService; on: boolean }) => {
     try {
-      setS(await routes.putSettings({ online_checks: { asked: true, services: { [patch.service]: patch.on } } }));
+      setS(await putInTurn({ online_checks: { asked: true, services: { [patch.service]: patch.on } } }));
     } catch (e) {
       routes.settings().then(setS).catch(() => {});
       throw e;

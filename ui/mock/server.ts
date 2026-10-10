@@ -33,6 +33,7 @@ const status: T.Status = {
   active_provider: { id: "prov-lmstudio", name: "LM Studio", model: "qwen3.8-27b" },
   running_runs: 0,
   review: null,
+  review_building: false,
 };
 
 const setFill = (f: number) => {
@@ -332,7 +333,7 @@ function learnFrom(p: T.Proposal): void {
     },
   };
   memories.push(m);
-  p.learned = [{ memory_id: m.id, text }];
+  p.learned = [{ memory_id: m.id, text, confirmed: false, pinned: false }];
 }
 
 function runJob(p: T.Proposal, itemIds: number[]): T.Job {
@@ -365,6 +366,7 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
       }
       done += it.alloc;
       it.status = "done";
+      if (it.op?.op === "leftovers") it.detail = `2,412 files deleted (${(it.alloc / GB).toFixed(1)} GB); left: 3 in use, 41 newer than a day, 0 could not be deleted`;
       job.progress.done_items = n + 1;
     }
     if (plan?.outcome) {
@@ -391,13 +393,11 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
   return job;
 }
 
-// ---- Folder tree (GET /api/index/children) ----
-// Profile paths show as "~", as the real server sends them.
 type TreeNode = { path: string; name: string; kind: "dir" | "file"; size: number; files: number; mtime_ms: number; kids?: TreeNode[]; small?: { count: number; bytes: number }; parent?: TreeNode; grown?: boolean };
 const DAY = 86_400_000;
 const hash = (s: string) => [...s.toLowerCase()].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7);
 const join = (p: string, n: string) => (p.endsWith("\\") ? `${p}${n}` : `${p}\\${n}`);
-const FILE_RE = /\.(gguf|q4nx|bin|iso|safetensors|vhdx|mp4|sys|exe|zip|dll|pak)$/i;
+const FILE_RE = /\.(gguf|q4nx|bin|iso|safetensors|vhdx|mp4|sys|exe|zip|dll|pak|cab)$/i;
 
 type Spec = [name: string, gb: number, kids?: Spec[]];
 function build(parent: string, [name, gb, kids]: Spec, up?: TreeNode): TreeNode {
@@ -417,7 +417,7 @@ const smallRepos: Spec[] = Array.from({ length: 58 }, (_, i) => [`side-project-$
 // Shaped like the maintainer's C: drive: a 725 GB profile, 365 GB of it in AppData\Local.
 const tree = build("", [
   "C:",
-  1800,
+  1810,
   [
     [
       "Users",
@@ -454,7 +454,9 @@ const tree = build("", [
                     ["Packages", 122, [["CanonicalGroupLimited.Ubuntu24.04LTS_79rhkp1fndgsc", 121.5, [["LocalState", 121.2, [["ext4.vhdx", 121]]]]]]],
                     ["Docker", 82, [["wsl", 81.5, [["disk", 81.5, [["docker_data.vhdx", 78.2]]]]]]],
                     ["Google", 46, [["Chrome", 46, [["User Data", 45.9, [["Default", 45.6, [["Service Worker", 42.4, [["CacheStorage", 42.1]]], ["Cache", 2.4]]]]]]]]],
-                    ["Microsoft", 13.6],
+                    ["Microsoft", 6],
+                    ["Programs", 4.9, [["Ollama", 4.8, [["lib", 4.7, [["ollama", 4.6]]]]]]],
+                    ["datalab", 2.9, [["datalab", 2.9, [["Cache", 2.9, [["models", 2.9]]]]]]],
                   ],
                 ],
                 ["Roaming", 7],
@@ -463,22 +465,44 @@ const tree = build("", [
             [".flm", 104, [["models", 103.6, [["Qwen3.6-35B-A3B-NPU2", 38.1, [["model.q4nx", 37.6]]], ["Qwen3.8-27B-NPU2", 29.2, [["model.q4nx", 28.9]]], ["gemma-4-12b-NPU2", 14.1, [["model.q4nx", 13.8]]], ["Qwen3-Coder-30B-NPU2", 9.4, [["model.q4nx", 9.2]]], ["llama-3.3-8b-NPU2", 8.2, [["model.q4nx", 8]]], ["phi-5-mini-NPU2", 4.5, [["model.q4nx", 4.4]]]]]]],
             [".lmstudio", 96.1, [["models", 95.4, [["llama-3.3-70b-Q4_K_M.gguf", 42.5], ["qwen3.8-27b-Q8_0.gguf", 27.1], ["gemma-4-12b-Q8_0.gguf", 12.4], ["mistral-small-24b-Q6_K.gguf", 9.9]]], ["cache", 0.6]]],
             [".cache", 48, [["huggingface", 31, [["hub", 31, [["models--Qwen--Qwen3-8B-GGUF", 17.2, [["Qwen3-8B-Q8_0.gguf", 8.7], ["Qwen3-8B-Q6_K.gguf", 6.7]]], ["models--black-forest-labs--FLUX.1-dev", 13.6, [["flux1-dev.safetensors", 11.9]]]]]]], ["uv", 13.6], ["pip", 3.2]]],
-            ["Downloads", 31, [["Win11_25H2_English_x64.iso", 7], ["ubuntu-24.04.3-desktop-amd64.iso", 5.9], ["proxmox-ve_9.0-1.iso", 1.4], ["OllamaSetup.exe", 1.1]]],
+            ["Downloads", 31, [["Win11_25H2_English_x64.iso", 7], ["ubuntu-24.04.3-desktop-amd64.iso", 5.9], ["proxmox-ve_9.0-1.iso", 1.4], ["OllamaSetup.exe", 1.1], ["balenaEtcher-2.1.7.Setup.exe", 0.16]]],
             ["Documents", 22, [["Videos", 14, [["wedding-2019.mp4", 4.2]]]]],
             [".hipfire", 21],
             ["Pictures", 18, [["2019", 11.2], ["2024", 4.1], ["2026", 2.3]]],
-            ["OneDrive", 8],
+            ["OneDrive", 8, [["Pictures", 5.4, [["Camera Roll 2019", 4.6]]], ["Videos", 2.2, [["drone-2018.mp4", 1.9]]]]],
           ],
         ],
       ],
     ],
-    ["code", 312, [["covenant-agent", 161, [["models", 53.6], ["target", 61], ["data", 41], ["node_modules", 3.6], ["src", 0.4]]], ["hoardini", 58, [["target", 52], ["ui", 4.1]]], ["llama.cpp", 31, [["models", 22.4], ["build", 6.2]]], ["based", 22, [[".venv", 4.1]]], ["lm-admin", 14], ...smallRepos]],
+    ["code", 312, [["covenant-agent", 161, [["models", 53.6], ["target", 61], ["data", 41], ["node_modules", 3.6], ["src", 0.4]]], ["hoardini", 58, [["target", 52], ["ui", 4.1]]], ["llama.cpp", 31, [["models", 22.4], ["build", 6.2]]], ["based", 22, [["runs", 9.6], [".venv", 4.1]]], ["lm-admin", 14], ...smallRepos]],
     ["Games", 300],
     ["Program Files", 170],
-    ["AI", 140],
-    ["Windows", 52, [["System32", 18.2], ["WinSxS", 9.8], ["Installer", 6.1], ["SoftwareDistribution", 4.6, [["Download", 4.2]]], ["Temp", 1.3]]],
-    ["ProgramData", 44],
-    ["hiberfil.sys", 25],
+    ["AI", 140, [["gguf", 71.6], ["comfyui-models", 44.2], [".flm-scratch", 21.2, [["Qwen3.6-35B-A3B-NPU2-requant", 21.2, [["model.q4nx", 21]]]]]]],
+    [
+      "Windows",
+      52,
+      [
+        ["System32", 8.8],
+        ["WinSxS", 19.2],
+        ["Installer", 6.1],
+        ["SoftwareDistribution", 4.6, [["Download", 4.2, [["4b1f9c0e7d2a6f31", 3.4]]]]],
+        ["Temp", 1.3, [["{8C1F2B7A-4D0E-4F2B-9C41-6A2E0D5B7F13}", 0.9]]],
+        ["LiveKernelReports", 1.1, [["WATCHDOG", 1.1]]],
+        ["Logs", 0.5, [["CBS", 0.4, [["CbsPersist_20260912.cab", 0.4]]]]],
+      ],
+    ],
+    [
+      "ProgramData",
+      44,
+      [
+        ["Package Cache", 18.4],
+        ["Docker", 9.1],
+        ["NVIDIA Corporation", 6.3],
+        ["chocolatey", 4.8],
+        ["Microsoft", 3.2, [["Windows", 1.4, [["WER", 0.7, [["ReportArchive", 0.6]]]]]]],
+      ],
+    ],
+    ["hiberfil.sys", 35.1],
     ["pagefile.sys", 16],
     ["$WINDOWS.~BT", 9.2],
     ["NVIDIA", 3.1],
@@ -486,7 +510,6 @@ const tree = build("", [
   ],
 ]);
 
-// What made-up contents are made of, by the nearest folder named here.
 const HINTS: Record<string, string[]> = {
   "c:\\program files": ["dll", "exe", "pak"],
   "~\\appdata\\local\\programs": ["dll", "exe", "pak"],
@@ -570,9 +593,8 @@ function childrenOf(path: string, limit: number) {
 
 const revealed: string[] = [];
 
-// ---- Review (REVIEW-BUILD, REVIEW-AREAS, REVIEW-TRIGGER, REVIEW-SUPERSEDE) ----
-type ItemSeed = { path: string; gb: number; verdict: T.Verdict; reason: string; kind?: "dir" | "file"; memory_note?: string };
-type CardSeed = { card: string; title: string; kind: T.ProposalKind; ticked: boolean; summary: string; items: ItemSeed[] };
+type ItemSeed = { path: string; gb: number; verdict: T.Verdict; reason: string; kind?: "dir" | "file"; memory_note?: string; copy_note?: string };
+type CardSeed = { card: string; title: string; kind: T.ProposalKind; ticked: boolean; summary: string; items: ItemSeed[]; format?: string; ops?: () => T.ProposalItem[] };
 
 const claude = "~\\AppData\\Local\\Temp\\claude";
 const cardSeeds = (): CardSeed[] => [
@@ -618,6 +640,43 @@ const cardSeeds = (): CardSeed[] => [
     ],
   },
   {
+    card: "disposable",
+    title: "Folders you said can go",
+    kind: "delete",
+    ticked: true,
+    summary: "You answered Disposable for these folders.",
+    items: [{ path: "C:\\code\\based\\runs", gb: 9.6, verdict: "safe", reason: "You said this folder can go." }],
+  },
+  {
+    card: "redownload",
+    title: "Re-downloadable, verified",
+    kind: "delete",
+    ticked: true,
+    summary: "Files with an identical copy online or in your archive, checked byte for byte; they can be fetched again.",
+    items: [
+      {
+        path: "~\\.lmstudio\\models\\llama-3.3-70b-Q4_K_M.gguf",
+        gb: 42.5,
+        verdict: "redownload",
+        kind: "file",
+        reason: "LM Studio models: identical to lmstudio-community/Llama-3.3-70B-Instruct-GGUF on Hugging Face.",
+        copy_note: "identical to lmstudio-community/Llama-3.3-70B-Instruct-GGUF on Hugging Face",
+      },
+      { path: "~\\Downloads\\balenaEtcher-2.1.7.Setup.exe", gb: 0.16, verdict: "redownload", kind: "file", reason: "In winget as Balena.Etcher 2.1.7.", copy_note: "in winget as Balena.Etcher 2.1.7" },
+    ],
+  },
+  {
+    card: "online_only",
+    title: "Online-only",
+    kind: "online_only",
+    ticked: true,
+    summary: "Synced files nobody has opened for 90 days: the copy on this PC is freed, the files stay in the cloud and download again when opened.",
+    items: [
+      { path: "~\\OneDrive\\Pictures\\Camera Roll 2019", gb: 4.6, verdict: "synced", reason: "Synced to OneDrive; nothing in it opened or changed for 412 days.", copy_note: "synced to OneDrive" },
+      { path: "~\\OneDrive\\Videos\\drone-2018.mp4", gb: 1.9, verdict: "synced", kind: "file", reason: "Synced to OneDrive; nothing in it opened or changed for 655 days.", copy_note: "synced to OneDrive" },
+    ],
+  },
+  {
     card: "downloads",
     title: "Installers and archives in Downloads",
     kind: "delete",
@@ -638,9 +697,76 @@ const cardSeeds = (): CardSeed[] => [
     summary: "Photos nobody has opened for 180 days: copied to the destination, checked, then removed here.",
     items: [{ path: "~\\Pictures\\2019", gb: 11.2, verdict: "review", reason: "Your photos and videos: nothing in it opened or changed for 412 days." }],
   },
+  {
+    card: "compress",
+    title: "Compress in place",
+    kind: "compress",
+    format: "lzx",
+    ticked: false,
+    summary: "Folders Windows can compress in place (LZX): the files stay where they are and open as before.",
+    items: [
+      { path: "~\\AppData\\Local\\Programs\\Ollama\\lib\\ollama", gb: 4.6, verdict: "review", reason: "Windows compression would save about 2.0 GB (43% of it); the files stay usable." },
+      { path: "~\\AppData\\Local\\datalab\\datalab\\Cache\\models", gb: 2.9, verdict: "review", reason: "Windows compression would save about 1.2 GB (41% of it); the files stay usable." },
+    ],
+  },
+  {
+    card: "windows",
+    title: "Cleanups only Windows can do",
+    kind: "system_cleanup",
+    ticked: true,
+    summary: "Space only Windows' own tools or an administrator can free; approving asks for administrator rights once.",
+    items: [],
+    ops: windowsOps,
+  },
 ];
 
-const ADMIN = "Needs admin; Hoardini will offer this with Windows cleanups.";
+const LEFTOVER_PARTS: [string, number][] = [
+  ["C:\\Windows\\SoftwareDistribution\\Download\\4b1f9c0e7d2a6f31", 3.4],
+  ["C:\\Windows\\LiveKernelReports\\WATCHDOG", 1.1],
+  ["C:\\Windows\\Temp\\{8C1F2B7A-4D0E-4F2B-9C41-6A2E0D5B7F13}", 0.9],
+  ["C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportArchive", 0.6],
+  ["C:\\Windows\\Logs\\CBS\\CbsPersist_20260912.cab", 0.4],
+];
+function windowsOps(): T.ProposalItem[] {
+  const parts = LEFTOVER_PARTS.map(([path, gb]) => ({ path, size: Math.round(gb * GB) }));
+  const left = parts.reduce((a, x) => a + x.size, 0);
+  const item = (id: number, path: string, alloc: number, reason: string, op: T.SystemOpView): T.ProposalItem => ({
+    id,
+    path,
+    kind: op.op === "hibernation" ? "file" : "dir",
+    alloc,
+    verdict: "safe",
+    cap: null,
+    reason,
+    block_reason: null,
+    selected: true,
+    status: "pending",
+    detail: null,
+    small: false,
+    memory_note: null,
+    op,
+  });
+  const view = (op: T.SystemOpView["op"], label: string, explain: string, size: number, known: boolean, more: Partial<T.SystemOpView> = {}): T.SystemOpView => ({
+    op,
+    label,
+    explain,
+    elevated: true,
+    irreversible: false,
+    estimate_known: known,
+    size,
+    ...more,
+  });
+  return [
+    item(1, parts[0]!.path, left, `${(left / GB).toFixed(1)} GB of Windows temp files, update downloads, crash dumps and logs untouched for a day, in ${parts.length} places`,
+      view("leftovers", "Windows temp files, update downloads, crash dumps and logs", "Hoardini empties Windows' own temp, update download, Delivery Optimization, crash dump and servicing log folders, which only an administrator may clear. Only files untouched for a day go; files in use and the folders themselves stay. Windows downloads again anything it still needs.", left, true, { parts })),
+    item(2, "C:\\Windows\\WinSxS", 0, "WinSxS holds 19.2 GB that is not hard-linked into Windows itself; Windows decides how much of it is superseded",
+      view("component_store", "Windows Update leftovers (component store)", "Windows removes superseded versions of its own components from WinSxS (DISM /StartComponentCleanup, the same as Disk Cleanup's Windows Update Cleanup). Updates installed so far can no longer be uninstalled. It can take ten minutes or more.", Math.round(19.2 * GB), false)),
+    item(3, "C:\\hiberfil.sys", Math.round(17.5 * GB), "hiberfil.sys is 35.1 GB; the reduced size is about 17.6 GB (a fifth of the RAM)",
+      view("hibernation", "Hibernation file at the reduced size", "Windows shrinks hiberfil.sys to the reduced size (powercfg /h /type reduced). Fast Startup keeps working; the Hibernate option goes away, so a laptop on critical battery shuts down instead of hibernating. powercfg /h /type full undoes it.", Math.round(35.1 * GB), true)),
+  ];
+}
+
+const ADMIN = "Needs admin.";
 const MODELS = "Model files: Hoardini proposes them once it can show where else a copy exists.";
 const VM = "A virtual machine's disk: deleting it deletes the machine inside.";
 const RECENT = " Something in it changed in the last 30 days.";
@@ -655,33 +781,36 @@ const area = (path: string, gb: number, label: string, category: string, verdict
   hint,
   unknown: category === "unknown",
   actions,
+  only_copy: false,
 });
 const areaSeeds = (): T.ReviewArea[] =>
   [
     area("C:\\Games", 300, "Steam library", "game-library", "redownload", "Installed games: remove them through their launcher.", null, ALL),
     area("C:\\Program Files", 170, "installed programs", "system", "keep", "Installed programs: Hoardini never deletes anything here; uninstall an app to free its space."),
-    area("C:\\AI", 140, "model weights", "model-weights", "review", MODELS, null, ALL),
+    area("C:\\AI", 119, "model weights", "model-weights", "review", MODELS, null, ALL),
+    {
+      ...area("C:\\AI\\.flm-scratch\\Qwen3.6-35B-A3B-NPU2-requant\\model.q4nx", 21, "FastFlowLM NPU model weights", "model-weights", "review", "", null, ALL),
+      why_not: "Only copy we know of: no other file of this size on the indexed drives; not found on Hugging Face.",
+      only_copy: true,
+    },
     area("~\\AppData\\Local\\Packages\\CanonicalGroupLimited.Ubuntu24.04LTS_79rhkp1fndgsc\\LocalState\\ext4.vhdx", 121, "WSL Ubuntu disk", "vm-disk", "review", VM, null, ALL),
     area("~\\.flm\\models", 103.6, "FastFlowLM models", "model-store", "redownload", MODELS, null, ALL),
     area("C:\\code\\covenant-agent", 95, "unknown", "unknown", null, `Not identified: no catalog entry matches, and no kind of file makes up 80% of it.${RECENT}`),
-    area("~\\.lmstudio\\models", 95.4, "LM Studio models", "model-store", "redownload", MODELS, null, ALL),
+    area("~\\.lmstudio\\models", 52.9, "LM Studio models", "model-store", "redownload", MODELS, null, ALL),
     area("~\\AppData\\Local\\Docker\\wsl\\disk\\docker_data.vhdx", 78.2, "Docker Desktop's WSL disk", "vm-disk", "review", VM, null, ALL),
-    area("C:\\ProgramData", 44, "app data for every user", "app-data", "keep", "App data for every user: programs keep their shared settings and data here.", ADMIN.replace(/;.*/, ".")),
-    area("C:\\Windows", 36.7, "the Windows folder", "system", "keep", "The Windows folder: Hoardini never deletes anything here."),
+    area("C:\\ProgramData", 43.4, "app data for every user", "app-data", "keep", "App data for every user: programs keep their shared settings and data here.", ADMIN),
+    area("C:\\Windows", 25.8, "the Windows folder", "system", "keep", "The Windows folder: Hoardini never deletes anything here."),
     area("~\\.cache\\huggingface", 31, "Hugging Face cache", "model-store", "redownload", MODELS, null, ALL),
-    area("C:\\hiberfil.sys", 25, "Hibernation file", "system", "keep", "Hibernation file: Hibernate and Fast Startup image, typically 40-75% of RAM.", "Windows recreates it at boot; turning hibernation off removes it."),
+    area("C:\\hiberfil.sys", 35.1, "Hibernation file", "system", "keep", "Hibernation file: Hibernate and Fast Startup image, typically 40-75% of RAM.", "Windows recreates it at boot; turning hibernation off removes it."),
     area("C:\\code\\llama.cpp", 24.8, "unknown", "unknown", null, "Not identified: no catalog entry matches, and no kind of file makes up 80% of it."),
     area("~\\Documents", 22, "your documents", "documents", "keep", "Your documents: 88% of its bytes are documents, photos or video.", null, ["archive"]),
     area("~\\.hipfire", 21, "unknown", "unknown", null, `Not identified: no catalog entry matches, and no kind of file makes up 80% of it.${RECENT}`),
     area("C:\\pagefile.sys", 16, "Page file", "system", "keep", "Page file: Virtual-memory backing files, in use by the OS.", "Windows manages its size."),
-    area("C:\\Windows\\WinSxS", 9.8, "WinSxS component store", "system", "keep", "WinSxS component store: Component store; mostly hardlinks, so its apparent size overstates real use.", "Windows can trim this itself."),
+    area("C:\\Windows\\WinSxS", 19.2, "WinSxS component store", "system", "keep", "WinSxS component store: Component store; mostly hardlinks, so its apparent size overstates real use.", "Windows can trim this itself."),
     area("C:\\$WINDOWS.~BT", 9.2, "Windows upgrade leftovers", "windows-leftover", "safe", "Windows upgrade leftovers: Files a feature update left behind.", ADMIN),
     area("~\\Pictures", 6.8, "your photos and videos", "photos", "keep", "Your photos and videos: 94% of its bytes are images or video.", null, ["archive"]),
-    area("C:\\Windows\\SoftwareDistribution\\Download", 4.2, "Windows Update download cache", "windows-leftover", "safe", "Windows Update download cache: Update packages Windows already installed.", ADMIN),
-    area("C:\\Windows\\Temp", 1.3, "System temp folder", "temp", "safe", "System temp folder: Windows and services' scratch space.", ADMIN),
   ].sort((a, b) => b.size - a.size);
 
-// GET /api/apps/rarely-used (SRV-APPS): this PC's big programs that have not run for 90 days.
 const apps: T.RarelyUsedApp[] = [
   { id: "steam-1091500", name: "Cyberpunk 2077", publisher: "CD PROJEKT RED", source: "steam", path: "C:\\Games\\steamapps\\common\\Cyberpunk 2077", size: Math.round(71.3 * GB), last_run_ms: now() - 133 * DAY, last_run_from: "Steam LastPlayed" },
   { id: "reg-6f1c0a9be2d47c31", name: "Visual Studio Community 2022", publisher: "Microsoft Corporation", source: "registry", path: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community", size: Math.round(38.4 * GB), last_run_ms: null, last_run_from: null },
@@ -704,6 +833,17 @@ function buildReview(scope: string | null): MockReview {
   const r: MockReview = { id: uuid(), created_ms: now(), volume: vol, scope_path: scope, scan_ms: status.index.last_refresh_ms, cards: [], areas: areaSeeds().filter((a) => inScope(a.path)) };
   for (const seed of cardSeeds()) {
     if (seed.card === "archive" && !destinations.length) continue;
+    if (seed.ops) {
+      // Ops count by name: one pending in an earlier card that stays is left out (REVIEW-BUILD).
+      const busy = new Set([...proposals.values()].filter((p) => p.kind === "system_cleanup" && p.review_id && p.status === "pending" && !replacing.has(p.id)).flatMap((p) => p.items.map((i) => i.op?.op)));
+      const ops = scope ? [] : seed.ops().filter((i) => !busy.has(i.op!.op));
+      if (!ops.length) continue;
+      ops.forEach((i, n) => (i.id = n + 1));
+      const sys: T.Proposal = { id: uuid(), kind: "system_cleanup", status: "pending", total_alloc: ops.reduce((a, i) => a + i.alloc, 0), created_ms: now(), job_id: null, destination: null, format: null, summary: seed.summary, items: ops, parent_id: null, follow_up_id: null, review_id: r.id, card: seed.card, touched: false };
+      proposals.set(sys.id, sys);
+      r.cards.push({ card: seed.card, title: seed.title, proposal_id: sys.id });
+      continue;
+    }
     const kept = seed.items.filter((i) => inScope(i.path) && !taken.has(i.path.toLowerCase()));
     const bytes = kept.reduce((a, i) => a + i.gb * GB, 0);
     if (!kept.length || (!scope && bytes < 500 * MB)) continue;
@@ -711,8 +851,8 @@ function buildReview(scope: string | null): MockReview {
     const items: T.ProposalItem[] = kept.map((i, n) => {
       const alloc = Math.round(i.gb * GB);
       const small = alloc < 50 * MB && alloc * 50 < total;
-      const ticks = seed.ticked && (i.verdict === "safe" || i.verdict === "redownload") && !small;
-      return { id: n + 1, path: i.path, kind: i.kind ?? "dir", alloc, verdict: i.verdict, cap: null, reason: i.reason, block_reason: null, selected: ticks, status: "pending", detail: null, small, memory_note: i.memory_note ?? null };
+      const ticks = seed.ticked && (i.verdict === "safe" || i.verdict === "redownload" || i.verdict === "synced") && !small;
+      return { id: n + 1, path: i.path, kind: i.kind ?? "dir", alloc, verdict: i.verdict, cap: null, reason: i.reason, block_reason: null, selected: ticks, status: "pending", detail: null, small, memory_note: i.memory_note ?? null, copy_note: i.copy_note ?? null };
     });
     const p: T.Proposal = {
       id: uuid(),
@@ -722,7 +862,7 @@ function buildReview(scope: string | null): MockReview {
       created_ms: now(),
       job_id: null,
       destination: seed.kind === "archive" ? { id: destinations[0]!.id, name: destinations[0]!.name } : null,
-      format: null,
+      format: seed.format ?? null,
       summary: seed.summary,
       items,
       parent_id: null,
@@ -747,6 +887,42 @@ function buildReview(scope: string | null): MockReview {
 
 const latestVolumeReview = () => [...reviews].reverse().find((r) => r.volume === selectedDrive().root && !r.scope_path);
 
+let buildTimer: ReturnType<typeof setTimeout> | null = null;
+const BUILD_MS = Number(process.env.MOCK_BUILD_MS ?? 2500);
+function buildLater(ms = BUILD_MS): void {
+  if (buildTimer) return;
+  status.review_building = true;
+  dirty = true;
+  buildTimer = setTimeout(() => {
+    buildTimer = null;
+    buildReview(null);
+    status.review_building = false;
+    dirty = true;
+  }, ms);
+}
+
+const LIVE: T.Proposal["status"][] = ["pending", "approved", "running"];
+const sameScope = (a: MockReview, b: MockReview) => a.volume === b.volume && (a.scope_path ?? "").toLowerCase() === (b.scope_path ?? "").toLowerCase();
+
+function carriedInto(r: MockReview): T.ReviewCardRef[] {
+  const out: T.ReviewCardRef[] = [];
+  for (const old of reviews.slice(0, reviews.indexOf(r))) {
+    if (!sameScope(old, r)) continue;
+    for (const c of old.cards) {
+      let p = proposals.get(c.proposal_id);
+      const seen = new Set<string>();
+      while (p && !(p.touched && LIVE.includes(p.status)) && p.follow_up_id && !seen.has(p.id)) {
+        seen.add(p.id);
+        p = proposals.get(p.follow_up_id);
+      }
+      if (!p || !p.touched || !LIVE.includes(p.status)) continue;
+      if (r.cards.some((x) => x.proposal_id === p!.id) || out.some((x) => x.proposal_id === p!.id)) continue;
+      out.push({ card: c.card, title: c.title, proposal_id: p.id, carried: true });
+    }
+  }
+  return out;
+}
+
 function rebuildIfUntouched(): void {
   const last = latestVolumeReview();
   if (!last || last.scan_ms === status.index.last_refresh_ms) return;
@@ -754,18 +930,35 @@ function rebuildIfUntouched(): void {
   buildReview(null);
 }
 
+const extras = (root: string) => ({
+  building: status.review_building ?? false,
+  apps: apps.filter((a) => under(root, a.path)),
+  online: { asked: settings.online_checks.asked, waiting: onlineWaiting },
+});
+
 function reviewView(r: MockReview): T.ReviewView {
-  const props = [...proposals.values()].filter((p) => p.review_id === r.id);
-  const ready = props.filter((p) => p.status === "pending").flatMap((p) => p.items).filter((i) => i.selected && i.status === "pending").reduce((a, i) => a + i.alloc, 0);
+  const cards = [...r.cards, ...carriedInto(r)].sort((a, b) => proposals.get(b.proposal_id)!.total_alloc - proposals.get(a.proposal_id)!.total_alloc);
+  const props: T.Proposal[] = [];
+  for (const c of cards)
+    for (let p = proposals.get(c.proposal_id); p && !props.includes(p); p = p.follow_up_id ? proposals.get(p.follow_up_id) : undefined) props.push(p);
+  const ready = props.filter((p) => p.status === "pending").flatMap((p) => p.items).filter((i) => i.selected && i.status === "pending" && !i.block_reason).reduce((a, i) => a + i.alloc, 0);
   const d = selectedDrive();
   return {
     review: { id: r.id, created_ms: r.created_ms, volume: r.volume, scope_path: r.scope_path },
     header: { root: r.volume, used_bytes: d.total_bytes - d.free_bytes, free_bytes: d.free_bytes, ready_bytes: ready },
-    cards: r.cards,
+    cards,
     areas: r.areas,
     proposals: Object.fromEntries(props.map((p) => [p.id, p])),
+    ...extras(r.scope_path ?? r.volume),
   };
 }
+
+function firstView(): T.ReviewView {
+  const d = selectedDrive();
+  return { review: null, header: { root: d.root, used_bytes: d.total_bytes - d.free_bytes, free_bytes: d.free_bytes, ready_bytes: 0 }, cards: [], areas: [], proposals: {}, ...extras(d.root) };
+}
+
+const CONTAINERS = new Set(["c:\\users", "~", "~\\appdata", "~\\appdata\\local", "~\\appdata\\roaming", "~\\.lmstudio", "c:\\programdata", "c:\\program files", "c:\\windows"]);
 
 function answerLocation(path: string, answer: T.LocationAnswer): T.Memory {
   const table: Record<T.LocationAnswer, { label: string; verdict: T.Verdict; actions: T.ReviewArea["actions"]; text: string }> = {
@@ -784,7 +977,6 @@ function answerLocation(path: string, answer: T.LocationAnswer): T.Memory {
   return m;
 }
 
-// ---- Explore (GET /api/index/map, GET /api/index/types, PUT /api/explore/focus) ----
 type Known = T.MapTag & { self?: boolean };
 // What the mock "knows", by folder; the nearest one at or above a path wins, as on the server (SRV-INDEX-MAP).
 const KNOWN: Record<string, Known> = {
@@ -1108,7 +1300,7 @@ async function agentRun(input: { runId: string; messages: { id?: string; role: s
         await say(s, "`~\\.hipfire` is where **hipfire**, a local model runner, keeps the models it downloads.");
         const m: T.Memory = { id: ++memSeq, scope: "path", key: "~\\.hipfire", kind: "fact", text: "~\\.hipfire: model cache (hipfire).", source: `web:${url}`, confidence: null, created_ms: now(), updated_ms: now(), review_after_ms: null, pinned: false, last_used_ms: now(), forgotten_ms: null, detail: { category: "model-store", app: "hipfire", use: "model cache" } };
         memories.push(m);
-        const data = { v: 1, kind: "learned", items: [{ memory_id: m.id, text: m.text, url }] };
+        const data = { v: 1, kind: "learned", items: [{ memory_id: m.id, text: m.text, url, confirmed: false }] };
         s.send({ type: "CUSTOM", name: "tool_data", value: { tool_call_id: toolCallId, data } });
         const stored = thread.messages.find((x) => x.toolCallId === toolCallId);
         if (stored) stored.data = data;
@@ -1218,8 +1410,9 @@ async function route(req: Request): Promise<Response> {
       if (seg[1] === "revealed") return json(revealed);
       if (seg[1] === "focus") return json({ path: exploreFocus });
       if (seg[1] === "uninstalled") return json(uninstalled);
-      const b = await body<{ fill?: number; running_runs?: number; idle?: boolean; next_job?: NextJob; online_waiting?: number; rebuild?: boolean }>();
-      if (b.rebuild) buildReview(null);
+      const b = await body<{ fill?: number; running_runs?: number; idle?: boolean; next_job?: NextJob; online_waiting?: number; rebuild?: boolean | { ms: number } }>();
+      if (b.rebuild === true) buildReview(null);
+      else if (b.rebuild) buildLater(b.rebuild.ms);
       if (b.next_job) nextJob = b.next_job;
       if (b.online_waiting != null) onlineWaiting = b.online_waiting;
       if (b.fill != null) setFill(b.fill);
@@ -1334,11 +1527,13 @@ async function route(req: Request): Promise<Response> {
       if (seg[1] === "open" && method === "POST") {
         const last = latestVolumeReview();
         const stale = !last || now() - last.created_ms > SESSION_GAP_MS || (status.index.last_refresh_ms ?? 0) !== (last.scan_ms ?? 0);
-        return json(reviewView(stale ? buildReview(null) : last));
+        if (stale) buildLater();
+        return json(last ? reviewView(last) : firstView());
       }
       if (seg[1] === "run" && method === "POST") {
         const { path: folder } = await body<{ path?: string }>();
         if (folder && !/^(~|[A-Za-z]:)\\/.test(folder)) return err("folder in the index not found", 404);
+        await sleep(Number(process.env.MOCK_RUN_MS ?? 0));
         return json(reviewView(buildReview(folder?.trim() || null)));
       }
       if (seg[1] === "look-closer" && method === "POST") {
@@ -1367,6 +1562,7 @@ async function route(req: Request): Promise<Response> {
       const b = await body<{ path?: string; answer?: T.LocationAnswer }>();
       if (!b.path) return err("path is required");
       if (!b.answer || !["keep", "disposable", "move-elsewhere", "never-touch"].includes(b.answer)) return err("invalid request body: unknown answer");
+      if (CONTAINERS.has(norm(b.path)) || /^[a-z]:$/.test(norm(b.path))) return err(`${b.path} holds other folders; answer for a folder inside it`);
       dirty = true;
       return json(answerLocation(b.path, b.answer));
     }
@@ -1402,9 +1598,16 @@ async function route(req: Request): Promise<Response> {
       if (seg[2] === "confirm") {
         if (!memories[idx]!.detail) return err("only location and file-type rows can be confirmed");
         Object.assign(memories[idx]!, { source: "user", pinned: true, updated_ms: now(), last_used_ms: now() });
+        const id = memories[idx]!.id;
+        for (const l of [...proposals.values()].flatMap((x) => x.learned ?? [])) if (l.memory_id === id) Object.assign(l, { confirmed: true, pinned: true });
+        for (const msg of thread.messages) {
+          const d = msg.data as T.LearnedData | undefined;
+          if (d?.kind === "learned") for (const l of d.items) if (l.memory_id === id) l.confirmed = true;
+        }
         return json(memories[idx]);
       }
       Object.assign(memories[idx]!, await body<Partial<T.Memory>>(), { updated_ms: now(), last_used_ms: now() });
+      for (const l of [...proposals.values()].flatMap((x) => x.learned ?? [])) if (l.memory_id === memories[idx]!.id) l.pinned = memories[idx]!.pinned;
       return json(memories[idx]);
     }
     case "setup":

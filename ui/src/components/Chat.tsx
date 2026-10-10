@@ -90,7 +90,8 @@ const btnQuiet = "rounded-lg border border-line px-2.5 py-1 font-semibold text-m
 function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
   const { messages, currentMessage, isStreaming, addMessage, agentClient, agentSubscriber, tools: toolDefs, getForwardedProps, getToolNameFromCallId, terminateRun } =
     useAgentContext();
-  const [input, setInput] = useState("");
+  const input = useStore((s) => s.chatDraft);
+  const setInput = useStore((s) => s.setChatDraft);
   const [lastTurnMs, setLastTurnMs] = useState<number | null>(null);
   const sendingRef = useRef(false);
   const askedRef = useRef<Message | null>(null);
@@ -262,6 +263,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
               url={l.url}
               onUndo={() => routes.deleteMemory(l.memory_id)}
               onConfirm={() => routes.confirmMemory(l.memory_id)}
+              confirmed={l.confirmed}
             />
           ))}
       </div>

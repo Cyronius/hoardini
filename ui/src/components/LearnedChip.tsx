@@ -16,15 +16,19 @@ export function LearnedChip({
   onUndo,
   onPin,
   onConfirm,
+  confirmed,
+  pinned: pinnedAtLoad,
 }: {
   text: string;
   url?: string;
   onUndo: () => Promise<unknown>;
   onPin?: (pinned: boolean) => Promise<unknown>;
   onConfirm?: () => Promise<unknown>;
+  confirmed?: boolean;
+  pinned?: boolean;
 }) {
-  const [state, setState] = useState<"learned" | "confirmed" | "undone">("learned");
-  const [pinned, setPinned] = useState(false);
+  const [state, setState] = useState<"learned" | "confirmed" | "undone">(confirmed ? "confirmed" : "learned");
+  const [pinned, setPinned] = useState(!!pinnedAtLoad);
   const [err, setErr] = useState<string | null>(null);
   const act = async (f: () => Promise<unknown>, after: () => void) => {
     try {

@@ -45,18 +45,25 @@ area's Ask) shows the chat: the panel opens, or the Chat tab on a narrow window,
 streaming. "Open in Explore" and `explore` pills switch to the Explore tab on that path (`ExploreLinkContext`). Explore
 is mounted only while its tab is chosen, so leaving it clears its focus (SRV-EXPLORE-FOCUS); behind the Chat tab of a
 narrow window it stays. On a window narrower than 640 px the header puts the drive bar on its own line under the brand
-and Settings. FirstRun still covers the app until the AI is set up.
+and Settings. FirstRun still covers the app until the AI is set up. Left and Right arrows (Home and End) on the tabs
+select the next tab; only the selected tab is in the tab order, and each tab controls its panel (the home panel, or on a
+narrow window the chat). What is typed in the chat box survives the chat reloading its thread (Look closer, Clear chat).
+A home view that fails to render shows "The Review view hit a problem and stopped." (or Explore) with the error and Try
+again, which reopens the review, while the header, the other tab and the chat keep working.
 
 **Verification (manual):**
 1. In `ui/`, run `MOCK_PORT=7347 MOCK_IDLE=1 bun run mock`, then `bun run build` and serve `ui/dist` with `/api` proxied to that port (or Vite with its proxy pointed there); open it with `#token=dev` at 1440 × 900.
-2. Under the header the tabs read "Review 276 GB" and "Explore"; the chat panel on the right is 420 px wide with "Chat qwen3.8-27b", the starters and the message box.
+2. Under the header the tabs read "Review 359 GB" and "Explore"; the chat panel on the right is 420 px wide with "Chat qwen3.8-27b", the starters and the message box.
 3. Drag the divider 160 px to the left: the panel is 584 px wide and `localStorage['hoardini.layout']` reads `{"chatWidth":584,"collapsed":false}`. Focus the divider and press Arrow Right: 560 px.
 4. Press Hide the chat: the panel goes, a rail with a Chat button stays on the right, and the review widens. Reload: still hidden. Press Show the chat: 560 px again.
 5. Ask "what is in lmstudio" in the panel: the card, Hold to delete, the pills and Clear chat work as in UI-CHAT-FLOW and UI-PROPOSAL-COLLAPSE. Ask again and hide the panel while it streams: the rail's dot pulses, and showing the panel shows the run still going.
 6. Resize to 430 × 900: the tabs read Review, Explore, Chat; Chat shows the same conversation; the drive bar sits on its own line under the brand and Settings.
 7. At 430 px open Explore, double-click Users in the tree and press Ask Hoardini: the Chat tab opens and sends "What is C:\Users?"; press Explore again: C: › Users is still open.
 8. Block local storage for the page (an init script that makes `localStorage` throw) and reload at 1440 px: the app opens with a 420 px panel, and hiding and showing it works.
+9. Focus the Review tab and press Arrow Right: Explore is selected and focused, the Review tab has `tabindex="-1"`, and both tabs' `aria-controls` name the `tabpanel` `panel-home`.
+10. Answer `POST /api/review/open` with a review whose `areas` is null (a Playwright route) and reload: the Review tab shows "The Review view hit a problem and stopped." with the error and Try again, and the chat and Explore still work. Drop the route and press Try again: the review comes back.
 (2026-10-09: steps 1–8 pass against the mock in headless Chromium through Playwright, with `ui/dist` served and `/api` proxied to the mock; in step 5 the lmstudio card collapsed with its follow-up, Clear chat brought back the starters, and the rail's dot showed while the second run streamed behind it.)
+(2026-10-09: steps 2, 9 and 10 pass against the mock in headless Chromium through Playwright at 1440 px; step 2 now reads "Review 359 GB" with the mock's new cards.)
 
 ### UI-LAYOUT-WIDTH: Where the chat goes and how wide it is
 **Applies to:** hoardini
@@ -81,65 +88,83 @@ Test: `specs/ui/tests/shell-layout.test.ts`.
 
 `ReviewView` (`ui/src/review/ReviewView.tsx`; state in `ui/src/review/state.ts`, rows in `LargeAreas.tsx` and
 `RarelyUsedApps.tsx`) shall show the drive's review (REVIEW-BUILD, REVIEW-AREAS) as the Review home tab:
-- **Loading:** at start and when the selected drive changes it calls `POST /api/review/open` (REVIEW-TRIGGER); when
-  `status.review.id` differs from the review on screen it reads `GET /api/review`. A 404 (no completed index) shows "Hi,
-  I'm Hoardini." (UI-WELCOME-BACK) and opens the review when the first refresh ends.
+- **Loading:** at start and when the selected drive changes it calls `POST /api/review/open` (REVIEW-TRIGGER). An
+  answer with `review: null` (the drive's first review is still building) shows "Review of C:", "Building your review…"
+  with a spinner, the drive's used and free bar, and the consent and Apps you rarely use from that answer. While a build
+  runs over a review on screen (the answer's `building`, or `review_building` in the status), the header says "Building a
+  newer review… This one stays until it is ready."; Review now shows its own "Reviewing…" instead. When the status
+  stream reports the end of a build it saw running, or `status.review.id` differs from the review on screen, it reads
+  `GET /api/review`. An answer for another drive than the selected one, or older than the review on screen, is dropped.
+  A 404 (no completed index) shows "Hi, I'm Hoardini." (UI-WELCOME-BACK) and opens the review when the first refresh
+  ends; a first build that ends without a review shows "Could not build the review" with Try again.
 - **Header:** "Review of C:", Ready to free in large type (`readyBytes` of UI-REVIEW-ORDER over the cards on screen and
-  their follow-ups, so it follows every tick), a bar of the drive's used space with the ready part striped and the free
-  space after it, with a key, "Built N ago · index from N ago", and **Review now** (`POST /api/review/run`), which reads
-  "Reviewing…" while it runs. The online-checks consent (UI-ONLINE-CONSENT) follows the header.
+  their follow-ups, carried cards included, so it follows every tick and matches the server's `ready_bytes`), a bar of
+  the drive's used space with the ready part striped and the free space after it, with a key, "Built N ago · index from
+  N ago", and **Review now** (`POST /api/review/run`), which reads "Reviewing…" while it runs. The online-checks consent
+  (UI-ONLINE-CONSENT) follows the header and reads the review's `online`.
 - **What can go:** each card as a ProposalCard titled by the card ("Build output · free 121 GB"; "up to X" while nothing
-  is ticked), in the order of UI-REVIEW-ORDER fixed when the review loads. A tick is saved at once with
-  `PUT /api/proposals/{id}/selection` (SRV-PROPOSAL-SELECTION); a failed save shows the error and the server's ticks.
-  Every item row has ▸ (folders) for its ItemTree (UI-ITEM-TREE) and Show in Explorer. Approving or declining reports
-  nothing to the chat (UI-PROPOSAL-COLLAPSE). With no card left the section says "Nothing new to clean on C:" and the
-  used and free space.
-- **Replaced cards:** when a newer review replaces the one on screen, its cards the user touched or that ran stay on
-  screen (REVIEW-SUPERSEDE leaves their items out of the new review), and its untouched cards show as "Replaced by a newer
-  review · N items", until the page reloads. Another drive starts without them.
-- **Apps you rarely use:** the review's `apps` when the server sends them, else `GET /api/apps/rarely-used` (SRV-APPS):
-  name, a Steam tag for games, publisher, "last run N days ago" or "never run", Show in Explorer for its folder, size,
-  and **Uninstall…**, which asks "Open {name}'s own uninstaller? It asks you to confirm … Hoardini deletes nothing
-  itself." with Open the uninstaller and Cancel. Open calls `POST /api/apps/{id}/uninstall` (ACT-UNINSTALL) and says
-  "The uninstaller is open."; an error shows inline. A drive review only; hidden while the list is empty.
+  is ticked), in the order of UI-REVIEW-ORDER fixed when the review loads. A card the server lists with `carried`
+  (REVIEW-SUPERSEDE: touched in an earlier review and still live) shows in place with a "from the earlier review" tag. A
+  tick is saved with `PUT /api/proposals/{id}/selection` (SRV-PROPOSAL-SELECTION), one request at a time per card with the
+  latest ticks after it, and a review read in between keeps the ticks on screen; a failed save shows the error and the
+  server's ticks. Every item row has ▸ (folders) for its ItemTree (UI-ITEM-TREE) and Show in Explorer. The `windows`
+  card is a system cleanup card (UI-SYSTEM-CLEANUP-CARD). Approving or declining reports nothing to the chat
+  (UI-PROPOSAL-COLLAPSE). With no card left the section says "Nothing new to clean on C:" and the used and free space.
+- **Replaced cards:** cards a newer review no longer lists stay on screen until the page reloads (another drive starts
+  without them): the ones the user touched or that ran as they are, and untouched ones as "Replaced by a newer review ·
+  N items". A carried card that ran and drops out of a reread review stays the same way.
+- **Apps you rarely use:** the review's `apps` (REVIEW-TRIGGER), else, from an older server, `GET /api/apps/rarely-used`
+  (SRV-APPS): name, a Steam tag for games, publisher, "last run N days ago" or "never run", Show in Explorer for its
+  folder, size, and **Uninstall…**, which asks "Open {name}'s own uninstaller? It asks you to confirm … Hoardini deletes
+  nothing itself." with Open the uninstaller and Cancel. Open calls `POST /api/apps/{id}/uninstall` (ACT-UNINSTALL) and
+  says "The uninstaller is open."; an error shows inline. A folder review shows the apps the server lists inside the
+  folder. Hidden while the list is empty.
 - **Large areas:** the review's `areas`, biggest first, the first 10 and then "Show all N · M more, X": name, the label as
   a tag (or "unknown"), the parent folder, size, a bar against the biggest, `why_not`, and the hint after an arrow; ▸ for
   its ItemTree unless the name ends in a file type (`.sys`, `.vhdx`, …); on hover or focus Ask (sends "What is {path} and
   is it safe to remove?" to the chat), Clean up (when the verdict is `safe` and the actions include delete, as after a
-  Disposable answer) and Show in Explorer. Unknown areas have a striped edge and **What is this?** Keep · Disposable ·
-  Move elsewhere · Look closer · ⋯, whose menu holds Never touch with a line saying what it means. An answer calls
-  `POST /api/locations/answer` (SRV-LOCATION-ANSWER) and rereads the reviews on screen, so the row shows the answer's
-  label and text. Look closer sends the look-closer run (REVIEW-LOOK-CLOSER) to the chat, which opens: the chat posts
-  `{path}` to `/api/review/look-closer` in place of `/api/agent/run`, reads its stream like any run, and reloads the
-  thread when it ends, since the server stored the question under its own id.
+  Disposable answer) and Show in Explorer. An only-copy area (`only_copy`, REVIEW-AREAS) carries an "only copy we know
+  of" tag in place of its label, its `why_not`, and "Deleting it would lose it for good, so Hoardini offers no delete
+  here. Copy it somewhere else first if you want the space back."; it never offers Clean up. Unknown areas have a
+  striped edge and **What is this?** Keep · Disposable · Move elsewhere · Look closer · ⋯, whose menu holds Never touch
+  with a line saying what it means; Escape closes the menu and returns focus to ⋯, and tabbing out closes it. An answer
+  calls `POST /api/locations/answer` (SRV-LOCATION-ANSWER) and rereads the reviews on screen, so the row shows the
+  answer's label and text; a refused answer shows the server's error inline. Look closer sends the look-closer run
+  (REVIEW-LOOK-CLOSER) to the chat, which opens: the chat posts `{path}` to `/api/review/look-closer` in place of
+  `/api/agent/run`, reads its stream like any run, and reloads the thread when it ends, since the server stored the
+  question under its own id.
 - **What is this? card:** Explore's What is this? or a `what_is` pill (UI-FOLLOW-UPS) opens the Review tab with a card at
   the top for that path: name, size and file count (`GET /api/index/children`), path, ▸, Show in Explorer, the area's
   `why_not` when the path is a Large area, the same answers, and ✕. After an answer it says "Saved. {the row's text}";
-  after Disposable it offers **Review it now** (a folder review).
+  after Disposable it offers **Review it now** (a folder review). For a drive, `C:\Users` or a profile folder it offers
+  no answers and says "A whole drive or profile takes no answer: what is inside is judged folder by folder."
 - **Folder review:** Clean up (chat card rows, `clean_up` pills, Explore, an area row, Review it now) calls
   `POST /api/review/run {path}` and shows that review in the Review tab: "← Back to the C: review", a header reading "Clean
   up" and the path with Ready to free and Review again, its cards ("Nothing new to clean in {path}" when there are none),
   "Already in the C: review" with the drive review's pending cards that hold items in the folder, and its Large areas.
+  Review again reads "Reviewing…" and is disabled while it runs; the last result stays on screen, and a failure shows
+  under the header.
 
 **Verification (manual):**
-1. Mock and page as in UI-LAYOUT step 1, at 1440 × 900 in Marshmallow.
-2. The header reads "Review of C:", "276 GB ready to free", the bar with a striped ready part, "Used 1.8 TB · Ready to free 276 GB · Free 62.0 GB of 1.9 TB" and "Built just now · index from 3 days ago"; the consent notice follows.
-3. What can go lists Build output (free 121 GB), Temp and Windows leftovers (free 94.5 GB: four Claude scratch sessions and WinGet), Caches (free 61.3 GB: CacheStorage 42.1 GB, uv 13.6 GB, pip, Chrome's Cache), Installers and archives in Downloads (up to 15.4 GB) and Send elsewhere (up to 11.2 GB).
-4. Untick covenant-agent's target in Build output: Ready to free reads 215 GB at once, `GET /api/proposals/{id}` shows it unticked with `touched: true`, and `GET /api/review` has `ready_bytes` of 215.5 GB. Tick it again: 276 GB. ▸ on that target lists its folders; Show in Explorer is recorded by `GET /api/mock/revealed`.
-5. Post `{"next_job":{"ms":2500}}` to `/api/mock` and hold Hold to delete on Build output: the sumo climbs down to the card in the Review tab (UI-MASCOT-JOBS); when the job ends the card reads "Deleted 4 items · freed 121 GB · details ▸", the Learned chip "4 items in C:\code — cleaned … ; 1 item you left unticked is kept" sits under it, then the follow-up "Build output · up to 6.2 GB" with llama.cpp\build; Ready to free reads 156 GB.
+1. Mock and page as in UI-LAYOUT step 1, at 1440 × 900 in Marshmallow (the mock builds its first review in the background, `MOCK_BUILD_MS`, 2.5 s by default).
+2. Right after the page opens the Review tab shows "Review of C:", "Building your review…", the used and free bar with no ready part, the consent notice and Apps you rarely use. Then the review: "359 GB ready to free", the bar with a striped ready part, "Used 1.8 TB · Ready to free 359 GB · Free 62.0 GB of 1.9 TB", "Built just now · index from 3 days ago" and the consent notice. The page made no request to `/api/copy-checks/waiting`, `/api/apps/rarely-used` or `/api/settings`.
+3. What can go lists, in this order: Build output (free 121 GB), Temp and Windows leftovers (free 94.5 GB: four Claude scratch sessions and WinGet), Caches (free 61.3 GB: CacheStorage 42.1 GB, uv 13.6 GB, pip, Chrome's Cache), Re-downloadable, verified (free 42.7 GB: the llama-3.3-70b GGUF "identical to lmstudio-community/Llama-3.3-70B-Instruct-GGUF on Hugging Face." and balenaEtcher "In winget as Balena.Etcher 2.1.7.", with no Copy line under either), Cleanups only Windows can do (free at least 23.9 GB; UI-SYSTEM-CLEANUP-CARD step 6), Folders you said can go (free 9.6 GB: `C:\code\based\runs`), Online-only (free 6.5 GB: Camera Roll 2019 and drone-2018.mp4, `synced`), Installers and archives in Downloads (up to 15.4 GB), Send elsewhere (up to 11.2 GB) and Compress in place (up to 7.5 GB: Ollama's `lib\ollama` "Windows compression would save about 2.0 GB (43% of it); …" and datalab's models, 1.2 GB).
+4. Untick covenant-agent's target in Build output: Ready to free reads 298 GB at once, `GET /api/proposals/{id}` shows it unticked with `touched: true`, and `GET /api/review` has `ready_bytes` of 298.2 GB. Tick it again: 359 GB. ▸ on that target lists its folders; Show in Explorer is recorded by `GET /api/mock/revealed`.
+5. Post `{"next_job":{"ms":2500}}` to `/api/mock` and hold Hold to delete on Build output: the sumo climbs down to the card in the Review tab (UI-MASCOT-JOBS); when the job ends the card reads "Deleted 4 items · freed 121 GB · details ▸", the Learned chip "4 items in C:\code — cleaned … ; 1 item you left unticked is kept" sits under it, then the follow-up "Build output · up to 6.2 GB" with llama.cpp\build; Ready to free reads 238 GB.
 6. Apps you rarely use lists Cyberpunk 2077 (Steam, 71.3 GB), Visual Studio Community 2022 (never run, 38.4 GB), HIP SDK Core, Visual Studio Build Tools 2022 and LLVM. Uninstall… on Visual Studio Community 2022 and Cancel: `GET /api/mock/uninstalled` is empty; again with Open the uninstaller: "The uninstaller is open." and its id is listed.
-7. Large areas shows 10 rows, Games (300 GB) first, and "Show all 21 · 11 more, …"; covenant-agent (95.0 GB) is unknown with the striped edge and What is this?; hiberfil.sys ends "→ Windows recreates it at boot; turning hibernation off removes it."
-8. Keep on covenant-agent: the row reads "yours" and "You keep this folder; it may still be moved or compressed."; `GET /api/memory` has a `user` row for it. Show all, then ⋯ and Never touch on .hipfire: "never touch", "Never touch this folder.", and a `protect` row.
-9. Look closer on llama.cpp: the chat shows "What is C:\code\llama.cpp? Look inside and tell me whether to keep it, delete it, or move it elsewhere.", the answer streams in, and the pill "Say what llama.cpp is" follows.
+7. Large areas shows 10 rows, Games (300 GB) first, and "Show all 20 · 10 more, …"; covenant-agent (95.0 GB) is unknown with the striped edge and What is this?; hiberfil.sys (35.1 GB) ends "→ Windows recreates it at boot; turning hibernation off removes it."; there is no row for `Windows\Temp` or `SoftwareDistribution\Download` (the Windows card has them). Show all: model.q4nx (21.0 GB, `C:\AI\.flm-scratch\…`) carries "only copy we know of", reads "Only copy we know of: no other file of this size on the indexed drives; not found on Hugging Face." and the no-delete line, and on hover offers Ask and Show in Explorer but no Clean up.
+8. Keep on covenant-agent: the row reads "yours" and "You keep this folder; it may still be moved or compressed."; `GET /api/memory` has a `user` row for it. Show all, then ⋯ and Never touch on .hipfire: "never touch", "Never touch this folder.", and a `protect` row. Open ⋯ on another unknown row and press Escape: the menu closes and ⋯ has the focus; open it again and press Tab: it closes.
+9. Type something in the chat box, then Look closer on llama.cpp: the chat shows "What is C:\code\llama.cpp? Look inside and tell me whether to keep it, delete it, or move it elsewhere.", the answer streams in, the pill "Say what llama.cpp is" follows, and the chat box still holds what was typed.
 10. Press that pill: the Review tab opens with the What is this? card for llama.cpp (24.8 GB, 4,333 files). Disposable: "Saved. You said this folder can go." and Review it now.
-11. On a fresh mock, untick one Caches item, then post `{"rebuild":true}` to `/api/mock`: within a second the review is the new one; Caches is still listed (touched) and four "Replaced by a newer review" lines follow the other cards.
-12. Press Review now: it reads "Reviewing…" and `GET /api/review` returns a new id.
-13. In the chat, Show hotspots, then Clean up on the code row: the Review tab shows "← Back to the C: review", "Clean up" C:\code, "Nothing new to clean in C:\code", Build output under "Already in the C: review", and the covenant-agent and llama.cpp areas. Back returns to the drive review.
-14. Restart the mock with `MOCK_NO_INDEX=1`: the Review tab shows "Hi, I'm Hoardini." with the scan's percentage, then the review once the fast scan ends.
-15. Repeat steps 2, 3, 7 and 10 in Marshmallow Night and in Rosewood (midtone), and at 430 px wide: text reads on every surface, nothing scrolls sideways, and Look closer opens the Chat tab.
-16. Against `hoardini serve --port 72xx --token dev` with a scratch `HOARDINI_DATA_DIR` and `--db` and an index of a scratch folder: the Review tab shows that folder's review from `POST /api/review/open`, a tick survives a reload, and What is this? on an unknown area updates its row.
-(2026-10-09: steps 1–15 pass against the mock in headless Chromium through Playwright; step 15 in Marshmallow, Marshmallow Night and Rosewood at 1440 and 430 px found no element wider than the window, and the Review tab's size badge and the "unknown" tag were changed to solid and neutral colors after Rosewood showed them faint.)
-(2026-10-09: step 16 passes against a debug `hoardini serve --no-refresh` with scratch data watching a scratch folder that holds a Rust `target`, a `node_modules` and a 1.5 GB file: the Review tab showed "Hi, I'm Hoardini." until the folder's fast scan ended, then "Review of …\root" with its Build output card; unticking node_modules survived a reload, with Ready to free 700 MB on screen and from the server. The folder sits under %TEMP%, so its one Large area was a known temp row and What is this? was answered from Explore's card for `mystery` instead, storing a `user` row; Look closer from that card streamed a scripted OpenAI-compatible model's answer into the chat through `/api/review/look-closer`, and the boundary sat above that question after the reload.)
+11. On a fresh mock, untick one Caches item, then post `{"rebuild":true}` to `/api/mock`: within a second the review is the new one; Caches is still listed, tagged "from the earlier review"; Ready to free reads 357 GB, the same as `GET /api/review`'s `ready_bytes`, which lists Caches with `carried: true`; nine "Replaced by a newer review" lines follow the other cards.
+12. Post `{"rebuild":{"ms":3000}}` to `/api/mock`: the header shows "Building a newer review… This one stays until it is ready." over the review on screen, and about 3 s later the new review replaces it.
+13. Press Review now: it reads "Reviewing…" and `GET /api/review` returns a new id.
+14. With the mock started with `MOCK_RUN_MS=1500`, open Explore, pick `code` in the folder tree and press Clean up: the Review tab shows "← Back to the C: review", "Clean up" C:\code, "Nothing new to clean in C:\code", Build output under "Already in the C: review", and the covenant-agent and llama.cpp areas. Review again reads "Reviewing…" and is disabled until the run ends, with the last result still on screen. Back returns to the drive review.
+15. Restart the mock with `MOCK_NO_INDEX=1`: the Review tab shows "Hi, I'm Hoardini." with the scan's percentage, then "Building your review…" once the fast scan ends, then the review.
+16. Repeat steps 2, 3, 7 and 10 in Marshmallow Night and in Rosewood (midtone), and at 430 px wide: text reads on every surface, nothing scrolls sideways, and Look closer opens the Chat tab.
+17. Against `hoardini serve --port 72xx --token dev` with a scratch `HOARDINI_DATA_DIR` and `--db` and an index of a scratch folder: the Review tab shows "Building your review…" from `POST /api/review/open`, then that folder's review once the status says the build ended; a tick survives a reload, and What is this? on an unknown area updates its row.
+(2026-10-09: steps 1–16 pass against the mock in headless Chromium through Playwright, with the built UI served and `/api` proxied to the mock; step 5's sumo trip was not watched. Step 16 ran in Marshmallow Night and Rosewood at 1440 px and in Marshmallow, Marshmallow Night and Rosewood at 430 px, with no element wider than the window; an operation's label in the Windows card was cut at 430 px and now wraps.)
+(2026-10-09: step 17 passes against a debug `hoardini serve --no-refresh` with scratch data, `TEMP` and `LOCALAPPDATA` pointed into the scratch folder so the watched folder is not temp, and a stub OpenAI-compatible model: "Hi, I'm Hoardini." until `PUT /api/volumes` watched the folder and its first scan ended, then "Building your review…", then "Review of …\root" with Build output (700 MB: a Rust `target` and a `node_modules`); unticking node_modules survived a reload (400 MB on screen and from the server), and Keep on the unknown `data.bin` area (1.5 GB) changed its row to "You keep this folder; …".)
 
 ### UI-REVIEW-ORDER: Card order and Ready to free
 **Applies to:** hoardini
@@ -203,17 +228,18 @@ Hoardini", one line, and Show hotspots, Show duplicates when there are duplicate
 asks `How has my free space changed over time?`) at the end of the scrollback, above the composer, whenever
 `GET /api/thread` reports `fresh`: on first launch, when the last message is more than 6 hours old, and right after Clear
 chat. They hide as soon as a question is sent. While the selected drive has no completed index (the review answers 404),
-the Review tab shows "Hi, I'm Hoardini." with the first scan's progress, until the review opens.
+the Review tab shows "Hi, I'm Hoardini." with the first scan's progress, then "Building your review…" until the first
+review is built (UI-REVIEW).
 
 **Verification (manual):**
 1. On a new scratch database with an index, open the UI: the Review tab shows the review header, and the chat shows Ask Hoardini with Show hotspots and Free space over time.
 2. Press Free space over time: the question `How has my free space changed over time?` is sent and the starters disappear.
 3. After the answer they stay hidden. Press Clear chat: the screen empties and the starters appear.
 4. Set every stored message's `created_ms` 7 hours back and reload: the starters show at the end of the scrollback.
-5. Start the mock with `MOCK_NO_INDEX=1` (UI-REVIEW step 14): "Hi, I'm Hoardini." and the scan's percentage show in the Review tab until the fast scan ends, then the review header.
+5. Start the mock with `MOCK_NO_INDEX=1` (UI-REVIEW step 15): "Hi, I'm Hoardini." and the scan's percentage show in the Review tab until the fast scan ends, then "Building your review…", then the review header.
 (2026-10-09: steps 1–4 passed in the same session as UI-CONTEXT-BOUNDARY, when this was the greeting card in the chat.)
-(2026-10-09: step 5 passes against the mock in headless Chromium: "Hi, I'm Hoardini." at 48%, then the review header about 10 s later.)
-(2026-10-09: steps 1–4 pass against the `hoardini serve` of UI-REVIEW step 16 with a scripted OpenAI-compatible model: Free space over time was sent and hid the starters, Clear chat brought them back, and with the 4 stored messages moved 7 hours back they showed again after a reload.)
+(2026-10-09: step 5 passes against the mock in headless Chromium: "Hi, I'm Hoardini." at 8%, then "Building your review…" once the fast scan ended, then the review header.)
+(2026-10-09: steps 1–4 pass against the `hoardini serve` of UI-REVIEW step 17 with its stub model: the starters showed beside the review header, Free space over time was sent and hid them, they stayed hidden after the answer, Clear chat brought them back, and after one more question and a reload they stayed hidden until the 4 stored messages were moved 7 hours back, when a reload showed them.)
 
 ### UI-CLEAR-HISTORY: Clear chat history deletes only the chat text
 **Applies to:** hoardini
@@ -223,7 +249,7 @@ the Review tab shows "Hi, I'm Hoardini." with the first scan's progress, until t
 
 **Verification (manual):**
 1. With a few messages, a saved memory, and a decided proposal, open Settings and press Clear chat history: the confirm step appears; Cancel leaves everything as it was.
-2. Press it again and confirm: "Cleared" shows, the chat is empty with the welcome-back card and no divider.
+2. Press it again and confirm: "Cleared" shows, and the chat is empty with its starters (UI-WELCOME-BACK) and no divider.
 3. The Memory tab still lists the memory, `GET /api/proposals/<id>` still returns the proposal, and the next question starts a normal chat.
 (2026-10-09: steps 1–3 pass with the section rendered in the Settings tab for the check; the memory was read back through `GET /api/memory` and the proposal row through the database.)
 
@@ -330,7 +356,7 @@ He then climbs back up, deflating on the way if space was freed, and in the head
 **Verification:** manual
 **Depends on:** ACT-FOLLOW-UP (server side; the follow-up proposal and `parent_id` / `follow_up_id`)
 
-A proposal card whose proposal was declined, or whose job ended (done, partial, failed, or cancelled), collapses to one line: the kind's verb (Deleted, Archived, Compressed, Deduplicated, Cleaned up, Made online-only), the item count, and the bytes freed, e.g. "Deleted 12 items · freed 3.4 GB · details ▸"; a decline reads "Declined · N items", and a review card a newer review replaced (`superseded`, REVIEW-SUPERSEDE) reads "Replaced by a newer review · N items". Clicking it expands the read-only item list with each item's outcome, and "hide ▴" collapses it again. Pending and running cards stay full size. When the proposal has a `follow_up_id`, the follow-up's full card renders directly under the collapsed card in the same chat slot; chains repeat. The UI refetches the proposal when its job reaches a terminal state, and a reloaded thread renders the same chain. Item rows have ▸ for a folder's ItemTree (UI-ITEM-TREE) and Show in Explorer until the item is done, and show a muted "small" tag when `small` is true, a muted "Noted: ..." line from `memory_note`, and a muted "Copy: ..." line from `copy_note` (EVID-COPY-CHECK); the "Capped to ... by a safety rule" line appears for a `review` or `keep` cap, and for any other cap only when no Copy line explains it; the initial ticks are the server's `selected` values, and a review card saves each tick as it changes (UI-REVIEW). A pending card with nothing ticked is headed "up to X", the size of what it could free. Approving or declining a follow-up card or a review card (one with a `review_id`, REVIEW-BUILD) does not report back to the model; the model sees it through the open-proposals line.
+A proposal card whose proposal was declined, or whose job ended (done, partial, failed, or cancelled), collapses to one line: the kind's verb (Deleted, Archived, Compressed, Deduplicated, Cleaned up, Made online-only), the item count, and the bytes freed, e.g. "Deleted 12 items · freed 3.4 GB · details ▸"; a decline reads "Declined · N items", and a review card a newer review replaced (`superseded`, REVIEW-SUPERSEDE) reads "Replaced by a newer review · N items". Clicking it expands the read-only item list with each item's outcome, and "hide ▴" collapses it again. Pending and running cards stay full size. When the proposal has a `follow_up_id`, the follow-up's full card renders directly under the collapsed card in the same chat slot; chains repeat. The UI refetches the proposal when its job reaches a terminal state, and a reloaded thread renders the same chain. Item rows have ▸ for a folder's ItemTree (UI-ITEM-TREE) and Show in Explorer until the item is done, and show a muted "small" tag when `small` is true, a muted "Noted: ..." line from `memory_note`, and a muted "Copy: ..." line from `copy_note` (EVID-COPY-CHECK) unless the item's reason already says it (as Re-downloadable and Online-only reasons do); the "Capped to ... by a safety rule" line appears for a `review` or `keep` cap, and for any other cap only when no Copy line explains it; the initial ticks are the server's `selected` values, and a review card saves each tick as it changes (UI-REVIEW). A pending card with nothing ticked is headed "up to X", the size of what it could free. Approving or declining a follow-up card or a review card (one with a `review_id`, REVIEW-BUILD) does not report back to the model; the model sees it through the open-proposals line.
 
 **Verification (manual):**
 1. In `ui/`, run `MOCK_PORT=7261 MOCK_IDLE=1 bun run mock` and Vite with its `/api` proxy pointed at it; ask "what is in lmstudio".
@@ -358,7 +384,11 @@ X" while a ticked operation has no estimate. Under the list it says Windows asks
 a ticked operation needs it; when restore points are ticked it says "Deleted restore points cannot be brought back.", and
 when the Recycle Bin is ticked that emptying it is permanent; with either ticked, approving needs "Hold to clean up"
 (the `HoldButton` of ACT-DELETE-CONFIRM), otherwise one click on "Clean up". The `propose_system_cleanup` tool call
-renders this card in the chat like the other `propose_*` tools.
+renders this card in the chat like the other `propose_*` tools. An operation's label wraps rather than being cut. The
+review's `windows` card (REVIEW-BUILD) uses the same rows under its own title; its `leftovers` operation ("Windows temp
+files, update downloads, crash dumps and logs") shows the server's explanation (one administrator prompt, only files
+untouched for a day go, files in use and the folders themselves stay) and, until it is done, "Show the N places it
+clears", which lists each of its `parts` with its path, size and Show in Explorer.
 
 **Verification (manual):**
 1. In `ui/`, run the mock (`MOCK_IDLE=1 bun run mock`) and Vite with its `/api` proxy pointed at it; ask "windows cleanup".
@@ -366,13 +396,16 @@ renders this card in the chat like the other `propose_*` tools.
 3. The footer says Windows asks for administrator permission once, and the button is "Clean up".
 4. Tick restore points: the footer adds "Deleted restore points cannot be brought back." and the button becomes "Hold to clean up"; a click leaves the card pending.
 5. Untick it and click "Clean up": the job runs and the card collapses to "Cleaned up 3 items · freed 12.6 GB · details ▸"; "details ▸" shows "done" on the three approved rows.
+6. In the Review tab (UI-REVIEW step 3) the Windows card reads "Cleanups only Windows can do · free at least 23.9 GB" with three ticked operations: "Windows temp files, update downloads, crash dumps and logs" (6.4 GB, its explanation and "… in 5 places"), the component store (size unknown, "WinSxS holds 19.2 GB …") and hibernation (17.5 GB, "hiberfil.sys is 35.1 GB; the reduced size is about 17.6 GB (a fifth of the RAM)"). "Show the 5 places it clears" lists `SoftwareDistribution\Download\4b1f9c0e7d2a6f31` 3.4 GB, `LiveKernelReports\WATCHDOG` 1.1 GB, a `Windows\Temp` folder 922 MB, `WER\ReportArchive` 614 MB and `Logs\CBS\CbsPersist_20260912.cab` 410 MB; Show in Explorer on the first is recorded by `GET /api/mock/revealed`. At 430 px the labels wrap and the paths keep their ends.
+7. Click "Clean up" (one click; nothing irreversible is ticked): the card collapses to "Cleaned up 3 items · freed 23.9 GB · details ▸", and details shows the leftovers row "done: 2,412 files deleted (6.4 GB); left: 3 in use, 41 newer than a day, 0 could not be deleted" with no places list.
 (2026-10-09: steps 1–5 checked against the mock in headless Chromium through Playwright; ticking the Recycle Bin was not checked.)
+(2026-10-09: steps 6 and 7 pass against the mock in headless Chromium through Playwright in the Review tab at 1440 px; step 6's wrapping was looked at in screenshots at 430 px in Marshmallow, Marshmallow Night and Rosewood.)
 
 ### UI-SETTINGS-AUTOSAVE: Settings save themselves; one Rescan now control
 **Applies to:** hoardini
 **Verification:** manual
 
-The Settings tab shall have no Save button. A toggle or switch saves when it changes; a text field saves when it loses focus or 500 ms after the last keystroke (`drawer/autosave.tsx`). A "Saved" tick appears beside the control that saved, or the server's error appears inline under it and the control shows the stored value again. The tab holds the Fast / Lean switch ("Slower, stays out of your way" / "Finishes sooner, uses more CPU"; SRV-SETTINGS `index_speed`), the read-only index size, the Online checks switches (Hugging Face, winget; turning one on or off also records that the user answered, SRV-SETTINGS `online_checks`), and Clear chat history; the threshold, worker, memory-cap, redaction, and web-search settings are gone. The AI tab's provider form has no "Redact paths" toggle (AGENT-REDACT). The header shows one small "Rescan now" button while the index is idle, which runs a refresh at the switch's speed (SRV-ONE-REFRESH); while a refresh runs, its progress bar takes the button's place, with the leaf icon marking Lean, and there is no Scan fast button.
+The Settings tab shall have no Save button. A toggle or switch saves when it changes, one write at a time so the last reply shown is the last write's; a text field saves when it loses focus or 500 ms after the last keystroke (`drawer/autosave.tsx`). A "Saved" tick appears beside the control that saved, or the server's error appears inline under it and the control shows the stored value again. The tab holds the Fast / Lean switch ("Slower, stays out of your way" / "Finishes sooner, uses more CPU"; SRV-SETTINGS `index_speed`), the read-only index size, the Online checks switches (Hugging Face, winget; turning one on or off also records that the user answered, SRV-SETTINGS `online_checks`), and Clear chat history; the threshold, worker, memory-cap, redaction, and web-search settings are gone. The AI tab's provider form has no "Redact paths" toggle (AGENT-REDACT). The header shows one small "Rescan now" button while the index is idle, which runs a refresh at the switch's speed (SRV-ONE-REFRESH); while a refresh runs, its progress bar takes the button's place, with the leaf icon marking Lean, and there is no Scan fast button.
 
 **Verification (manual):**
 1. Start `hoardini serve --port 72xx --ui-dir ui/dist` against a scratch `HOARDINI_DATA_DIR` whose meta `indexed_volumes` points at a small folder, and open the printed URL.
@@ -395,16 +428,19 @@ UI-REVIEW) asks: "Check big files against Hugging Face and winget?", says how ma
 file names and package or repo names and never file contents or hashes (the published hash is fetched and compared on
 this PC), and that checks against the user's own copies, git, and cloud sync always run. Allow turns both services on,
 Not now turns both off, and either records the answer (`asked` true) so the notice never returns; Choose in Settings opens
-the Settings tab, whose switches also count as an answer. The component takes an optional `waiting` count. The notice
-polls the waiting count every 30 s while unanswered.
+the Settings tab, whose switches also count as an answer. The review passes its `online` (`{asked, waiting}`,
+REVIEW-TRIGGER), so the notice makes no request of its own; it reads the settings again once the Settings drawer was used,
+and an answer marks the reviews on screen as asked. Without `online` it reads the settings and polls
+`GET /api/copy-checks/waiting` every 30 s while unanswered.
 
 **Verification (manual):**
 1. In `ui/`, run the mock on a free port (`MOCK_PORT=7343 MOCK_IDLE=1 bun run mock`) and Vite with its `/api` proxy pointed at it; open the page.
-2. In the Review tab, under the header, the notice shows "Check big files against Hugging Face and winget?" and "4 big files".
+2. In the Review tab, under the header, the notice shows "Check big files against Hugging Face and winget?" and "4 big files"; the page made no request to `/api/copy-checks/waiting` or `/api/settings`.
 3. Choose in Settings: the Settings tab shows Online checks with Hugging Face and winget off. Turn Hugging Face on: "Saved" appears, `GET /api/settings` shows `asked` true and only `huggingface` on, and after a reload the notice is gone.
 4. Reset the mock (`PUT /api/settings {"online_checks": {"asked": false, ...}}`), reload, press Not now: the notice goes and both services are off with `asked` true. Reset again and press Allow: both are on.
 (2026-10-09: steps 1-4 pass, headless Chromium (Playwright) against the mock on port 7343 and Vite on 5293.)
 (2026-10-09: step 2 rechecked in the Review tab against the mock; steps 3 and 4 were not run again.)
+(2026-10-09: steps 2–4 pass against the mock in headless Chromium through Playwright with the notice reading the review's `online`: no request to `/api/copy-checks/waiting` or `/api/settings` at load, and turning Hugging Face on in Settings hid the notice as soon as the drawer closed.)
 
 ### UI-ONLINE-ONLY-CARD: The online-only card
 **Applies to:** hoardini
@@ -503,7 +539,7 @@ same data. The `range_ms` line is not shown in the card's result text or its raw
 
 When a `top_dirs`, `top_files` or `changes` call has `data` (AGENT-TOOL-DATA: live from the `tool_data` event, after a reload from the thread's tool message), the chat shall show a card in place of the tool chip; a call without data (an older result, an error, no index) keeps the chip.
 - **Folders and files cards:** a title ("Largest folders" or "Largest files") with the scope (the `under` folder, or "on your drives") and the files card's filters, the index age ("as of 3 days ago"), and ranked rows: name, the part of the path below the scope, size, a size bar relative to the largest row, and the file count (folders, with "some unreadable" when denied) or the last-modified date (files, last opened as the tooltip). The first 8 rows show, then "Show all N"; a footer "+N more · X" comes from `more`.
-- **Map tab:** the folders card has List and Map tabs and opens on Map when the call's `view` is `map` (AGENT-TOOL-DATA), else on List. Map draws the card's outermost rows (a row under another listed row would count twice) as a treemap (UI-TREEMAP-LAYOUT), plus `more` as one dotted block when the call was one level deep, each block with its name and size in the theme's colors; clicking a block shows its name, size and share with Ask, Clean up and Show in Explorer. **Open in Explore** shows when the shell provides an `onOpenExplore(path)` handler through `ExploreLinkContext` (`ui/src/explore/context.ts`), as the app does (UI-LAYOUT); it opens the Explore tab on the picked block, else the card's `under`, else the drive of its first row.
+- **Map tab:** the folders card has List and Map tabs (arrow keys move between them, one tab stop, each controls the card's panel) and opens on Map when the call's `view` is `map` (AGENT-TOOL-DATA), else on List. Map draws the card's outermost rows (a row under another listed row would count twice) as a treemap (UI-TREEMAP-LAYOUT), plus `more` as one dotted block when the call was one level deep, each block with its name and size in the theme's colors; clicking a block shows its name, size and share with Ask, Clean up and Show in Explorer. **Open in Explore** shows when the shell provides an `onOpenExplore(path)` handler through `ExploreLinkContext` (`ui/src/explore/context.ts`), as the app does (UI-LAYOUT); it opens the Explore tab on the picked block, else the card's `under`, else the drive of its first row.
 - **Changes card:** the headline is the free-space delta ("C: has 127 GB more free since 2:14 PM", "less free" when it fell; a time of day for a refresh earlier today, else the date), then the free-space chart (UI-CHANGES-CHART), "Freed X · Grew Y" (Freed sums removed and shrank rows, Grew sums grew and new rows, each row counted once with its listed ancestors), a Freed section (removed and shrank) and a Grew section (grew and new), each row with its signed delta, a bar, and "before → after", "new" or "removed". The volume root's own row is hidden, and a row under another row of the same section sits indented beneath it. Removed rows are struck through and have no buttons.
 - **Row buttons** (shown on hover or keyboard focus, over the row's right end): ▸ opens the folder's ItemTree inline (UI-ITEM-TREE); **Ask** sends "What is {path} and is it safe to remove?"; **Clean up** (folders) opens a review of that folder in the Review tab (UI-REVIEW) and sends nothing; **Show in Explorer** (SRV-REVEAL). Ask is disabled while a run streams.
 - A small **raw** toggle in the card's header shows the call's arguments and the tool text.
@@ -513,7 +549,7 @@ When a `top_dirs`, `top_files` or `changes` call has `data` (AGENT-TOOL-DATA: li
 2. Press Show hotspots. A "Largest folders on your drives" card shows 8 rows with bars and file counts and "Show all 10"; Windows says "some unreadable". A changes card reads "C: has 127 GB more free since 2:14 PM" with the chart and "Freed 124 GB · Grew 7.3 GB"; the `C:\` row is not listed; the Hugging Face model folder sits indented under `.cache` and the removed `deepseek` file under `models`, both struck through. No chip for `top_dirs`, `changes` or `suggest_next` shows.
 3. Hover the `code` row: Ask, Clean up and Show in Explorer appear over the row's end and its file count hides. Press ▸: the ItemTree opens under it.
 4. Press raw on the folders card: the arguments and the tool text show; press it again to hide them.
-5. Press Clean up on the code row: the Review tab shows the review of C:\code (UI-REVIEW step 13) and the chat sends nothing. Ask "What's inside C:\code?", then Ask on the covenant-agent row of the new folders card: it sends "What is C:\code\covenant-agent and is it safe to remove?".
+5. Press Clean up on the code row: the Review tab shows the review of C:\code (UI-REVIEW step 14) and the chat sends nothing. Ask "What's inside C:\code?", then Ask on the covenant-agent row of the new folders card: it sends "What is C:\code\covenant-agent and is it safe to remove?".
 6. Ask "List the biggest files": the files card shows 8 rows with "modified" dates, "Show all 12", and "+3,184 more · 212 GB".
 7. Reload: the same cards come back from the stored thread.
 8. Repeat steps 2 and 6 with a dark theme (Marshmallow Night) and at 430 px wide: text, bars, and the green and red deltas stay readable, and rows do not overflow.
@@ -529,7 +565,7 @@ When a `top_dirs`, `top_files` or `changes` call has `data` (AGENT-TOOL-DATA: li
 **Applies to:** hoardini
 **Verification:** manual
 
-`ItemTree` (`ui/src/components/ItemTree.tsx`; props `path`, optional `rootSize`, optional `actions(row)` slot) shall show a folder's children inline from `GET /api/index/children` (SRV-INDEX-CHILDREN), loading a level only when it is opened. Each row has ▸ when it has children, its name (full path as the tooltip), a size bar and its percentage of the parent (of `rootSize` at the top level, else of the folder), its file count, its last-modified date, the caller's buttons, and **Show in Explorer** (`POST /api/reveal`); a refusal shows inline on the row ("not found", "not on a watched drive") and keeps the row's buttons up. The buttons appear on hover or keyboard focus over the row's right end. Nested levels indent with a guide line. Under the rows come "N small files · X" when the folder has folded small files and "+N more · X" past 50 rows, which loads the rest when pressed; an empty folder says "Empty" and a failed load says why. As the card narrows, the date drops out first, then the file count, then the bar. Optional `selected`, `trail`, `onSelect(row)` and `onOpen(row)` make it a picker: with `onSelect` a row's name is a button that selects it (a double-click calls `onOpen`), the row whose path is `selected` is highlighted and scrolled into view, and the folders above it open by themselves, found by path or by `trail` (the folders on the way as the server spells them, since the profile shows as `~`). The chat cards (UI-TOOL-CARDS), the Explore view (UI-EXPLORE), the folder items of every proposal card (UI-PROPOSAL-COLLAPSE), and the review's Large areas and What is this? card (UI-REVIEW) use it.
+`ItemTree` (`ui/src/components/ItemTree.tsx`; props `path`, optional `rootSize`, optional `actions(row)` slot) shall show a folder's children inline from `GET /api/index/children` (SRV-INDEX-CHILDREN), loading a level only when it is opened. Each row has ▸ when it has children, its name (full path as the tooltip), a size bar and its percentage of the parent (of `rootSize` at the top level, else of the folder), its file count, its last-modified date, the caller's buttons, and **Show in Explorer** (`POST /api/reveal`); a refusal shows inline on the row ("not found", "not on a watched drive") and keeps the row's buttons up. The buttons appear on hover or keyboard focus over the row's right end. Nested levels indent with a guide line. Under the rows come "N small files · X" when the folder has folded small files and "+N more · X" past 50 rows, which loads up to 1,000 rows (the server's cap, SRV-INDEX-CHILDREN) when pressed; past that it says "The biggest 1,000 are listed · N more · X". An empty folder says "Empty" and a failed load says why. As the card narrows, the date drops out first, then the file count, then the bar. Optional `selected`, `trail`, `onSelect(row)` and `onOpen(row)` make it a picker: with `onSelect` a row's name is a button that selects it (a double-click calls `onOpen`), the row whose path is `selected` is highlighted and scrolled into view, and the folders above it open by themselves, found by path or by `trail` (the folders on the way as the server spells them, since the profile shows as `~`). The chat cards (UI-TOOL-CARDS), the Explore view (UI-EXPLORE), the folder items of every proposal card (UI-PROPOSAL-COLLAPSE), and the review's Large areas and What is this? card (UI-REVIEW) use it.
 
 **Verification (manual):**
 1. Against the mock (UI-TOOL-CARDS step 1), press Show hotspots, then ▸ on `code` in the folders card.
@@ -578,12 +614,12 @@ Test: `specs/ui/tests/treemap-layout.test.ts`.
 **Verification:** manual
 
 `ExploreView` (`ui/src/explore/ExploreView.tsx`; props `root` (the drive or folder it opens on), `onAsk(text)`, `onCleanUp(path)`, optional `onWhatIsThis(path)` and `focus` (a path to open, from "Open in Explore" or an `explore` pill)) shall show one folder at a time in three linked panes as the Explore home tab (UI-LAYOUT), where the shell mounts it with the selected drive as `root`, the path of "Open in Explore" or an `explore` pill as `focus`, `onAsk` sending to the chat (which opens), `onCleanUp` opening the folder's review (UI-REVIEW) and `onWhatIsThis` opening the What is this? card in the Review tab:
-- **Header:** breadcrumbs from the drive root (SRV-INDEX-MAP `ancestors`), each a button; **Up** to the folder above; a switch between **What Hoardini knows** (the default) and **File type**, remembered per viewer; a legend; and "{size} · N blocks, smaller than X merged" (or "the 5,000 biggest blocks" when the map is capped).
-- **Treemap:** a canvas drawing `GET /api/index/map` for the folder at the canvas size (refetched on zoom and on a resize past 64 px), laid out by UI-TREEMAP-LAYOUT with folder names and sizes in name strips, and names (and sizes, room allowing) on blocks big enough. By knowledge, a block is green when proposed, amber for review, grey for keep (lighter) and system (darker), blue for the user's data, and striped when unknown; a folder's strip is tinted by its own tag; merged "N more" blocks are dotted. By file type, files take the 8 biggest types of the `root` folder in a fixed order (dataviz categorical steps, light or dark by the theme), so a type keeps its color as you zoom; other files, folders and small files are grey. Colors come from the theme's CSS variables and follow a theme change at once; labels read at 4.5:1 (UI-THEME-CONTRAST). Hover shows a tooltip (name, path, size, share, files, tag). Click selects; double-click or Enter opens a folder (or a merged block's folder); Backspace or Escape goes up; arrow keys move between neighbors (Alt+arrows to the parent or first child).
+- **Header:** breadcrumbs from the drive root (SRV-INDEX-MAP `ancestors`), each a button; **Up** to the folder above; a switch between **What Hoardini knows** (the default) and **File type**, remembered per viewer (a radio group: arrow keys switch it, one tab stop); a legend; and "{size} · N blocks, smaller than X merged" (or "the 5,000 biggest blocks" when the map is capped).
+- **Treemap:** a canvas drawing `GET /api/index/map` for the folder at the canvas size (refetched on zoom and on a resize past 64 px), laid out by UI-TREEMAP-LAYOUT with folder names and sizes in name strips, and names (and sizes, room allowing) on blocks big enough. By knowledge, a block is green when proposed, amber for review, grey for keep (lighter) and system (darker), blue for the user's data, and striped when unknown; a folder's strip is tinted by its own tag; merged "N more" blocks are dotted. By file type, files take the 8 biggest types of the `root` folder in a fixed order (dataviz categorical steps, light or dark by the theme), so a type keeps its color as you zoom; other files, folders and small files are grey. Colors come from the theme's CSS variables and follow a theme change at once; labels read at 4.5:1 (UI-THEME-CONTRAST). The canvas is one tab stop announced as an application ("treemap"). Hover shows a tooltip (name, path, size, share, files, tag). Click selects; double-click or Enter opens a folder (or a merged block's folder); Backspace or Escape goes up; arrow keys move between neighbors (Alt+arrows to the parent or first child).
 - **Folders:** ItemTree (UI-ITEM-TREE) of the same folder at full width, with Zoom in on folder rows.
-- **By type:** `GET /api/index/types` for the folder: swatch, extension, size, a bar, and its identity (the file-type row's text, else app and use, else the category), else the file count and **What is this?**, which asks the chat "What are .{ext} files?". Small files are one row. Clicking a type dims every block but its files (small files: the small blocks); Clear undoes it.
+- **By type:** `GET /api/index/types` for the folder: swatch, extension, size, a bar, and its identity (the file-type row's text, else app and use, else the category), else the file count and **What is this?**, which asks the chat "What are .{ext} files?". Small files are one row. Clicking a type dims every block but its files (small files: the small blocks); Clear undoes it. When the map fails to load, it says "Nothing to list: the folder did not load." rather than loading forever.
 - **Linking:** selecting a block, a tree row or a type selects in the other panes: the tree opens down to the selected block and marks it, the selected file's type row is marked, and the map outlines the selection. A zoom selects the folder it opened; Up selects the folder it came from.
-- **Selection bar:** name, path, size, share of the view, files, and the tag (state, label, and the verdict when it is safe or redownload), with **Clean up** (folders; calls `onCleanUp`), **What is this?** (when `onWhatIsThis` is given), **Ask Hoardini** (`onAsk("What is {path}?")`), **Show in Explorer** (SRV-REVEAL) and **Zoom in** (folders below the view, merged blocks).
+- **Selection bar:** name, path, size, share of the view, files, and the tag (state, label, and the verdict when it is safe or redownload), with **Clean up** (folders; calls `onCleanUp`), **What is this?** (when `onWhatIsThis` is given, and not for a drive, `C:\Users` or a profile folder, which take no answer), **Ask Hoardini** (`onAsk("What is {path}?")`), **Show in Explorer** (SRV-REVEAL) and **Zoom in** (folders below the view, merged blocks).
 - **Focus:** the selection (else the view's folder) is sent to `PUT /api/explore/focus` 600 ms after it settles and cleared when the view unmounts (SRV-EXPLORE-FOCUS). A `focus` that is a file opens its folder with the file selected.
 - **Narrow:** below 768 px of width the panes stack: selection bar, treemap (22rem), folders, types, and the view scrolls.
 
@@ -599,28 +635,31 @@ Test: `specs/ui/tests/treemap-layout.test.ts`.
 9. Repeat step 2 in Marshmallow Night, and at 430 px wide in both: the panes stack, labels and the selection bar's buttons read, and nothing scrolls sideways.
 10. Against `hoardini serve` on a scratch index: the map and types load, a selection reaches `explore_focus`, and a chat question after it carries "The user is looking at … in Explore." (AGENT-PROMPT-CONTEXT).
 11. In the app at 1440 × 900: press "Explore AppData\Local" (UI-FOLLOW-UPS step 6): the breadcrumbs read C: › Users › josha › AppData › Local and `GET /api/mock/focus` returns `~\AppData\Local`. Pick Docker in the tree and press What is this?: the Review tab shows the What is this? card for `~\AppData\Local\Docker`, and the focus is now null. Back in Explore, pick Google and press Ask Hoardini: the chat panel sends "What is ~\AppData\Local\Google?"; press Clean up: the Review tab shows the review of that folder.
+12. In the app at 1440 × 900 against the mock: with C: selected the bar has Ask Hoardini but no What is this?. Focus What Hoardini knows and press Arrow Right: File type is checked and focused. Open Users › josha in the tree, pick AppData, press What is this? and Keep: the card shows "~\AppData holds other folders; answer for a folder inside it" (the mock refuses containers as the server does).
 (2026-10-09: steps 1–9 pass against the mock in headless Chromium through Playwright, on a scratch page mounting ExploreView, with no element past 430 px in step 9. Step 10 passes against a release `hoardini serve` on a scratch folder: the map and types came from its index, selecting `models` in the tree stored the focus, and a chat run against a stub OpenAI-compatible model sent "The user is looking at ~\…\hdata\models in Explore." in its system message. On a copy of a real 1.6 TB C: index, the map of C: (5,000 blocks) answered in 0.35 s and its types in 0.2 s.)
 (2026-10-09: step 11 passes in the app against the mock in headless Chromium; the focus went from `~\AppData\Local` to null when What is this? switched to the Review tab.)
+(2026-10-09: step 12 passes in the app against the mock in headless Chromium through Playwright.)
 
 ### UI-LEARNED-CHIP: What Hoardini learned shows as a chip with Undo
 **Applies to:** hoardini
 **Verification:** manual
 
-`LearnedChip` (`ui/src/components/LearnedChip.tsx`; props `text`, optional `url`, `onUndo`, optional `onPin`, optional `onConfirm`) shall show one line: "learned", the text (the full text as its tooltip), the source link's host when there is a `url`, and its buttons. Undo turns it into "undone" with the text struck through and no buttons; Confirm turns the label into "learned · confirmed"; Pin toggles "learned · pinned" and Unpin. A failed call shows its error inline and keeps the buttons.
+`LearnedChip` (`ui/src/components/LearnedChip.tsx`; props `text`, optional `url`, `onUndo`, optional `onPin`, optional `onConfirm`, optional `confirmed`, optional `pinned`) shall show one line: "learned", the text (the full text as its tooltip), the source link's host when there is a `url`, and its buttons. Undo turns it into "undone" with the text struck through and no buttons; Confirm turns the label into "learned · confirmed"; Pin toggles "learned · pinned" and Unpin. A chip whose row is already confirmed (`confirmed`) starts as "learned · confirmed" with no Confirm, and one whose row is pinned (`pinned`) as "learned · pinned" with Unpin, so a reload shows what the user did. A failed call shows its error inline and keeps the buttons.
 - **After a job:** a finished proposal card (collapsed or opened, UI-PROPOSAL-COLLAPSE) shows one chip per entry of the proposal's `learned` (SRV-LEARNED) directly under it, above any follow-up card, with Pin (`PUT /api/memory/{id}` `pinned`) and Undo (`DELETE /api/proposals/{id}/learned/{memory_id}`).
 - **After a web search:** a `web_search` call whose `data` is `{kind: "learned"}` (AGENT-WEB-LEARN; live from `tool_data`, after a reload from the thread) shows its chip under the search's tool chip, with the source link, Confirm (`POST /api/memory/{id}/confirm`) and Undo (`DELETE /api/memory/{id}`).
 
 **Verification (manual):**
 1. In `ui/`, run `MOCK_PORT=72xx MOCK_IDLE=1 bun run mock` and Vite with its `/api` proxy pointed at it; open it at 1000 × 900.
 2. Post `{"next_job": {"ms": 1200}}` to `/api/mock`, ask "what is in lmstudio" and hold to delete. When the job ends the card reads "Deleted 12 items · freed 53.6 GB · details ▸", and directly under it, above the follow-up card, a chip reads "learned 12 items in ~\.lmstudio — cleaned 53.6 GB on <MM-DD>; 2 items you left unticked are kept" with Pin and Undo.
-3. Press Pin: the label becomes "learned · pinned" and the row (source `job:<id>`) is pinned in `GET /api/memory`.
+3. Press Pin: the label becomes "learned · pinned" and the row (source `job:<id>`) is pinned in `GET /api/memory`. Reload: the chip still reads "learned · pinned" with Unpin.
 4. Press Undo: the chip reads "undone" with the text struck through and no buttons; `GET /api/proposals/{id}` has `learned: []` and the row is gone. After a reload no chip shows.
 5. Ask "what is ~\.hipfire": under the web search chip a chip reads "learned ~\.hipfire: model cache (hipfire)." with an `example.com` link, Confirm and Undo.
-6. Press Confirm: the label becomes "learned · confirmed" and the row is source `user` and pinned. After a reload the chip is back under the web search chip.
+6. Press Confirm: the label becomes "learned · confirmed" and the row is source `user` and pinned. After a reload the chip is back under the web search chip, still "learned · confirmed", with no Confirm.
 7. Press Undo: "undone", and the row is gone from `GET /api/memory`.
 8. At 430 px wide in a dark theme each chip stays on one line, the text cut short with the full text as its tooltip.
 9. Against `hoardini serve` with a scratch `HOARDINI_DATA_DIR` and `--db`, a scripted OpenAI-compatible model and a SearXNG stand-in: a model's `propose_delete` of two `.log` files and one other file in a scratch folder, approved with the other file unticked, collapses to "Deleted 2 items · freed 16.0 KB" with the chip ".log files in ~\...\work — cleaned 16.0 KB on <MM-DD>; 1 item you left unticked is kept", still there after a reload; a `web_search` about `~\.hipfire` shows its chip live and after a reload; Confirm makes the row `user`-sourced; Undo on the job chip leaves `learned: []` and no `job:` row.
 (2026-10-09: steps 1–8 pass against the mock in headless Chromium through Playwright, in the default theme and at 430 px with a dark color scheme; step 9 passes against `hoardini serve` on a scratch folder with a scripted model and search stand-in, and the learning request had no tools, no profile name, and the results inside the untrusted fence.)
+(2026-10-09: steps 3, 5, 6 and 7 pass against the mock in headless Chromium through Playwright, step 3 on the Review tab's Build output card after UI-REVIEW step 5: after a reload the pinned job chip read "learned · pinned" with Unpin, and the confirmed web chip "learned · confirmed" with no Confirm.)
 
 ### UI-DRIVE-SELECTOR: The header shows one drive, picked from a menu
 **Applies to:** hoardini

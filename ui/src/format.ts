@@ -61,6 +61,12 @@ export function samePath(a: string, b: string): boolean {
   return a.replace(/\\+$/, "").toLowerCase() === b.replace(/\\+$/, "").toLowerCase();
 }
 
+// An answer there would cover everything inside, so the server takes none for a drive, Users or a profile.
+export function isRootFolder(path: string): boolean {
+  const p = path.trim().replace(/\\+$/, "");
+  return /^[A-Za-z]:$/.test(p) || p === "~" || /^[A-Za-z]:\\Users(\\[^\\]+)?$/i.test(p);
+}
+
 export function isUnder(parent: string, child: string): boolean {
   const p = parent.replace(/\\+$/, "").toLowerCase();
   const c = child.toLowerCase();

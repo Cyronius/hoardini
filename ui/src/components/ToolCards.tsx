@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import type { CardData, ChangeRow, ChangesData, FilesData, FoldersData, More } from "../api/types";
 import { useExploreLink } from "../explore/context";
 import { useExplorePalette } from "../explore/palette";
@@ -208,18 +208,33 @@ function CardMap({ data, onAsk }: { data: FoldersData; onAsk: Ask }) {
 function FoldersBody({ data, onAsk }: { data: FoldersData; onAsk: Ask }) {
   const [all, setAll] = useState(false);
   const [tab, setTab] = useState<"list" | "map">(data.view === "map" ? "map" : "list");
+  const uid = useId();
   const max = Math.max(1, ...data.items.map((i) => i.size));
   const shown = all ? data.items : data.items.slice(0, SHOWN);
   if (data.items.length === 0) return <p className="text-[length:var(--fs-sm)] text-muted">No subfolders.</p>;
   return (
     <>
-      <div role="tablist" aria-label="Show as" className="mb-1 flex gap-0.5 text-[length:var(--fs-xs)] font-bold">
+      <div
+        role="tablist"
+        aria-label="Show as"
+        className="mb-1 flex gap-0.5 text-[length:var(--fs-xs)] font-bold"
+        onKeyDown={(e) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+          e.preventDefault();
+          const to = e.key === "Home" ? "list" : e.key === "End" ? "map" : tab === "list" ? "map" : "list";
+          setTab(to);
+          document.getElementById(`${uid}-${to}`)?.focus();
+        }}
+      >
         {(["list", "map"] as const).map((t) => (
           <button
             key={t}
+            id={`${uid}-${t}`}
             type="button"
             role="tab"
             aria-selected={tab === t}
+            aria-controls={`${uid}-panel`}
+            tabIndex={tab === t ? 0 : -1}
             className={`rounded-full px-2.5 py-0.5 ${tab === t ? "bg-brass/15 text-brass" : "text-muted hover:text-paper"}`}
             onClick={() => setTab(t)}
           >
@@ -227,7 +242,9 @@ function FoldersBody({ data, onAsk }: { data: FoldersData; onAsk: Ask }) {
           </button>
         ))}
       </div>
-      {tab === "map" ? <CardMap data={data} onAsk={onAsk} /> : <FolderList data={data} shown={shown} max={max} all={all} onAll={() => setAll(true)} onAsk={onAsk} />}
+      <div id={`${uid}-panel`} role="tabpanel" aria-labelledby={`${uid}-${tab}`}>
+        {tab === "map" ? <CardMap data={data} onAsk={onAsk} /> : <FolderList data={data} shown={shown} max={max} all={all} onAll={() => setAll(true)} onAsk={onAsk} />}
+      </div>
     </>
   );
 }

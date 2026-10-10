@@ -74,13 +74,15 @@ export function Toggle({ open, onClick, label }: { open: boolean; onClick: () =>
 
 const pctLabel = (f: number) => (f <= 0 ? "" : f < 0.01 ? "<1%" : `${Math.round(f * 100)}%`);
 
+// The server answers at most this many children per folder (SRV-INDEX-CHILDREN).
+const MAX_ROWS = 1000;
+
 export type ItemTreeProps = {
   path: string;
   rootSize?: number;
   actions?: (row: ChildRow) => ReactNode;
   depth?: number;
   selected?: string | null;
-  // Folders to open on the way to `selected`, as the server spells them (the profile shows as "~").
   trail?: readonly string[];
   onSelect?: (row: ChildRow) => void;
   onOpen?: (row: ChildRow) => void;
@@ -117,11 +119,16 @@ export function ItemTree({ path, rootSize, actions, depth = 0, selected, trail, 
           {digits(d.small.count)} small file{d.small.count === 1 ? "" : "s"} · {humanBytes(d.small.bytes)}
         </li>
       )}
-      {d.more.count > 0 && (
+      {d.more.count > 0 && limit < MAX_ROWS && (
         <li className="pl-5">
-          <button type="button" className={actionBtn} onClick={() => setLimit(1000)}>
+          <button type="button" className={actionBtn} onClick={() => setLimit(MAX_ROWS)}>
             +{digits(d.more.count)} more · {humanBytes(d.more.bytes)}
           </button>
+        </li>
+      )}
+      {d.more.count > 0 && limit >= MAX_ROWS && (
+        <li className="py-[3px] pl-6 text-[length:var(--fs-xs)] text-faint">
+          The biggest {digits(MAX_ROWS)} are listed · {digits(d.more.count)} more · {humanBytes(d.more.bytes)}
         </li>
       )}
       {d.children.length === 0 && d.small.count === 0 && <li className="py-[3px] pl-6 text-[length:var(--fs-xs)] text-faint">Empty</li>}
@@ -145,7 +152,6 @@ function TreeRow({
   const isDir = row.kind === "dir";
   const isSel = selected != null && samePath(row.path, selected);
   const onPath = selected != null && (isUnder(row.path, selected) || !!trail?.some((t) => samePath(t, row.path)));
-  // A selection made elsewhere (the treemap) opens the folders above it and scrolls to it.
   useEffect(() => {
     if (onPath) setOpen(true);
   }, [onPath]);

@@ -7,7 +7,6 @@ import { askAbout, cleanUpTitle, isCardData } from "./ToolCards";
 
 export const MAX_FOLLOW_UPS = 3;
 
-// `send` is the question an `ask` pill sends; for the other kinds it is only the tooltip.
 export type FollowUp = { label: string; kind: PillKind; path?: string; send: string };
 
 function fromCard(d: CardData): FollowUp[] {

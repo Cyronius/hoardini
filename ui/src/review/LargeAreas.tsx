@@ -3,7 +3,7 @@ import { routes } from "../api/client";
 import type { LocationAnswer, ReviewArea } from "../api/types";
 import { ItemTree, RevealButton, Toggle, actionBtn, overlay } from "../components/ItemTree";
 import { askAbout, cleanUpTitle } from "../components/ToolCards";
-import { digits, fileName, humanBytes } from "../format";
+import { digits, fileName, humanBytes, isRootFolder } from "../format";
 import { useStore } from "../store";
 import { useReview } from "./state";
 
@@ -30,11 +30,16 @@ export function WhatIsButtons({ path, onAnswered }: { path: string; onAnswered?:
   const [err, setErr] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const more = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!menu) return;
     const down = (e: MouseEvent) => !more.current?.contains(e.target as Node) && setMenu(false);
-    const key = (e: KeyboardEvent) => e.key === "Escape" && setMenu(false);
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenu(false);
+      toggle.current?.focus();
+    };
     document.addEventListener("mousedown", down);
     document.addEventListener("keydown", key);
     return () => {
@@ -74,8 +79,8 @@ export function WhatIsButtons({ path, onAnswered }: { path: string; onAnswered?:
       >
         Look closer
       </button>
-      <div ref={more} className="relative">
-        <button type="button" className={`${pill} px-2`} aria-haspopup="menu" aria-expanded={menu} aria-label="More answers" title="More answers" disabled={busy} onClick={() => setMenu((m) => !m)}>
+      <div ref={more} className="relative" onBlur={(e) => menu && !more.current?.contains(e.relatedTarget as Node | null) && setMenu(false)}>
+        <button ref={toggle} type="button" className={`${pill} px-2`} aria-haspopup="menu" aria-expanded={menu} aria-label="More answers" title="More answers" disabled={busy} onClick={() => setMenu((m) => !m)}>
           ⋯
         </button>
         {menu && (
@@ -106,10 +111,11 @@ function AreaRow({ area, max }: { area: ReviewArea; max: number }) {
   const file = looksLikeFile(area.path);
   const parent = area.path.slice(0, area.path.length - name.length).replace(/\\$/, "");
   const known = area.label && area.label !== "unknown";
+  const onlyCopy = !!area.only_copy;
   // A user's Disposable makes the folder a candidate; catalog rows with every action are still not proposed here.
-  const canClean = !file && area.verdict === "safe" && area.actions.includes("delete");
+  const canClean = !file && !onlyCopy && area.verdict === "safe" && area.actions.includes("delete");
   return (
-    <li className={`relative py-2 pl-3 ${area.unknown ? "area-unknown" : ""}`} data-area={area.path}>
+    <li className={`relative py-2 pl-3 ${area.unknown ? "area-unknown" : ""}`} data-area={area.path} data-only-copy={onlyCopy || undefined}>
       <div className="group flex items-start gap-2">
         <span className="mt-0.5 w-4 shrink-0">{!file && <Toggle open={open} onClick={() => setOpen((o) => !o)} label={name} />}</span>
         <div className="min-w-0 flex-1">
@@ -117,7 +123,14 @@ function AreaRow({ area, max }: { area: ReviewArea; max: number }) {
             <span className="min-w-0 shrink-0 truncate font-bold text-paper" title={area.path}>
               {name}
             </span>
-            {known ? (
+            {onlyCopy ? (
+              <span
+                className="shrink-0 rounded-full border border-info/50 bg-info/10 px-2 py-px text-[length:var(--fs-xs)] font-bold text-info"
+                title="Every copy check that applies to it found no other copy"
+              >
+                only copy we know of
+              </span>
+            ) : known ? (
               <span className="hidden max-w-[45%] shrink-0 truncate rounded-full border border-line px-2 py-px text-[length:var(--fs-xs)] font-semibold text-muted @md:inline" title={area.label}>
                 {area.label}
               </span>
@@ -149,6 +162,11 @@ function AreaRow({ area, max }: { area: ReviewArea; max: number }) {
             {area.why_not}
             {area.hint && <span className="ml-1.5 font-semibold text-info">→ {area.hint}</span>}
           </p>
+          {onlyCopy && (
+            <p className="text-[length:var(--fs-xs)] text-muted">
+              Deleting it would lose it for good, so Hoardini offers no delete here. Copy it somewhere else first if you want the space back.
+            </p>
+          )}
           {area.unknown && (
             <div className="mt-1.5">
               <WhatIsButtons path={area.path} />
@@ -209,7 +227,6 @@ export function SectionHead({ title, count, children }: { title: string; count?:
   );
 }
 
-// From Explore's What is this? or a `what_is` pill: the same answers for any path, at the top of the review.
 export function WhatIsCard({ path }: { path: string }) {
   const showWhatIs = useReview((s) => s.showWhatIs);
   const area = useReview((s) => [...(s.folder?.view?.areas ?? []), ...(s.main?.areas ?? [])].find((a) => a.path.toLowerCase() === path.toLowerCase()));
@@ -271,6 +288,8 @@ export function WhatIsCard({ path }: { path: string }) {
               </button>
             )}
           </p>
+        ) : isRootFolder(path) ? (
+          <p className="text-[length:var(--fs-sm)] text-muted">A whole drive or profile takes no answer: what is inside is judged folder by folder. Pick a folder inside it.</p>
         ) : (
           <WhatIsButtons path={path} onAnswered={(text, a) => setSaved({ text, a })} />
         )}

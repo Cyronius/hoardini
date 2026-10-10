@@ -151,6 +151,10 @@ fn catalog_covers_the_review_first_gaps() {
             r"C:\Users\tester\AppData\Local\Temp\WinGet\Git.Git.2.47",
             "winget-cache",
         ),
+        (
+            r"C:\Users\tester\.lmstudio\server-logs\2026-10\2026-10-09.1.log",
+            "lmstudio-server-logs",
+        ),
     ] {
         assert_eq!(cat.lookup(path).map(|e| e.id.as_str()), Some(id), "{path}");
     }
@@ -158,6 +162,25 @@ fn catalog_covers_the_review_first_gaps() {
     assert_eq!(
         (backup.verdict(), backup.unit),
         (Verdict::Review, UnitKind::Children)
+    );
+    let logs = cat
+        .lookup_exact(r"C:\Users\tester\.lmstudio\server-logs")
+        .unwrap();
+    assert_eq!(
+        (
+            logs.id.as_str(),
+            logs.category,
+            logs.verdict(),
+            logs.regenerable,
+            logs.unit
+        ),
+        (
+            "lmstudio-server-logs",
+            Category::Logs,
+            Verdict::Safe,
+            true,
+            UnitKind::Contents
+        )
     );
 }
 

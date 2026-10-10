@@ -24,6 +24,17 @@ unit = "children"
 notes = "llama.cpp/CUDA/Vulkan/ROCm runtime builds LM Studio downloads. Old versions pile up after updates; LM Studio re-downloads the one it needs."
 
 [[entry]]
+id = "lmstudio-server-logs"
+name = "LM Studio server logs"
+app = "LM Studio"
+category = "logs"
+patterns = ['~\.lmstudio\server-logs']
+regenerable = true
+verdict_hint = "safe"
+unit = "contents"
+notes = "Request logs of LM Studio's local server, one folder per month. Only needed for troubleshooting; LM Studio starts new ones as it runs."
+
+[[entry]]
 id = "lmstudio-home"
 name = "LM Studio data"
 app = "LM Studio"

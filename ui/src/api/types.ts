@@ -37,6 +37,7 @@ export type Status = {
   active_provider: { id: string; name: string; model: string | null } | null;
   running_runs: number;
   review?: { id: string; created_ms: number } | null;
+  review_building?: boolean;
 };
 
 export type StatusEvent = ({ type: "status" } & Status) | ({ type: "job" } & Job);
@@ -51,7 +52,7 @@ export type IndexSummary = {
 export type Verdict = "safe" | "redownload" | "synced" | "review" | "keep";
 export type ProposalKind = "delete" | "archive" | "compress" | "dedupe" | "system_cleanup" | "online_only";
 export type SystemOpView = {
-  op: "component_store" | "restore_points" | "hibernation" | "compact_vhdx" | "recycle_bin";
+  op: "component_store" | "restore_points" | "hibernation" | "compact_vhdx" | "recycle_bin" | "leftovers";
   volume?: string;
   path?: string;
   label: string;
@@ -60,6 +61,7 @@ export type SystemOpView = {
   irreversible: boolean;
   estimate_known: boolean;
   size: number | null;
+  parts?: { path: string; size: number }[];
 };
 export type ProposalItem = {
   id: number;
@@ -102,15 +104,13 @@ export type Proposal = {
   items: ProposalItem[];
   parent_id: string | null;
   follow_up_id: string | null;
-  // What the finished job recorded on location rows (MEM-LEARN-JOB); absent from older servers.
   learned?: Learned[];
   review_id?: string | null;
   card?: string | null;
   touched?: boolean;
 };
-export type Learned = { memory_id: number; text: string; url?: string };
+export type Learned = { memory_id: number; text: string; url?: string; confirmed?: boolean; pinned?: boolean };
 
-// Review (REVIEW-BUILD, REVIEW-AREAS, REVIEW-TRIGGER): POST /api/review/open, POST /api/review/run, GET /api/review.
 export type ReviewArea = {
   path: string;
   size: number;
@@ -121,17 +121,20 @@ export type ReviewArea = {
   hint: string | null;
   unknown: boolean;
   actions: ("delete" | "dedupe" | "archive" | "compress")[];
+  only_copy?: boolean;
 };
-export type ReviewCardRef = { card: string; title: string; proposal_id: string };
+export type ReviewCardRef = { card: string; title: string; proposal_id: string; carried?: boolean };
 export type ReviewView = {
-  review: { id: string; created_ms: number; volume: string; scope_path: string | null };
+  review: { id: string; created_ms: number; volume: string; scope_path: string | null } | null;
   header: { root: string; used_bytes: number | null; free_bytes: number | null; ready_bytes: number };
   cards: ReviewCardRef[];
   areas: ReviewArea[];
   proposals: Record<string, Proposal>;
-  // From servers that fold the rarely used apps into the review; else the UI asks /api/apps/rarely-used.
+  building?: boolean;
   apps?: RarelyUsedApp[];
+  online?: OnlineState;
 };
+export type OnlineState = { asked: boolean; waiting: number };
 export type LocationAnswer = "keep" | "disposable" | "move-elsewhere" | "never-touch";
 
 export type Memory = {
@@ -150,7 +153,6 @@ export type Memory = {
   forgotten_ms: number | null;
   detail?: MemoryDetail | null;
 };
-// Location and file-type rows (MEM-LOCATION, MEM-FILETYPE); absent fields mean empty.
 export type MemoryDetail = {
   category?: string;
   label?: string;

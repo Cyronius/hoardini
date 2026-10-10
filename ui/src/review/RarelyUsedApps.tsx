@@ -77,21 +77,24 @@ function AppRow({ app }: { app: RarelyUsedApp }) {
   );
 }
 
+// The review response carries the list (REVIEW-TRIGGER `apps`); older servers are asked separately.
 export function RarelyUsedApps({ given }: { given?: RarelyUsedApp[] }) {
-  const [apps, setApps] = useState<RarelyUsedApp[] | null>(given ?? null);
+  const [fetched, setFetched] = useState<RarelyUsedApp[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const has = given != null;
   useEffect(() => {
-    if (given) return setApps(given);
+    if (has) return;
     let live = true;
     routes
       .rarelyUsedApps()
-      .then((a) => live && setApps(a))
+      .then((a) => live && setFetched(a))
       .catch((e) => live && setErr(e instanceof Error ? e.message : String(e)));
     return () => {
       live = false;
     };
-  }, [given]);
-  if (err) return <p className="text-[length:var(--fs-sm)] text-muted">Could not list your apps: {err}</p>;
+  }, [has]);
+  const apps = given ?? fetched;
+  if (err && !has) return <p className="text-[length:var(--fs-sm)] text-muted">Could not list your apps: {err}</p>;
   if (!apps?.length) return null;
   const total = apps.reduce((a, x) => a + x.size, 0);
   return (
