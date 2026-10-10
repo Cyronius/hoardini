@@ -93,8 +93,7 @@ pub(crate) fn cap_and_copy(
     }
     // Nothing is deleted on an online-only card, so the catalog's caps about deleting do not apply there.
     if online_only {
-        let copy =
-            crate::copycheck::identical_for(conn, env.cloud().clone(), &env.profile, &p, true);
+        let copy = crate::copycheck::identical_for(conn, env, &p, true);
         let cap = if copy.is_some() {
             Verdict::Synced
         } else {
@@ -121,13 +120,7 @@ pub(crate) fn cap_and_copy(
     if review {
         // A verified copy is what an unknown location lacks; a shared blob stays `review` whatever its copy.
         if found.is_none() {
-            copy = crate::copycheck::identical_for(
-                conn,
-                env.cloud().clone(),
-                &env.profile,
-                &p,
-                online_only,
-            );
+            copy = crate::copycheck::identical_for(conn, env, &p, online_only);
         }
         cap = cap.max(Some(match (copy.is_some(), online_only) {
             (true, true) => Verdict::Synced,

@@ -123,7 +123,11 @@ copy). A check that finds the path is not its business (`Find::Skip`) drops its 
 
 `only_copy(path)` is true when at least one check answered, every answer is `none`, none is pending, and no online check
 that applies is waiting on consent (EVID-COPY-CONSENT). `note_for(path)` is the best answer's note, or "only copy we know
-of". `candidates(cx, registry, volume_root)` lists the volume's indexed files of at least 100 MiB (not placeholders,
+of". An answer whose copy is on this PC counts there only while that copy still stands (`copycheck::copy_stands`: the
+check's `still_valid` holds, so a twin or archive copy is still there unchanged; it is outside every `$Recycle.Bin`; and no
+live delete or archive card has it, or a folder above it, ticked, `copycheck::held_by_live_card`); `note_for` drops an
+answer that does not stand, and when it dropped one and no other answer names a copy there is no note at all, never
+"only copy we know of". `candidates(cx, registry, volume_root)` lists the volume's indexed files of at least 100 MiB (not placeholders,
 denied, or hard-link duplicates) and its folders of at least 1 GiB that some check covers (a git work tree, a Hugging
 Face `models--*` or LM Studio repo folder, a sync root or a folder up to two levels below one, a catalog launcher or
 package unit, an archived folder), biggest first, at most 2,000.
@@ -144,7 +148,7 @@ over all watched volumes in meta `copy_online_waiting` after each full pass (`se
 **Acceptance criteria:**
 - `effect` maps identical, same-name-and-size, claimed, none to may-start-ticked, review, follow-catalog, only-copy; `verdict_for` gives `synced` for an identical `sync` answer, `redownload` for an identical `huggingface` answer, `review` for same-name-and-size, and nothing for claimed and none.
 - A counting check runs once for two `check_subject` calls on an unchanged file, and again after the file's mtime changes; `results_for` returns its row before the change and nothing after it.
-- `only_copy` is false with no answers, true when the only answer is `none`, false when that answer is pending, and false when another check answered `identical`.
+- `only_copy` is false with no answers, true when the only answer is `none`, false when that answer is pending, and false when another check answered `identical`. `note_for` then gives the archive answer's note while its local copy exists, and no note once that copy is deleted.
 - On an indexed folder holding files of 120 MiB and 101 MiB (two of each, the same bytes within each pair) and 99 MiB, a 1.1 GiB folder with `.git`, and a 1.1 GiB plain folder, `candidates` lists the git folder and the four big files, biggest first, and not the 99 MiB file or the plain folder.
 - `run_volume` hashes the four big files, the 120 MiB pair first; each `file_hash` row equals the SHA-256 of the file's bytes, and afterwards each file's `dup` answer is `identical` with its twin as the locator. A second pass hashes nothing; after one file is appended to, the next pass hashes only that file.
 - When `go` turns false inside the first hash, `run_volume` reports `stopped` with nothing hashed and no `file_hash` row; the next pass hashes both files.
@@ -174,7 +178,8 @@ fetched and compared on this machine.
 **Verification:** test
 
 `dup` applies to files of at least 100 MiB that are not placeholders. It looks for other indexed files of the same
-logical size and a different file id (hard links are one file). A persisted duplicate group (`dupes::find`, full BLAKE3)
+logical size and a different file id (hard links are one file), never one inside a `$Recycle.Bin` folder, which is on its
+way out. A persisted duplicate group (`dupes::find`, full BLAKE3)
 counts while both members still have the mtime and file id they were hashed with; otherwise two current SHA-256 rows in
 `file_hash` that are equal count. Either gives `identical`, with the other path as the locator, and goes stale when that
 twin's mtime, size, or file id changes. With no same-size file
@@ -185,6 +190,7 @@ the answer is `none`; with same-size files not all hashed yet, `none` pending `h
 - Two 101 MiB files in a persisted group with matching mtimes and file ids: each is `identical` to the other, with `detail.via` "duplicate group".
 - After the twin is rewritten (new mtime), the group no longer counts and the answer is `none` pending `hash`.
 - A 101 MiB file with no other file of that size is `none` with the note "no other file of this size on the indexed drives".
+- A twin in a persisted group that sits under `$Recycle.Bin` gives no `identical` answer (`specs/policy/tests/policy.rs`).
 
 ### EVID-COPY-ARCHIVE: Hoardini's own archive copies
 **Applies to:** hoardini

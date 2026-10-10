@@ -384,7 +384,14 @@ impl Executor {
         };
         let mut runnable = Vec::new();
         for item in items.into_iter().filter(|i| chosen.contains(&i.id)) {
-            match policy::revalidate(conn, &self.shared.env, action, &item.path, &item.baseline()) {
+            match policy::revalidate(
+                conn,
+                &self.shared.env,
+                action,
+                &item.path,
+                &item.baseline(),
+                item.cap,
+            ) {
                 Ok(Some(detail)) => {
                     if let Err(e) = proposals::set_item(conn, item.id, "skipped", Some(&detail)) {
                         tracing::warn!(error = %e, "could not mark item skipped");
@@ -660,7 +667,9 @@ fn run_items(
         }
         job.progress.current = Some(it.path.clone());
         ctx.publish(None, job);
-        if let Some(detail) = policy::revalidate(conn, env, action, &it.path, &it.baseline())? {
+        if let Some(detail) =
+            policy::revalidate(conn, env, action, &it.path, &it.baseline(), it.cap)?
+        {
             proposals::set_item(conn, it.id, "skipped", Some(&detail))?;
             job.progress.done_items += 1;
             ctx.publish(Some(conn), job);

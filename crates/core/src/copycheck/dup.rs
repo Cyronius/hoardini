@@ -40,7 +40,8 @@ fn same_size(cx: &Cx<'_>, s: &Subject) -> anyhow::Result<Vec<Twin>> {
         let Some(path) = index::path_of(cx.conn, id)? else {
             continue;
         };
-        if path.eq_ignore_ascii_case(&s.path) {
+        // A file in a Recycle Bin is already on its way out, not a copy.
+        if path.eq_ignore_ascii_case(&s.path) || super::in_recycle_bin(&path) {
             continue;
         }
         let Some(subject) = Subject::load(cx.conn, &path) else {

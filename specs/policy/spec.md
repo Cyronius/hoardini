@@ -98,11 +98,16 @@ file ID. Any difference, a deny reason, an open handle, or a missing path shall 
 it shall not execute. The proposal ends `partial` when some approved items ran and others did not. The open-handle
 check is the slow one, so it runs first; the deny list and the kind, size, mtime, file-ID, and link comparisons run
 after it, immediately before the item executes, so a path swapped for a junction during the slow check is caught.
+Last, a delete whose stored cap is `redownload` on a path no catalog entry knows (a cap a copy relaxed,
+POLICY-VERDICT-CAP) runs the copy check again (`copycheck::identical_for`); when no copy counts any more (gone or changed,
+in a Recycle Bin or a cleared place, or ticked on a live delete or archive card, this job's own included) the item is
+`skipped` with a detail starting `Its copy no longer counts`, so two twins approved on two cards never both go.
 
 **Acceptance criteria:**
 - A folder replaced by a junction while the open-handle check runs is skipped with a detail starting `Changed since the proposal` (verified by a test-only hook between the two phases in `crates/core/src/policy/gate.rs`).
 - Of four proposed files, one grown, one with only its mtime changed, and one deleted and re-created with the same size and mtime are `skipped` with a detail starting `Changed since the proposal` and still exist; the untouched one is deleted.
 - `approve` returns only the untouched item's id; the proposal status is `partial`.
+- A file proposed alone as `redownload` on the strength of its duplicate twin, whose twin is then deleted by hand, is `skipped` at approval with `Its copy no longer counts...` and still exists. Of two twins on two live delete cards, once the second card's twin is ticked, approving the first card skips its item and keeps the file; approving the second then deletes only its own (`specs/policy/tests/policy.rs`).
 
 ### POLICY-VERDICT-CAP: The shown verdict never exceeds the cap
 **Applies to:** hoardini
@@ -116,7 +121,11 @@ any check but `sync` turns the `review` cap of a path no catalog entry knows int
 ticked. A `sync` answer does that only on an online-only card, where the cap becomes `synced`; on any other card a cloud
 copy never relaxes anything, because deleting a synced file deletes the cloud copy too. The offline checks run again for
 the item first (`copycheck::identical_for`), so a twin deleted or an archive copy gone since the last pass never counts,
-and a copy the same card would remove (a path the card also holds, or one inside it) does not count either. A shared
+and a copy the same card would remove (a path the card also holds, or one inside it) does not count either. Nor does a
+copy on this PC that is no longer there unchanged, sits in a Recycle Bin, sits in a place the catalog (the policy env's)
+calls temp, cache, package, browser or installer cache, build output, logs, crash dumps or Windows leftovers
+(`copycheck::in_cleared_place`), or is at or under a path ticked on a live (pending, approved or running) delete or archive
+card (`copycheck::held_by_live_card`; an unticked item waits for its tick, which POLICY-REVALIDATE checks again). A shared
 blob's `review`, a catalog cap, and `keep` stay, and no other confidence changes a cap. The user's Disposable answer
 (MEM-LOCATION: the nearest location row from the user at or above the path, with verdict `safe`; classifier and job rows
 in between do not count, `location::user_answer_covering`) is knowledge too: it lifts the `review` cap of a path no
@@ -131,6 +140,7 @@ in sync and `review` otherwise, and `keep` still wins for a path in use or denie
 - `cap_for_with(.., in_use = true)` and the cap of the profile root are `keep`; every item satisfies verdict ≥ cap.
 - On a delete card, unknown files the model calls `safe`: one with a current `identical` Hugging Face answer shows `redownload`, cap `redownload`, ticked, with the copy note; one with `same-name-and-size` and one with an `identical` `sync` answer show `review`/`review`, unticked; an HF blob file with an `identical` answer stays `review`/`review`. `cap_for_with` gives `redownload` for the first file and `keep` when it is in use. An in-sync file on an online-only card shows `synced`, cap `synced` (`specs/act/tests/online.rs`).
 - Two 101 MiB files in a current duplicate group: one proposed alone shows `redownload`, ticked; both on one card show `review`/`review`, unticked; after the twin is deleted by hand, the first proposed alone shows `review`, unticked.
+- While the first file sits ticked as `redownload` on a live card, its twin proposed on a second card shows `review`/`review`, unticked, with no copy note. A twin in a group whose other member sits in a `$Recycle.Bin` folder, or in the test catalog's `%TEMP%`, leaves the file `review`/`review`, unticked.
 - An unknown `junk\x.bin` is capped `review`; after the user's Disposable answer for `junk` its cap is none and the model's `safe` stays, ticked, also for `junk\deeper\y.bin` under an `index` row of its own; in use it is `keep`. An in-sync video under `~\OneDrive` (the catalog's `onedrive-sync`, cap `review`) is `synced` and ticked on an online-only card (`specs/review/tests/build.rs`).
 
 ### POLICY-DEFAULT-TICK: Only worthwhile safe or redownload items start ticked

@@ -382,6 +382,8 @@ fn online_only_block(state: &FsState, alloc: i64) -> Option<String> {
     None
 }
 
+const COPY_GONE_REASON: &str = "Its copy no longer counts: gone, changed, in the Recycle Bin, in a temp or cache folder, or set to be removed too";
+
 const PLACEHOLDER_REASON: &str =
     "Cloud-only (online-only) file; archiving or compressing would download it first";
 
@@ -491,6 +493,7 @@ pub fn revalidate(
     action: Action,
     path: &str,
     expected: &FsState,
+    cap: Option<Verdict>,
 ) -> anyhow::Result<Option<String>> {
     // The open-file check is slow, so every cheap check runs after it, as close to acting as possible.
     if let Some(r) = in_use_reason(conn, path, expected.kind) {
@@ -538,6 +541,14 @@ pub fn revalidate(
     {
         return Ok(Some(PLACEHOLDER_REASON.into()));
     }
+    // A `redownload` cap on a path no catalog entry knows came from a copy, which must still count now.
+    if action == Action::Delete
+        && cap == Some(Verdict::Redownload)
+        && env.catalog().lookup(path).is_none()
+        && crate::copycheck::identical_for(conn, env, path, false).is_none()
+    {
+        return Ok(Some(COPY_GONE_REASON.into()));
+    }
     Ok(None)
 }
 
@@ -560,7 +571,7 @@ mod tests {
         let expected = fs_state(&victim).unwrap();
         assert_eq!(expected.kind, ItemKind::Dir);
         assert_eq!(
-            revalidate(&conn, &env, Action::Delete, &path, &expected).unwrap(),
+            revalidate(&conn, &env, Action::Delete, &path, &expected, None).unwrap(),
             None
         );
 
@@ -571,7 +582,7 @@ mod tests {
                 hoardini_win::create_junction(&v, &e).unwrap();
             }));
         });
-        let got = revalidate(&conn, &env, Action::Delete, &path, &expected).unwrap();
+        let got = revalidate(&conn, &env, Action::Delete, &path, &expected, None).unwrap();
         AFTER_IN_USE.with(|h| *h.borrow_mut() = None);
         let detail = got.expect("swap must be caught");
         assert!(detail.starts_with("Changed since the proposal"), "{detail}");
