@@ -7,6 +7,7 @@ pub struct PromptInput {
     pub today: String,
     pub index_summary: String,
     pub refresh: Option<String>,
+    pub explore: Option<String>,
     pub globals: Vec<String>,
     pub open_proposals: Vec<String>,
 }
@@ -84,6 +85,9 @@ pub fn system_prompt(p: &PromptInput) -> String {
     s.push_str("Disk index:\n");
     s.push_str(p.index_summary.trim_end());
     s.push('\n');
+    if let Some(path) = &p.explore {
+        let _ = writeln!(s, "The user is looking at {path} in Explore.");
+    }
     if let Some(r) = &p.refresh {
         let _ = writeln!(s, "{r}");
     }
@@ -108,6 +112,7 @@ mod tests {
             today: "2026-01-01".into(),
             index_summary: "idx".into(),
             refresh: None,
+            explore: None,
             globals: vec![evil.into()],
             open_proposals: Vec::new(),
         });

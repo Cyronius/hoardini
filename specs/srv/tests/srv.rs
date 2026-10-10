@@ -2354,3 +2354,358 @@ async fn the_server_keeps_a_cards_ticks_and_any_change_or_decision_touches_it() 
     assert_eq!(got["touched"], true);
     let _ = f.h.shutdown.send(());
 }
+
+const MIB: u64 = 1 << 20;
+
+// C:\data as the map tests know it: 684 MiB in rows plus 12 KiB of folded small files.
+fn explore_index(db_path: &Path) -> hoardini_core::store::Db {
+    use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
+    let db = hoardini_core::store::Db::open(db_path).unwrap();
+    let fs = FakeFs::new(r"C:\");
+    fs.file_alloc(r"C:\data\models\a.gguf", 300 * MIB, 300 * MIB);
+    fs.file_alloc(r"C:\data\models\b.gguf", 100 * MIB, 100 * MIB);
+    fs.file_alloc(r"C:\data\big.iso", 200 * MIB, 200 * MIB);
+    fs.file_alloc(r"C:\data\proj\node_modules\dep.bin", 60 * MIB, 60 * MIB);
+    fs.file_alloc(r"C:\data\cache\c.bin", 20 * MIB, 20 * MIB);
+    fs.file_alloc(r"C:\data\tiny\t1.bin", 2 * MIB, 2 * MIB);
+    fs.file_alloc(r"C:\data\tiny\t2.jpg", 2 * MIB, 2 * MIB);
+    fs.file_alloc(r"C:\data\note.txt", 4096, 1000);
+    fs.file_alloc(r"C:\data\todo.txt", 8192, 5000);
+    fs.file_alloc(r"C:\Windows\x.dll", 50 * MIB, 50 * MIB);
+    let out = refresh(
+        &db.conn().unwrap(),
+        &fs,
+        fs.root(),
+        &RefreshOptions::default(),
+    )
+    .unwrap();
+    assert!(out.completed);
+    db
+}
+
+// Every opened folder's size is its blocks plus its "N more".
+fn adds_up(n: &Value) {
+    if let Some(kids) = n["children"].as_array() {
+        let sum: u64 = kids.iter().map(|k| k["size"].as_u64().unwrap()).sum();
+        let more = n["more"]["bytes"].as_u64().unwrap();
+        assert_eq!(n["size"].as_u64().unwrap(), sum + more, "{}", n["path"]);
+        kids.iter().for_each(adds_up);
+    }
+}
+
+fn kid<'a>(n: &'a Value, name: &str) -> &'a Value {
+    n["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["name"] == name)
+        .unwrap_or_else(|| panic!("no {name} under {}", n["path"]))
+}
+
+// Traces: SRV-INDEX-MAP
+#[tokio::test(flavor = "multi_thread")]
+async fn index_map_prunes_to_the_canvas_and_merges_the_rest() {
+    let f = Fixture::new().await;
+    let _db = explore_index(&f.dir.path().join("h.db"));
+    let total = 684 * MIB + 12288;
+
+    let (st, v) = f
+        .call("GET", "/api/index/map?path=C%3A%5Cdata&w=16&h=16", None)
+        .await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["min_bytes"], 25_215_408);
+    assert_eq!(v["nodes"], 8);
+    assert_eq!(v["capped"], false);
+    assert_eq!(v["ancestors"], json!([{"path": r"C:\", "name": "C:"}]));
+    let t = &v["tree"];
+    assert_eq!(t["path"], r"C:\data");
+    assert_eq!(t["name"], "data");
+    assert_eq!(t["kind"], "dir");
+    assert_eq!(t["size"], total);
+    let names: Vec<&str> = t["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["models", "big.iso", "proj"]);
+    assert_eq!(t["more"], json!({"count": 4, "bytes": 24 * MIB + 12288}));
+    let models = kid(t, "models");
+    assert_eq!(models["size"], 400 * MIB);
+    assert_eq!(models["files"], 2);
+    assert_eq!(kid(models, "a.gguf")["ext"], "gguf");
+    assert_eq!(kid(models, "a.gguf")["kind"], "file");
+    assert_eq!(models["more"], json!({"count": 0, "bytes": 0}));
+    assert_eq!(kid(t, "big.iso")["ext"], "iso");
+    assert!(kid(t, "big.iso").get("children").is_none());
+    adds_up(t);
+
+    let (_, big) = f
+        .call("GET", "/api/index/map?path=c%3A%5CDATA&w=1000&h=1000", None)
+        .await;
+    let t = &big["tree"];
+    assert_eq!(t["size"], total);
+    assert_eq!(t["more"], json!({"count": 0, "bytes": 0}));
+    let small = kid(t, "small files");
+    assert_eq!(small["kind"], "small");
+    assert_eq!(small["path"], r"C:\data");
+    assert_eq!(
+        (small["size"].as_u64(), small["files"].as_u64()),
+        (Some(12288), Some(2))
+    );
+    assert_eq!(kid(kid(t, "tiny"), "t2.jpg")["ext"], "jpg");
+    adds_up(t);
+
+    let (st, _) = f
+        .call("GET", "/api/index/map?path=C%3A%5Cdata%5Cbig.iso", None)
+        .await;
+    assert_eq!(st, 400, "a file has no map");
+    let (st, _) = f.call("GET", "/api/index/map?path=C%3A%5Cnope", None).await;
+    assert_eq!(st, 404);
+    let (st, _) = f.call("GET", "/api/index/map", None).await;
+    assert_eq!(st, 400);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-INDEX-MAP
+#[tokio::test(flavor = "multi_thread")]
+async fn index_map_tags_each_block_with_what_hoardini_knows() {
+    use hoardini_core::memory::knowledge::{self, Detail, Knowledge};
+    use hoardini_core::memory::location::{self, Answer};
+    use hoardini_core::memory::{Kind, Scope};
+    use hoardini_core::policy::{PolicyEnv, Verdict};
+
+    let f = Fixture::new().await;
+    let db = explore_index(&f.dir.path().join("h.db"));
+    let conn = db.conn().unwrap();
+    let env = PolicyEnv::system();
+    knowledge::upsert(
+        &conn,
+        Knowledge {
+            scope: Scope::Path,
+            key: r"C:\data\models".into(),
+            kind: Kind::Verdict,
+            text: "LM Studio models: re-downloadable.".into(),
+            source: "catalog".into(),
+            detail: Detail {
+                category: "model-store".into(),
+                label: Some("LM Studio models".into()),
+                verdict: Some(Verdict::Redownload),
+                ..Detail::default()
+            },
+        },
+    )
+    .unwrap();
+    location::answer(&conn, &env, r"C:\data\tiny", Answer::Keep, 1).unwrap();
+    for (id, status, path) in [
+        ("p-open", "pending", r"C:\data\cache"),
+        ("p-gone", "declined", r"C:\data\big.iso"),
+    ] {
+        conn.execute(
+            "INSERT INTO proposal(id, conversation_id, kind, params_json, status, total_alloc, created_ms)
+             VALUES (?1, 'main', 'delete', '{\"summary\":\"Caches\"}', ?2, 0, 1)",
+            [id, status],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO proposal_item(proposal_id, seq, path, kind, alloc, logical, verdict, reason, status)
+             VALUES (?1, 0, ?2, 0, 0, 0, 'safe', 'Rebuilds itself', 'pending')",
+            [id, path],
+        )
+        .unwrap();
+    }
+
+    let (st, v) = f
+        .call("GET", "/api/index/map?path=C%3A%5Cdata&w=1000&h=1000", None)
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let t = &v["tree"];
+    let tag = |n: &Value| n["tag"].clone();
+    assert_eq!(
+        tag(kid(t, "cache")),
+        json!({"state": "proposed", "label": "Rebuilds itself", "verdict": "safe"})
+    );
+    assert_eq!(tag(kid(kid(t, "cache"), "c.bin"))["state"], "proposed");
+    let models = json!({"state": "review", "label": "LM Studio models", "verdict": "redownload"});
+    assert_eq!(tag(kid(t, "models")), models);
+    assert_eq!(tag(kid(kid(t, "models"), "a.gguf")), models);
+    let deps = json!({"state": "review", "label": "node_modules", "verdict": "redownload"});
+    assert_eq!(tag(kid(kid(t, "proj"), "node_modules")), deps);
+    assert_eq!(tag(kid(t, "proj")), json!({"state": "unknown"}));
+    assert_eq!(
+        tag(kid(t, "tiny")),
+        json!({"state": "user", "label": "yours", "verdict": "keep"})
+    );
+    assert_eq!(tag(kid(t, "big.iso")), json!({"state": "unknown"}));
+    assert_eq!(tag(kid(t, "small files")), tag(t));
+
+    let (_, root) = f
+        .call("GET", "/api/index/map?path=C%3A%5C&w=1000&h=1000", None)
+        .await;
+    assert_eq!(root["ancestors"], json!([]));
+    assert_eq!(
+        tag(&root["tree"]),
+        json!({"state": "unknown", "label": "the drive root"})
+    );
+    assert_eq!(
+        tag(kid(&root["tree"], "Windows")),
+        json!({"state": "system", "label": "the Windows folder", "verdict": "keep"})
+    );
+
+    let inner = hoardini_core::index::FakeFs::new(r"C:\x\node_modules\lib");
+    inner.file_alloc(r"C:\x\node_modules\lib\a.bin", 2 * MIB, 2 * MIB);
+    let out = hoardini_core::index::refresh(
+        &conn,
+        &inner,
+        inner.root(),
+        &hoardini_core::index::RefreshOptions::default(),
+    )
+    .unwrap();
+    assert!(out.completed);
+    let (_, watched) = f
+        .call(
+            "GET",
+            "/api/index/map?path=C%3A%5Cx%5Cnode_modules%5Clib&w=100&h=100",
+            None,
+        )
+        .await;
+    assert_eq!(tag(&watched["tree"]), deps, "{watched}");
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-INDEX-MAP
+#[tokio::test(flavor = "multi_thread")]
+async fn index_map_stops_at_the_node_cap_and_still_adds_up() {
+    use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
+    let f = Fixture::new().await;
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let fs = FakeFs::new(r"C:\");
+    for i in 0..5100 {
+        fs.file_alloc(&format!(r"C:\many\f{i:04}.bin"), 2 * MIB, 2 * MIB);
+    }
+    let out = refresh(
+        &db.conn().unwrap(),
+        &fs,
+        fs.root(),
+        &RefreshOptions::default(),
+    )
+    .unwrap();
+    assert!(out.completed);
+    let (st, v) = f
+        .call("GET", "/api/index/map?path=C%3A%5Cmany&w=8192&h=8192", None)
+        .await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["nodes"], 5000);
+    assert_eq!(v["capped"], true);
+    let t = &v["tree"];
+    assert_eq!(t["children"].as_array().unwrap().len(), 4999);
+    assert_eq!(t["children"][0]["name"], "f0000.bin");
+    assert_eq!(t["more"], json!({"count": 101, "bytes": 101 * 2 * MIB}));
+    assert_eq!(t["size"], 5100 * 2 * MIB);
+    adds_up(t);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-INDEX-TYPES
+#[tokio::test(flavor = "multi_thread")]
+async fn index_types_lists_extensions_with_what_each_one_is() {
+    use hoardini_core::memory::knowledge::{self, Detail};
+    let f = Fixture::new().await;
+    let db = explore_index(&f.dir.path().join("h.db"));
+    knowledge::remember_filetype(
+        &db.conn().unwrap(),
+        "gguf",
+        "GGUF: llama.cpp model weights.",
+        "user",
+        Detail {
+            category: "model-weights".into(),
+            app: Some("llama.cpp".into()),
+            use_: Some("model weights".into()),
+            ..Detail::default()
+        },
+        1,
+    )
+    .unwrap();
+    let (st, v) = f
+        .call("GET", "/api/index/types?path=C%3A%5Cdata", None)
+        .await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(
+        v,
+        json!([
+            {"ext": "gguf", "bytes": 400 * MIB, "files": 2, "label": "GGUF: llama.cpp model weights.",
+             "app": "llama.cpp", "use": "model weights", "category": "model-weights"},
+            {"ext": "iso", "bytes": 200 * MIB, "files": 1},
+            {"ext": "bin", "bytes": 82 * MIB, "files": 3},
+            {"ext": "jpg", "bytes": 2 * MIB, "files": 1, "category": "photos"},
+            {"ext": null, "bytes": 12288, "files": 2, "small": true},
+        ])
+    );
+    let (_, drive) = f.call("GET", "/api/index/types?path=C%3A%5C", None).await;
+    let summary: Vec<(Value, Value)> = drive
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| (t["ext"].clone(), t["bytes"].clone()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (json!("gguf"), json!(400 * MIB)),
+            (json!("iso"), json!(200 * MIB)),
+            (json!("bin"), json!(82 * MIB)),
+            (json!("dll"), json!(50 * MIB)),
+            (json!("jpg"), json!(2 * MIB)),
+            (Value::Null, json!(12288)),
+        ]
+    );
+    let (st, _) = f
+        .call("GET", "/api/index/types?path=C%3A%5Cdata%5Cbig.iso", None)
+        .await;
+    assert_eq!(st, 400);
+    let (st, _) = f
+        .call("GET", "/api/index/types?path=C%3A%5Cnope", None)
+        .await;
+    assert_eq!(st, 404);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-EXPLORE-FOCUS
+#[tokio::test(flavor = "multi_thread")]
+async fn explore_focus_is_stored_cleared_and_forgotten_on_restart() {
+    use hoardini_core::explore;
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let db = hoardini_core::store::Db::open(dir.path().join("h.db")).unwrap();
+        explore::set_focus(&db.conn().unwrap(), Some(r"C:\left\over")).unwrap();
+    }
+    let f = Fixture::in_dir(dir, None, None, false).await;
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let conn = db.conn().unwrap();
+    assert_eq!(explore::focus(&conn), None, "a restart clears it");
+
+    let (st, v) = f
+        .call(
+            "PUT",
+            "/api/explore/focus",
+            Some(json!({"path": "C:\\data\\models\\"})),
+        )
+        .await;
+    assert_eq!((st, v), (200, json!({"path": r"C:\data\models"})));
+    assert_eq!(explore::focus(&conn).as_deref(), Some(r"C:\data\models"));
+    let (st, v) = f
+        .call("PUT", "/api/explore/focus", Some(json!({"path": null})))
+        .await;
+    assert_eq!((st, v), (200, json!({"path": null})));
+    assert_eq!(explore::focus(&conn), None);
+    let (st, v) = f
+        .call(
+            "PUT",
+            "/api/explore/focus",
+            Some(json!({"path": r"relative\x"})),
+        )
+        .await;
+    assert_eq!(st, 400, "{v}");
+    assert_eq!(explore::focus(&conn), None);
+    let _ = f.h.shutdown.send(());
+}

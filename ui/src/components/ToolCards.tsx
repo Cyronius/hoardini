@@ -1,5 +1,8 @@
-import { useState, type ReactNode } from "react";
-import type { CardData, ChangeRow, ChangesData, FilesData, FoldersData } from "../api/types";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import type { CardData, ChangeRow, ChangesData, FilesData, FoldersData, More } from "../api/types";
+import { useExploreLink } from "../explore/context";
+import { useExplorePalette } from "../explore/palette";
+import { TreemapCanvas } from "../explore/TreemapCanvas";
 import { digits, fileName, humanAge, humanBytes, isUnder, samePath, shortDate, signedBytes, sinceLabel } from "../format";
 import { useStore } from "../store";
 import { ItemTree, RevealButton, SizeBar, Toggle, actionBtn, overlay, underOverlay } from "./ItemTree";
@@ -121,11 +124,113 @@ function Footer({ total, all, onAll, more }: { total: number; all: boolean; onAl
   );
 }
 
+type Block = { key: string; path: string; name: string; size: number; more?: More; children?: Block[] };
+
+function driveOf(p: string | undefined): string | null {
+  const m = p ? /^[a-z]:/i.exec(p) : null;
+  return m ? `${m[0].toUpperCase()}\\` : p?.startsWith("~") ? "~" : null;
+}
+
+const blockKids = (b: Block) => b.children;
+const blockKey = (b: Block) => b.key;
+
+// Nested rows of a deeper call would count their bytes twice, so the map draws only the outermost ones.
+function CardMap({ data, onAsk }: { data: FoldersData; onAsk: Ask }) {
+  const { palette, font } = useExplorePalette();
+  const { onOpenExplore } = useExploreLink();
+  const [sel, setSel] = useState<Block | null>(null);
+  const root = useMemo<Block>(() => {
+    const top = data.items.filter((i) => !data.items.some((o) => o !== i && isUnder(o.path, i.path)));
+    const kids: Block[] = top.map((i) => ({ key: i.path.toLowerCase(), path: i.path, name: fileName(i.path) || i.path, size: i.size }));
+    if (data.depth === 1 && data.more.bytes > 0) kids.push({ key: "more", path: data.under ?? "", name: `${digits(data.more.count)} more`, size: data.more.bytes, more: data.more });
+    return { key: "root", path: data.under ?? "", name: "", size: kids.reduce((a, k) => a + k.size, 0), children: kids };
+  }, [data]);
+  const paint = useCallback((b: Block) => (b.more ? palette.more : palette.plain), [palette]);
+  const frame = useCallback(() => palette.frame, [palette]);
+  const label = useCallback((b: Block) => ({ name: b.name, size: humanBytes(b.size) }), []);
+  const share = (n: number) => (root.size > 0 ? `${Math.round((n / root.size) * 100)}%` : "");
+  const target = sel && !sel.more ? sel.path : (data.under ?? driveOf(data.items[0]?.path));
+  return (
+    <div>
+      <TreemapCanvas
+        root={root}
+        kids={blockKids}
+        keyOf={blockKey}
+        paint={paint}
+        frame={frame}
+        label={label}
+        surface={palette.surface}
+        selection={palette.selection}
+        dimmer={palette.dimmer}
+        font={font}
+        selectedKey={sel?.key ?? null}
+        onSelect={setSel}
+        tooltip={(b) => (
+          <>
+            <div className="truncate font-bold">{b.name}</div>
+            <div className="tabular-nums text-paper-dim">
+              {humanBytes(b.size)} · {share(b.size)}
+            </div>
+          </>
+        )}
+        ariaLabel={`Map of the largest folders${data.under ? ` in ${data.under}` : ""}; click a block to pick it.`}
+        className="h-48 w-full rounded-lg bg-ink-900"
+      />
+      <div className="mt-1.5 flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1 text-[length:var(--fs-sm)]">
+        {sel && !sel.more ? (
+          <>
+            <span className="min-w-0 truncate font-semibold text-paper" title={sel.path}>
+              {sel.name}
+            </span>
+            <span className="shrink-0 tabular-nums text-muted">
+              {humanBytes(sel.size)} · {share(sel.size)}
+            </span>
+            <span className="ml-auto flex items-center gap-0.5">
+              <AskButtons path={sel.path} dir onAsk={onAsk} />
+              <RevealButton path={sel.path} />
+            </span>
+          </>
+        ) : (
+          <span className="text-[length:var(--fs-xs)] text-faint">{sel?.more ? `${sel.name} folders, ${humanBytes(sel.size)} together` : "Click a block to pick a folder."}</span>
+        )}
+        {onOpenExplore && target && (
+          <button type="button" className={`${actionBtn} ${sel && !sel.more ? "" : "ml-auto"}`} onClick={() => onOpenExplore(target)}>
+            Open in Explore
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FoldersBody({ data, onAsk }: { data: FoldersData; onAsk: Ask }) {
   const [all, setAll] = useState(false);
+  const [tab, setTab] = useState<"list" | "map">(data.view === "map" ? "map" : "list");
   const max = Math.max(1, ...data.items.map((i) => i.size));
   const shown = all ? data.items : data.items.slice(0, SHOWN);
   if (data.items.length === 0) return <p className="text-[length:var(--fs-sm)] text-muted">No subfolders.</p>;
+  return (
+    <>
+      <div role="tablist" aria-label="Show as" className="mb-1 flex gap-0.5 text-[length:var(--fs-xs)] font-bold">
+        {(["list", "map"] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            className={`rounded-full px-2.5 py-0.5 ${tab === t ? "bg-brass/15 text-brass" : "text-muted hover:text-paper"}`}
+            onClick={() => setTab(t)}
+          >
+            {t === "list" ? "List" : "Map"}
+          </button>
+        ))}
+      </div>
+      {tab === "map" ? <CardMap data={data} onAsk={onAsk} /> : <FolderList data={data} shown={shown} max={max} all={all} onAll={() => setAll(true)} onAsk={onAsk} />}
+    </>
+  );
+}
+
+function FolderList({ data, shown, max, all, onAll, onAsk }: { data: FoldersData; shown: FoldersData["items"]; max: number; all: boolean; onAll: () => void; onAsk: Ask }) {
   return (
     <>
       <ul className="divide-y divide-line-soft">
@@ -143,7 +248,7 @@ function FoldersBody({ data, onAsk }: { data: FoldersData; onAsk: Ask }) {
           />
         ))}
       </ul>
-      <Footer total={data.items.length} all={all} onAll={() => setAll(true)} more={data.more} />
+      <Footer total={data.items.length} all={all} onAll={onAll} more={data.more} />
     </>
   );
 }

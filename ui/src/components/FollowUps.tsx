@@ -1,4 +1,5 @@
 import type { CardData, PillKind, ToolData } from "../api/types";
+import { useExploreLink } from "../explore/context";
 import { fileName, humanBytes, isUnder, samePath } from "../format";
 import { starter } from "./Greeting";
 import { askAbout, cleanUpIn, isCardData } from "./ToolCards";
@@ -28,7 +29,7 @@ function fromCard(d: CardData): FollowUp[] {
 }
 
 // The model's own suggestions lead; pills built from the turn's cards only fill what is left.
-export function followUps(turn: ToolData[]): FollowUp[] {
+export function followUps(turn: ToolData[], can: { explore?: boolean } = {}): FollowUp[] {
   const out: FollowUp[] = [];
   const seen = new Set<string>();
   const add = (p: FollowUp) => {
@@ -40,7 +41,8 @@ export function followUps(turn: ToolData[]): FollowUp[] {
   for (const d of turn) {
     if (d.kind !== "pills") continue;
     for (const p of d.items) {
-      add({ ...p, send: p.kind === "clean_up" && p.path ? cleanUpIn(p.path) : p.label });
+      if (p.kind === "explore" && !(can.explore && p.path)) continue;
+      add({ ...p, send: p.kind === "clean_up" && p.path ? cleanUpIn(p.path) : p.kind === "explore" ? `Open ${p.path} in Explore` : p.label });
     }
   }
   for (const d of turn) if (isCardData(d)) fromCard(d).forEach(add);
@@ -48,11 +50,12 @@ export function followUps(turn: ToolData[]): FollowUp[] {
 }
 
 export function FollowUps({ items, onAsk, disabled }: { items: FollowUp[]; onAsk: (text: string) => void; disabled?: boolean }) {
+  const { onOpenExplore } = useExploreLink();
   if (items.length === 0) return null;
   return (
     <div className="fade-up flex flex-wrap gap-2" role="group" aria-label="Suggested next steps">
       {items.map((p) => (
-        <button key={`${p.kind}|${p.path ?? p.label}`} type="button" className={`${starter} disabled:opacity-40`} title={p.send} disabled={disabled} onClick={() => onAsk(p.send)}>
+        <button key={`${p.kind}|${p.path ?? p.label}`} type="button" className={`${starter} disabled:opacity-40`} title={p.send} disabled={disabled} onClick={() => (p.kind === "explore" && p.path ? onOpenExplore?.(p.path) : onAsk(p.send))}>
           {p.label}
         </button>
       ))}

@@ -191,13 +191,17 @@ pub fn node_by_path(conn: &Connection, path: &str) -> Result<Option<NodeInfo>> {
 
 pub fn children(conn: &Connection, node_id: i64) -> Result<Vec<NodeInfo>> {
     let base = path_of(conn, node_id)?.ok_or_else(|| anyhow!("node {node_id} not found"))?;
+    children_at(conn, node_id, &base)
+}
+
+pub(crate) fn children_at(conn: &Connection, node_id: i64, base: &str) -> Result<Vec<NodeInfo>> {
     let mut st = conn.prepare_cached(&format!(
         "SELECT {NODE_COLS} FROM node WHERE parent_id = ?1"
     ))?;
     let mut out = st
         .query_map([node_id], |r| {
             let name: String = r.get(2)?;
-            node_from_row(r, Some(join_path(&base, &name)))
+            node_from_row(r, Some(join_path(base, &name)))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     out.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
@@ -263,7 +267,7 @@ pub struct ExtMix {
     pub total_bytes: u64,
 }
 
-fn ext_of(name: &str) -> String {
+pub(crate) fn ext_of(name: &str) -> String {
     match name.rfind('.') {
         Some(i) if i > 0 => name[i + 1..].to_ascii_lowercase(),
         _ => String::new(),
@@ -272,12 +276,31 @@ fn ext_of(name: &str) -> String {
 
 // Files under the row threshold fold into their parent (INDEX-SMALL-FOLD), so their type stays unknown.
 pub fn ext_mix(conn: &Connection, node_id: i64) -> Result<ExtMix> {
-    let mut st = conn.prepare_cached(
-        "WITH RECURSIVE d(id) AS (SELECT ?1 UNION ALL          SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE +n.kind = 0)          SELECT n.kind, n.name, n.alloc, n.small_count, n.small_bytes, n.flags FROM node n JOIN d ON n.id = d.id          UNION ALL SELECT n.kind, n.name, n.alloc, 0, 0, n.flags FROM node n JOIN d ON n.parent_id = d.id          WHERE +n.kind = 1",
+    let (parent, volume): (Option<i64>, i64) = conn.query_row(
+        "SELECT parent_id, volume_id FROM node WHERE id = ?1",
+        [node_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    // A whole volume is all its rows; a plain scan (`+` skips the volume index) is far faster than the walk.
+    let (sql, arg) = match parent {
+        None => (
+            "SELECT n.kind, n.name, n.alloc, n.small_count, n.small_bytes, n.flags FROM node n \
+             WHERE +n.volume_id = ?1 AND +n.kind IN (0, 1)",
+            volume,
+        ),
+        Some(_) => (
+            "WITH RECURSIVE d(id) AS (SELECT ?1 UNION ALL \
+             SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE +n.kind = 0) \
+             SELECT n.kind, n.name, n.alloc, n.small_count, n.small_bytes, n.flags FROM node n JOIN d ON n.id = d.id \
+             UNION ALL SELECT n.kind, n.name, n.alloc, 0, 0, n.flags FROM node n JOIN d ON n.parent_id = d.id \
+             WHERE +n.kind = 1",
+            node_id,
+        ),
+    };
+    let mut st = conn.prepare_cached(sql)?;
     let mut by_ext: HashMap<String, (u64, u64)> = HashMap::new();
     let mut mix = ExtMix::default();
-    let mut rows = st.query([node_id])?;
+    let mut rows = st.query([arg])?;
     while let Some(r) = rows.next()? {
         let kind: i64 = r.get(0)?;
         let flags: i64 = r.get(5)?;

@@ -298,7 +298,7 @@ export type More = { count: number; bytes: number };
 export type FolderRow = { path: string; size: number; files: number; denied: boolean };
 export type FileRow = { path: string; size: number; modified_ms: number | null; accessed_ms: number | null };
 export type ChangeRow = { kind: "dir" | "file"; path: string; delta: number; before: number | null; after: number | null };
-export type FoldersData = { v: 1; kind: "folders"; under: string | null; depth: number; as_of_ms: number | null; items: FolderRow[]; more: More };
+export type FoldersData = { v: 1; kind: "folders"; under: string | null; depth: number; view?: "list" | "map"; as_of_ms: number | null; items: FolderRow[]; more: More };
 export type FilesData = {
   v: 1;
   kind: "files";
@@ -324,7 +324,7 @@ export type ChangesData = {
   omitted: { grew: number; new: number; shrank: number; removed: number };
   range_ms: [number, number];
 };
-export type PillKind = "ask" | "clean_up";
+export type PillKind = "ask" | "clean_up" | "explore";
 export type Pill = { label: string; kind: PillKind; path?: string };
 export type PillsData = { v: 1; kind: "pills"; items: Pill[] };
 export type LearnedData = { v: 1; kind: "learned"; items: Learned[] };
@@ -342,3 +342,29 @@ export type ChildRow = {
   has_children: boolean;
 };
 export type Children = { path: string; size: number; files: number; children: ChildRow[]; small: More; more: More };
+
+export type TagState = "proposed" | "review" | "keep" | "system" | "user" | "unknown";
+export type MapTag = { state: TagState; label?: string; verdict?: Verdict };
+export type MapNode = {
+  path: string;
+  name: string;
+  kind: "dir" | "file" | "link" | "small";
+  size: number;
+  files: number;
+  ext?: string;
+  children?: MapNode[];
+  more?: More;
+  tag: MapTag;
+};
+export type IndexMap = { tree: MapNode; ancestors: { path: string; name: string }[]; min_bytes: number; nodes: number; capped: boolean };
+export type TypeRow = {
+  ext: string | null;
+  bytes: number;
+  files: number;
+  small?: boolean;
+  other?: number;
+  label?: string;
+  app?: string;
+  use?: string;
+  category?: string;
+};

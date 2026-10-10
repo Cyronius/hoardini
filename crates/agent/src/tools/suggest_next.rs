@@ -10,7 +10,8 @@ pub struct SuggestNext;
 
 pub const MAX_PILLS: usize = 3;
 // Each kind needs a working UI action; add one here only together with its button.
-pub const PILL_KINDS: [&str; 2] = ["ask", "clean_up"];
+pub const PILL_KINDS: [&str; 3] = ["ask", "clean_up", "explore"];
+const NEEDS_PATH: [&str; 2] = ["clean_up", "explore"];
 const MAX_LABEL_CHARS: usize = 80;
 
 struct Pill {
@@ -46,7 +47,7 @@ impl Tool for SuggestNext {
     }
 
     fn description(&self) -> &'static str {
-        "Offer up to 3 next steps as buttons under your answer. Call it last. kind \"ask\": the label is sent as the user's next question. kind \"clean_up\": looks for what can go in `path` (a folder from the index)."
+        "Offer up to 3 next steps as buttons under your answer. Call it last. kind \"ask\": the label is sent as the user's next question. kind \"clean_up\": looks for what can go in `path` (a folder from the index). kind \"explore\": opens `path` in the Explore treemap."
     }
 
     fn parameters(&self) -> Value {
@@ -56,7 +57,7 @@ impl Tool for SuggestNext {
                 "properties": {
                     "label": {"type": "string", "description": "Button text, a few words"},
                     "kind": {"type": "string", "enum": PILL_KINDS},
-                    "path": {"type": "string", "description": "Folder or file it is about, e.g. ~\\.cache; required for clean_up"}
+                    "path": {"type": "string", "description": "Folder or file it is about, e.g. ~\\.cache; required for clean_up and explore"}
                 },
                 "required": ["label", "kind"]
             }}
@@ -83,8 +84,8 @@ impl Tool for SuggestNext {
                 Some("no label".to_string())
             } else if !PILL_KINDS.contains(&kind.as_str()) {
                 Some(format!("kind {kind:?} is not available"))
-            } else if kind == "clean_up" && field(it, "path").is_none() {
-                Some("clean_up needs a path".to_string())
+            } else if NEEDS_PATH.contains(&kind.as_str()) && field(it, "path").is_none() {
+                Some(format!("{kind} needs a path"))
             } else {
                 None
             };

@@ -466,6 +466,7 @@ impl Run {
                 today: fmt_date(now_ms()),
                 index_summary: summary,
                 refresh,
+                explore: hoardini_core::explore::focus(&conn),
                 globals: notes,
                 open_proposals,
             });

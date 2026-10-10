@@ -22,6 +22,7 @@ use tokio::sync::watch;
 pub mod builtin;
 mod copychecks;
 mod copywork;
+mod explore;
 mod providers;
 mod rclone;
 mod review;
@@ -228,6 +229,8 @@ pub async fn start_with_launcher(
     launcher: Option<Arc<dyn builtin::Launcher>>,
 ) -> anyhow::Result<ServerHandle> {
     let db = Db::open(&opts.db_path)?;
+    // What the user looked at in Explore belongs to the last session's window, not this one.
+    hoardini_core::explore::set_focus(&db.conn()?, None)?;
     let db_for_forget = db.clone();
     let data_root = opts
         .db_path

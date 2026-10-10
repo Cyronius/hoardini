@@ -31,7 +31,7 @@ pub use volumes::{
 };
 pub use walk::{Event, Mode, Progress, RefreshOptions, RefreshOutcome, refresh};
 
-pub(crate) use query::PathCache;
+pub(crate) use query::{PathCache, children_at, ext_of};
 
 use anyhow::Result;
 use rusqlite::Connection;
