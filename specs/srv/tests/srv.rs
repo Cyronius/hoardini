@@ -2341,6 +2341,34 @@ async fn a_what_is_this_answer_is_a_user_row_and_shows_on_the_review() {
                 && r["key"] == r"C:\code\covenant-agent\data"
                 && r["source"] == "user")
     );
+
+    for (path, answer) in [
+        (r"code\covenant-agent", "disposable"),
+        (r"C:\code\..\Windows", "disposable"),
+        (r"C:\", "keep"),
+        (r"C:\", "disposable"),
+        ("~", "disposable"),
+        (r"C:\Users", "keep"),
+        (r"~\AppData\Local", "disposable"),
+        (r"~\.lmstudio", "disposable"),
+        (r"C:\Windows\Temp", "disposable"),
+        (r"C:\Program Files\Contoso", "never-touch"),
+    ] {
+        let (st, e) = f
+            .call(
+                "POST",
+                "/api/locations/answer",
+                Some(json!({"path": path, "answer": answer})),
+            )
+            .await;
+        assert_eq!(st, 400, "{path} {answer}: {e}");
+    }
+    let (_, after) = f.call("GET", "/api/memory", None).await;
+    assert_eq!(
+        after.as_array().unwrap().len(),
+        rows.as_array().unwrap().len(),
+        "a refused answer writes nothing"
+    );
     let _ = f.h.shutdown.send(());
 }
 

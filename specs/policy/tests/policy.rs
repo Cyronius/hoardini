@@ -926,14 +926,15 @@ fn a_disposable_answer_is_what_an_unknown_location_lacked() {
         cap_for_with(&conn, &fx.env, &f, None, false).unwrap(),
         Some(Verdict::Review)
     );
-    location(
-        &fx,
-        &fx.work.join("junk"),
-        "user",
-        "You said this folder can go.",
-        Verdict::Safe,
-        Action::ALL.to_vec(),
-    );
+    fx.index_work();
+    memory::location::answer(
+        &conn,
+        &fx.env,
+        &s(&fx.work.join("junk")),
+        memory::location::Answer::Disposable,
+        1,
+    )
+    .unwrap();
     location(
         &fx,
         &fx.work.join(r"junk\deeper"),

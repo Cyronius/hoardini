@@ -15,7 +15,7 @@ folder the walk came from, or the store for `children` units; none for `root` it
 the `parts` past the entry's minimum age. At each folder, in order:
 
 1. A protect note covering it makes it one `kept` unit. A location row of its own from the user with verdict `safe`
-   (the Disposable answer, MEM-LOCATION) makes it one `disposable` unit. A `keep` location (MEM-LOCATION) covering it
+   (the Disposable answer, MEM-LOCATION, while the folder has not grown by half since) makes it one `disposable` unit. A `keep` location (MEM-LOCATION) covering it
    that came from the user, a job or the content mix makes it one `kept` unit. The walk does not go inside any of them.
 2. A catalog entry naming the folder itself (`Catalog::lookup_exact`; an entry matched only through an ancestor does
    not count) whose verdict is not `keep` and whose `unit` is not `container` decides by its `unit`

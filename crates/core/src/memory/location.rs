@@ -351,6 +351,7 @@ pub fn locations(conn: &Connection) -> anyhow::Result<Vec<Memory>> {
     Ok(rows)
 }
 
+// The user's answer is never reassessed, so its `size_at` stays the size they answered for (`answer_outgrown`).
 fn due(m: &Memory, size: u64, now: i64) -> bool {
     if m.source == "user" {
         return false;
@@ -628,6 +629,30 @@ pub fn user_answer_covering(
     Ok(None)
 }
 
+pub fn is_disposable_answer(m: &Memory) -> bool {
+    m.source == "user"
+        && m.detail
+            .as_ref()
+            .is_some_and(|d| d.verdict == Some(Verdict::Safe))
+}
+
+// Grown by half since the answer, the folder holds files the user never saw; with no sizes to compare it is unknown too.
+pub fn answer_outgrown(conn: &Connection, env: &PolicyEnv, m: &Memory) -> bool {
+    let at = m.detail.as_ref().and_then(|d| d.size_at);
+    let now = index::node_by_path(conn, &expanded(env, &m.key))
+        .ok()
+        .flatten()
+        .map(|n| n.size);
+    match (at, now) {
+        (Some(at), Some(now)) => now > at && u128::from(now) * 2 >= u128::from(at) * 3,
+        _ => true,
+    }
+}
+
+pub fn disposable_holds(conn: &Connection, env: &PolicyEnv, m: &Memory) -> bool {
+    is_disposable_answer(m) && !answer_outgrown(conn, env, m)
+}
+
 pub fn tag(m: &Memory) -> Option<String> {
     let d = m.detail.as_ref()?;
     let label = d
@@ -653,6 +678,36 @@ pub enum Answer {
     NeverTouch,
 }
 
+// An answer covers everything below it, so a drive, the profile, a container or a system area is never one place to answer for.
+fn refusal(env: &PolicyEnv, p: &str) -> Option<String> {
+    let b = p.as_bytes();
+    let absolute = (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\')
+        || p.starts_with(r"\\");
+    if !absolute || p.split('\\').any(|c| c == "." || c == "..") {
+        return Some(format!("{p} is not an absolute path"));
+    }
+    match area_of(env, p) {
+        Some(Area::System { label }) => {
+            return Some(format!("{p} is in {label}, which Hoardini never touches"));
+        }
+        Some(Area::Container { label }) => {
+            return Some(format!(
+                "{p} is {label}, which holds many kinds of folders; answer for one inside it"
+            ));
+        }
+        None => {}
+    }
+    env.catalog()
+        .lookup_exact(p)
+        .filter(|e| e.unit == UnitKind::Container)
+        .map(|e| {
+            format!(
+                "{p} is {}, which holds many kinds of folders; answer for one inside it",
+                e.name
+            )
+        })
+}
+
 pub fn answer(
     conn: &Connection,
     env: &PolicyEnv,
@@ -661,6 +716,9 @@ pub fn answer(
     now: i64,
 ) -> anyhow::Result<Memory> {
     let p = normalize_path(&env.expand(path));
+    if let Some(why) = refusal(env, &p) {
+        anyhow::bail!(why);
+    }
     let prev = location_at(conn, &env.profile, &p)?
         .and_then(|m| m.detail)
         .unwrap_or_default();

@@ -134,8 +134,8 @@ calls temp, cache, package, browser or installer cache, build output, logs, cras
 card (`copycheck::held_by_live_card`; an unticked item waits for its tick, which POLICY-REVALIDATE checks again). A shared
 blob's `review`, a catalog cap, and `keep` stay, and no other confidence changes a cap. The user's Disposable answer
 (MEM-LOCATION: the nearest location row from the user at or above the path, with verdict `safe`; classifier and job rows
-in between do not count, `location::user_answer_covering`) is knowledge too: it lifts the `review` cap of a path no
-catalog entry knows. On an online-only card nothing is deleted, so the catalog's caps, which are about deleting (a sync
+in between do not count, `location::user_answer_covering`) is knowledge too: while it holds (the folder has not grown by half since the answer, `location::disposable_holds`) it
+lifts the `review` cap of a path no catalog entry knows. On an online-only card nothing is deleted, so the catalog's caps, which are about deleting (a sync
 folder's own entry caps deletes there at `review`), do not apply: the cap is `synced` when the sync check finds the item
 in sync and `review` otherwise, and `keep` still wins for a path in use or denied.
 

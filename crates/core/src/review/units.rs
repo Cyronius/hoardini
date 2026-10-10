@@ -90,7 +90,7 @@ pub fn resolve(
         let verdict = m.detail.as_ref().and_then(|d| d.verdict);
         if verdict == Some(Verdict::Keep) && !matches!(m.source.as_str(), "deny" | "catalog") {
             w.kept_locations.push(location::expanded(env, &m.key));
-        } else if verdict == Some(Verdict::Safe) && m.source == "user" {
+        } else if location::disposable_holds(conn, env, &m) {
             w.disposable.push(location::expanded(env, &m.key));
         }
     }

@@ -150,13 +150,22 @@ the classifier's (`deny`, `catalog`, `mix`, `index`), it is pinned, or it has `c
 `location::answer(conn, env, path, answer, now)` records the user's answer to "What is this?" as a `user` row, pinned,
 keeping `cleaned` and `kept`: `keep` gives verdict `keep` with `[archive, compress]`; `disposable`, `safe` with all four;
 `move-elsewhere`, `keep` with `[archive]`; `never-touch`, `keep` with none, plus a `protect` note on the path
-(POLICY-PROTECT). `location_at` finds a folder's row, `location_covering` the nearest at or above a path, and
+(POLICY-PROTECT). An answer covers everything below it, so `answer` refuses (an error, nothing written) a path that is
+not absolute once `~` expands or holds a `.` or `..` component, a volume root, a deny-list area (`policy::area_of`: a
+Windows system area, or a container: the drive root, the profile, AppData and its three folders, or a folder holding one
+of these, such as `C:\Users`), and a folder a catalog `container` entry names exactly (`~\.lmstudio`, `%LOCALAPPDATA%`).
+A Disposable answer counts (`location::disposable_holds`) only while the folder's indexed size is under half again its
+`size_at`, the size answered for (a user row is never reassessed, so `size_at` stays that size); grown by half, or with
+either size unknown (`location::answer_outgrown`), it lifts no cap (POLICY-VERDICT-CAP), makes no `disposable` unit
+(REVIEW-UNITS), and its review area is described as if unanswered (`unknown` when nothing else knows the folder), so the
+user is asked again. `location_at` finds a folder's row, `location_covering` the nearest at or above a path, and
 `location::tag` the prompt tag: the label, then the verdict when there is one (`your photos and videos, keep`, `unknown`).
 
 **Acceptance criteria:**
 - On a fake drive with 1,000 GiB used: `~\Pictures` (80 GiB, 65 GiB of it `.jpg`, `.mp4` and `.heic` in two year folders) is a `mix` row keyed `~\Pictures`, kind `verdict`, category `photos`, `keep`, actions `[archive]`, `size_at` 80 GiB, `assessed_ms` the sweep time, tag `your photos and videos, keep`.
 - On the same drive `C:\code\covenant-agent` (161 GiB of `.dat` in two folders) is `unknown` with no verdict, source `index`, tag `unknown`; `C:\code`, 96% of which is that folder, has no row; `~\.lmstudio\models` is a `catalog` row by `catalog:lmstudio-models`, category `model-store`, all four actions, tag `LM Studio models, redownload`; the Windows folder is a `deny` row, `system`, `keep`, no actions; the profile is a `container` tagged `your profile folder`; a 2 GiB folder and the drive root have none; `location_covering` of a path under `~\Pictures` returns its row.
 - With 45 folders of 6 GiB and up under `C:\many`, `large_folders` returns 40: `C:\many` first, then the 39 biggest of the 45.
+- After Disposable for a 2 GiB folder, growing it to 2.9 GiB keeps it ticked on the `disposable` card and a file inside uncapped; at 3.1 GiB no card ticks it, its area is `unknown` again, and that file's cap is `review` (`specs/review/tests/build.rs`). Answers for a relative path, a path through `..`, `C:\`, `~`, `C:\Users`, `~\AppData\Local`, `~\.lmstudio`, `C:\Windows\Temp` and a folder under Program Files are refused and write nothing (`specs/srv/tests/srv.rs`).
 - With ten 6 GiB folders under `%TEMP%\claude`, `%TEMP%` is large (a `catalog:temp-user` row) although `claude` holds all of it, and no folder under `%TEMP%` is; `~\.lmstudio\models` is large and the 20 GiB model folder inside it is not; a 6 GiB `C:\data\set` still is.
 - An 8 GiB folder grown 10% keeps its `assessed_ms`; grown to 11 GiB (37.5%) it is reassessed with `size_at` 11 GiB; 90 days later it is reassessed again; a folder the user answered Keep to is unchanged through all of it.
 - When three 6 GiB folders shrink to 2 GiB, the plain one loses its row, one whose detail has a `kept` entry keeps it, and one the user called Disposable keeps it.

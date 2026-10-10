@@ -108,8 +108,7 @@ pub(crate) fn cap_and_copy(
         crate::memory::location::user_answer_covering(conn, &env.profile, &p)
             .ok()
             .flatten()
-            .and_then(|m| m.detail)
-            .is_some_and(|d| d.verdict == Some(Verdict::Safe))
+            .is_some_and(|m| crate::memory::location::disposable_holds(conn, env, &m))
     };
     let review = match &found {
         None => !disposable(),
