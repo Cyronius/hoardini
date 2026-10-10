@@ -1,5 +1,14 @@
 # Plan: Hoardini opens on a review of what can go and what's taking space
 
+## Outcome (2026-10-09, `feat/review-first`)
+Landed: units and location rows (§1, §2), the review with its cards, Large areas, What is this? and Look closer (§4), the ▸ tree and Show in Explorer, copy checks with consent and the Online-only card (§3), Compress in place (§5), Apps you rarely use (§6), learning from jobs and web searches (§2d), chat cards and pills (§8), Explore (§9), and Cleanups only Windows can do (§7), plus the review's machine-wide `leftovers` operation. The requirements are listed under Spec impact.
+
+Not landed:
+- §4c: tree rows do not show a file's identity (a GGUF's model name and quant).
+- §9: a type with no identity in By type does not run the web lookup itself; What is this? asks the chat.
+- §3: no disk-image check against publishers' checksum lists, so an `.iso` stays "only copy we know of".
+- §3: Ollama blobs are matched against the local manifests only (`claimed`); nothing asks the Ollama registry.
+
 Hoardini measures a drive, works out what can be deleted, compressed or sent elsewhere, and then does it. The chat is for questions along the way. The app shall open on a **review**, which has two parts:
 
 1. **Proposals:** cards of things Hoardini thinks can go, backed by the catalog, memories, web knowledge and checks such as "this file is on Hugging Face".
@@ -204,46 +213,21 @@ A second home tab next to Review, laid out like WinDirStat but wired to what Hoa
   - In the other direction, the system prompt carries "The user is looking at {path} in Explore", the same way it carries the selected drive. "What's this big red one?" then works.
 
 ## Spec impact
-- **New feature `specs/review/`:**
-  - `REVIEW-UNITS` (test): unit resolution, including `self`, `children` and `contents`, and the model-store detector.
-  - `REVIEW-BUILD` (test): which card each item lands in, the exclusions, and tick defaults.
-  - `REVIEW-AREAS` (test): what lands in Large areas, and why.
-  - `REVIEW-TRIGGER` (test).
-  - `REVIEW-SUPERSEDE` (test).
-  - `UI-REVIEW` (manual).
-  - `UI-ITEM-TREE` (manual): the ▸ tree and Show in Explorer.
-  - `UI-EXPLORE` (manual): the three linked panes, the color modes, the selection bar, and zoom.
-- **New SRV:** `SRV-INDEX-MAP` (test): pruning to the pixel budget, the merged "N more" block, and totals that add up. `SRV-INDEX-TYPES` (test).
-- **New copy checks (EVID):**
-  - `EVID-COPY-CHECK` (test): the result shape, confidence → effect, caching by file id, size and mtime, and hints that only say where to look.
-  - One requirement per check, each tested against recorded responses: `EVID-COPY-DUP`, `EVID-COPY-ARCHIVE`, `EVID-COPY-SYNC`, `EVID-COPY-GIT`, `EVID-COPY-MODELHUB`, `EVID-COPY-WINGET`.
-  - `EVID-GGUF-SOURCE` (test): the new GGUF metadata keys.
-- **New ACT:**
-  - `ACT-COMPRESS-CANDIDATES` (test).
-  - `ACT-UNINSTALL` (manual): the button runs the registered uninstaller and never deletes the folder.
-  - `ACT-ONLINE-ONLY` (test with a fake sync root; manual against OneDrive): evicts the local copy, never deletes, and skips files that are not in sync.
-  - `ACT-WINDOWS-CLEANUP` (manual), if D3 is yes: each Windows-run cleanup, its admin prompt, and the space it reports.
-- **New MEM:**
-  - `MEM-LOCATION` (test).
-  - `MEM-FILETYPE` (test).
-  - `MEM-WEB-IDENTITY` (test): web rows carry app and use only, never a verdict.
-  - `MEM-LEARN-JOB` (test).
-- **New POLICY:** `POLICY-LOCATION-KEEP` (test).
-- **New AGENT:** `AGENT-WEB-LEARN` (test), `AGENT-TOOL-DATA` (test), `AGENT-SUGGEST-NEXT` (test): at most 3 pills, paths not in the index dropped, stored with the tool result.
-- **New SRV:** `SRV-INDEX-CHILDREN` (test), `SRV-REVEAL` (test for the refusals).
-- **New UI:** `UI-TOOL-CARDS`, `UI-FOLLOW-UPS`, `UI-LEARNED-CHIP` (manual).
-- **Modified:**
-  - Catalog schema: `unit`, plus the new entries in 1.
-  - MEM model: `detail_json`, sources `job:` and `copy:<check>`; type rows may carry a copy-check hint.
-  - `MEM-LIMIT`.
-  - `AGENT-WEB-SEARCH`: `about`.
-  - `AGENT-PROMPT-CONTEXT`: tagged folders, the card rule (ending with `suggest_next`), open review cards, and the Explore focus path.
-  - `top_dirs`: the optional `view` argument.
-  - `UI-WELCOME-BACK`: becomes the review header, without changes.
-  - `UI-PROPOSAL-COLLAPSE`: `superseded`.
-  - `UI-CHANGES-CHART`.
-  - The eval question set.
-- **Removed:** none.
+Compared with `main` at 94f4e02.
+
+- **New requirements (60):**
+  - REVIEW (new feature `specs/review/`): `REVIEW-UNITS`, `REVIEW-BUILD`, `REVIEW-AREAS`, `REVIEW-TRIGGER`, `REVIEW-SUPERSEDE` (test); `REVIEW-LOOK-CLOSER` (manual).
+  - EVID: `EVID-GGUF-SOURCE`, `EVID-COPY-CHECK`, `EVID-COPY-CONSENT`, `EVID-COPY-DUP`, `EVID-COPY-ARCHIVE`, `EVID-COPY-SYNC`, `EVID-COPY-GIT`, `EVID-COPY-MODELHUB`, `EVID-COPY-WINGET`, `EVID-COPY-CLAIMED` (test); `EVID-COPY-BACKGROUND` (manual).
+  - ACT: `ACT-COMPRESS-CANDIDATES`, `ACT-ONLINE-ONLY`, `ACT-APPS-RARELY-USED`, `ACT-WINDOWS-CLEANUP-DETECT`, `ACT-WINDOWS-CLEANUP-RUN` (test); `ACT-UNINSTALL`, `ACT-WINDOWS-CLEANUP` (manual).
+  - MEM: `MEM-LOCATION`, `MEM-FILETYPE`, `MEM-SOURCE-RANK`, `MEM-WEB-IDENTITY`, `MEM-LEARN-JOB` (test).
+  - POLICY: `POLICY-LOCATION-KEEP` (test).
+  - INDEX: `INDEX-EXT-MIX` (test).
+  - AGENT: `AGENT-PROPOSE-ONLINE-ONLY`, `AGENT-SYSTEM-CLEANUP`, `AGENT-WEB-LEARN`, `AGENT-TOOL-DATA`, `AGENT-SUGGEST-NEXT`, `AGENT-INSPECT-COPIES` (test).
+  - SRV: `SRV-COPY-CHECKS`, `SRV-INDEX-CHILDREN`, `SRV-REVEAL`, `SRV-INDEX-MAP`, `SRV-INDEX-TYPES`, `SRV-EXPLORE-FOCUS`, `SRV-LEARNED`, `SRV-PROPOSAL-SELECTION`, `SRV-LOCATION-ANSWER`, `SRV-APPS` (test).
+  - UI: `UI-LAYOUT-WIDTH`, `UI-REVIEW-ORDER`, `UI-TREEMAP-LAYOUT` (test); `UI-LAYOUT`, `UI-REVIEW`, `UI-SYSTEM-CLEANUP-CARD`, `UI-ONLINE-CONSENT`, `UI-ONLINE-ONLY-CARD`, `UI-TOOL-CARDS`, `UI-ITEM-TREE`, `UI-FOLLOW-UPS`, `UI-EXPLORE`, `UI-LEARNED-CHIP` (manual).
+- **Modified requirements (30):** `ACT-FOLLOW-UP`, `ACT-COMPRESS-VERIFY`, `AGENT-NO-DIRECT`, `AGENT-REDACT`, `AGENT-SMALL-PROFILE`, `AGENT-WEB-SEARCH`, `AGENT-PROMPT-CONTEXT`, `AGENT-LIVE-MODEL`, `AGENT-EVAL-SCORING`, `AGENT-EVAL-FIXTURE`, `AGENT-EVAL-GATE`, `EVID-CATALOG`, `INDEX-ACTION-PATCH`, `MEM-EDIT`, `MEM-LIMIT`, `POLICY-REVALIDATE`, `POLICY-VERDICT-CAP`, `POLICY-DEFAULT-TICK`, `POLICY-ITEM-MEMORY`, `SRV-SETTINGS`, `SRV-MEMORY-CRUD`, `UI-CONTEXT-BOUNDARY`, `UI-WELCOME-BACK`, `UI-CLEAR-HISTORY`, `UI-MASCOT-JOBS`, `UI-PROPOSAL-COLLAPSE`, `UI-SETTINGS-AUTOSAVE`, `UI-THEME-CONTRAST`, `UI-CHANGES-CHART`, `UI-DRIVE-SELECTOR`.
+- **Removed requirements:** none.
+- **Schema:** `schema_v5.sql` (memory detail, tool-card data, proposal review fields, `review`, `copy_check`, `file_hash`) and `schema_v6.sql` (`compress_estimate`).
 
 ## Phases (one branch and PR each)
 1. **Units and locations:** the catalog `unit` field and gap entries, the model-store detector, location rows, and POLICY-LOCATION-KEEP.
