@@ -396,3 +396,56 @@ fn a_learned_chip_whose_row_is_gone_is_dropped_and_never_reaches_a_reused_id() {
     );
     assert!(memory::get(&conn, protect.id).unwrap().is_some());
 }
+
+// Traces: AGENT-WEB-LEARN
+#[test]
+fn the_first_complete_json_object_of_the_reply_is_read() {
+    use hoardini_agent::tools::parse_identity;
+    let flm = Some("FastFlowLM".to_string());
+    let one = r#"{"app": "FastFlowLM", "use": "NPU model weights", "category": "model-weights"}"#;
+    assert_eq!(parse_identity(one).unwrap().app, flm);
+    let trailing = format!("{one} Sources: {{1}}");
+    assert_eq!(parse_identity(&trailing).unwrap().app, flm);
+    let two = format!("{one}\n{{\"app\": \"other\", \"use\": \"x\"}}");
+    assert_eq!(parse_identity(&two).unwrap().app, flm);
+    let lead = format!("From result {{1}}: {one}");
+    assert_eq!(parse_identity(&lead).unwrap().app, flm);
+    assert!(parse_identity("no json {here}").is_none());
+}
+
+// Traces: AGENT-WEB-SEARCH
+#[tokio::test(flavor = "multi_thread")]
+async fn a_glob_that_matches_only_a_folder_above_is_not_already_known() {
+    let h = Harness::new(Some(FAKE_PROFILE));
+    with_search(&h).await;
+    memory::remember_with(
+        &h.db.conn().unwrap(),
+        NewMemory::new(
+            Scope::Glob,
+            r"~\code\**\target",
+            MemKind::Fact,
+            "Rust build output",
+            "user",
+        ),
+        1_800_000_000_000,
+        FAKE_PROFILE,
+    )
+    .unwrap();
+    let c = ctx(&h, FAKE_PROFILE, "g1");
+    let r = Registry::full();
+    let below = content(r.call(
+        &c,
+        "web_search",
+        r#"{"query": "debug folder", "about": "~\\code\\x\\target\\debug"}"#,
+    ));
+    assert!(below.starts_with("<<<UNTRUSTED_WEB_CONTENT"), "{below}");
+    let at = content(r.call(
+        &c,
+        "web_search",
+        r#"{"query": "target folder", "about": "~\\code\\x\\target"}"#,
+    ));
+    assert!(
+        at.starts_with("Already known: Rust build output (from you"),
+        "{at}"
+    );
+}

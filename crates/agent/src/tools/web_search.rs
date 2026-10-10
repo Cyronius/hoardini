@@ -113,9 +113,14 @@ pub fn known(conn: &Connection, about: &About, profile: &str) -> anyhow::Result<
         }
         About::Path(p) => {
             let key = normalize_key_with(Scope::Path, p, profile);
+            let slashed = key.replace('\\', "/");
+            // A glob that matches only a folder above the path says what that folder is, not what this is.
             recall_path_with(conn, p, profile)?
                 .into_iter()
-                .filter(|m| m.scope == Scope::Glob || m.key.eq_ignore_ascii_case(&key))
+                .filter(|m| match m.scope {
+                    Scope::Glob => memory::compile_glob(&m.key).is_ok_and(|g| g.is_match(&slashed)),
+                    _ => m.key.eq_ignore_ascii_case(&key),
+                })
                 .collect()
         }
     };
@@ -180,10 +185,15 @@ pub struct Identity {
     pub category: String,
 }
 
+// The first complete JSON object: a brace in prose before or after it is no part of it.
 pub fn parse_identity(reply: &str) -> Option<Identity> {
-    let start = reply.find('{')?;
-    let end = reply.rfind('}')?;
-    let v: Value = serde_json::from_str(reply.get(start..=end)?).ok()?;
+    let v: Value = reply.match_indices('{').find_map(|(i, _)| {
+        serde_json::Deserializer::from_str(&reply[i..])
+            .into_iter::<Value>()
+            .next()?
+            .ok()
+            .filter(Value::is_object)
+    })?;
     let field = |k: &str, max: usize| {
         v.get(k)
             .and_then(Value::as_str)
