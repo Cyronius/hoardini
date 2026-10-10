@@ -101,7 +101,10 @@ export type Proposal = {
   items: ProposalItem[];
   parent_id: string | null;
   follow_up_id: string | null;
+  // What the finished job recorded on location rows (MEM-LEARN-JOB); absent from older servers.
+  learned?: Learned[];
 };
+export type Learned = { memory_id: number; text: string; url?: string };
 
 export type Memory = {
   id: number;
@@ -298,8 +301,9 @@ export type ChangesData = {
 export type PillKind = "ask" | "clean_up";
 export type Pill = { label: string; kind: PillKind; path?: string };
 export type PillsData = { v: 1; kind: "pills"; items: Pill[] };
+export type LearnedData = { v: 1; kind: "learned"; items: Learned[] };
 export type CardData = FoldersData | FilesData | ChangesData;
-export type ToolData = CardData | PillsData;
+export type ToolData = CardData | PillsData | LearnedData;
 
 export type ChildRow = {
   path: string;

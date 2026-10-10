@@ -530,3 +530,47 @@ fn location_and_type_rows_are_outside_the_note_limit() {
     );
     assert_eq!(rows.iter().filter(|m| m.detail.is_some()).count(), 4);
 }
+
+// Traces: MEM-LEARN-JOB, MEM-LOCATION
+#[test]
+fn the_sweep_classifies_a_job_row_and_keeps_its_source_and_entries() {
+    let d = Drive::new();
+    let cleaned = serde_json::json!({"ms": T0, "bytes": GIB, "path": r"~\Pictures\old.jpg",
+        "rule": r"~\Pictures\old.jpg", "job": "p9", "kind": "delete"});
+    let (made, _) = upsert_with(
+        &d.c(),
+        knowledge(
+            r"C:\Users\tester\Pictures",
+            "job:p9",
+            "You cleaned old.jpg here.",
+            Detail {
+                category: "unknown".into(),
+                by: Some("job".into()),
+                cleaned: vec![cleaned.clone()],
+                ..Detail::default()
+            },
+        ),
+        T0,
+        P,
+    )
+    .unwrap();
+    d.fs.file(r"C:\Users\tester\Pictures\2023\a.jpg", 30 * GIB);
+    d.fs.file(r"C:\Users\tester\Pictures\2024\b.mp4", 30 * GIB);
+    d.sweep(T0 + DAY);
+    let pics = d.row(r"C:\Users\tester\Pictures").unwrap();
+    assert_eq!(pics.id, made.id);
+    assert_eq!(pics.source, "job:p9");
+    assert!(
+        pics.text.starts_with("Your photos and videos: "),
+        "{}",
+        pics.text
+    );
+    let pd = detail(&pics);
+    assert_eq!(
+        (pd.category.as_str(), pd.verdict),
+        ("photos", Some(Verdict::Keep))
+    );
+    assert_eq!(pd.actions, vec![Action::Archive]);
+    assert_eq!(pd.by.as_deref(), Some("mix"));
+    assert_eq!(pd.cleaned, vec![cleaned]);
+}

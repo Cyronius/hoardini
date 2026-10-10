@@ -194,6 +194,23 @@ The conversation routes are:
 - Create → list shows it → `?q=` finds it, an unrelated query finds nothing → `PUT` changes text and kind → `DELETE` → list empty; `PUT`/`DELETE` of a missing id → 404.
 - The created note's `detail` is null; a file-type row written for `q4nx` lists with `detail.category` `model-weights` and `detail.app` `FastFlowLM`.
 
+### SRV-LEARNED: What a job or a search learned, and the chip's routes
+**Applies to:** hoardini-server
+**Verification:** test
+
+Proposal JSON (`GET /api/proposals/{id}` and the `proposals` map of `GET /api/thread`) carries `learned:
+[{memory_id, text}]` from `memory::learn::learned_for` (MEM-LEARN-JOB), with the profile shown as `~`; it is `[]` for
+pending, approved, running and declined proposals and for dedupe. It is in place when the job's terminal frame is
+streamed. `DELETE /api/proposals/{id}/learned/{memory_id}` undoes that job's entries on that row (`learn::undo`) and
+answers `{ok: true}`, or 404 when the row holds nothing of that job. `POST /api/memory/{id}/confirm` re-saves a
+location or file-type row as `user`-sourced and pinned, keeping its text and identity and dropping any verdict
+(`knowledge::confirm`), and returns the row; a note answers 400 and an unknown id 404.
+
+**Acceptance criteria:**
+- A pending two-file delete has `learned` `[]`. With one file approved, `learned` holds one entry by the time the job's terminal frame arrives, reading `go.bin in ~\...\work — cleaned 8.0 KB on <MM-DD>; 1 item you left unticked is kept`, and `GET /api/thread` shows the same.
+- `DELETE` of that entry answers `{ok: true}`, the proposal's `learned` becomes `[]`, and a second `DELETE` answers 404.
+- Confirming a `web:` row for `q4nx` returns it with source `user`, `pinned` true, the same text and `detail.app`; confirming a note answers 400, and id 999999 answers 404.
+
 ### SRV-STATUS-STREAM: Status stream
 **Applies to:** hoardini-server
 **Verification:** test

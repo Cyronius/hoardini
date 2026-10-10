@@ -161,6 +161,8 @@ pub struct Proposal {
     pub dropped: Vec<DroppedItem>,
     pub parent_id: Option<String>,
     pub follow_up_id: Option<String>,
+    #[serde(default)]
+    pub learned: Vec<memory::learn::Learned>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -719,6 +721,16 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
             it.copy_note = copycheck::note_for(conn, &it.path);
         }
     }
+    let finished = matches!(status.as_str(), "done" | "partial" | "failed");
+    let learned = if finished
+        && matches!(
+            kind,
+            ProposalKind::Delete | ProposalKind::Archive | ProposalKind::Compress
+        ) {
+        memory::learn::learned_for(conn, id)?
+    } else {
+        Vec::new()
+    };
     Ok(Some(Proposal {
         id: id.to_string(),
         kind,
@@ -736,6 +748,7 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         dropped: params.dropped,
         parent_id,
         follow_up_id,
+        learned,
     }))
 }
 

@@ -98,6 +98,10 @@ fn entries() -> Vec<Entry> {
         get_("/api/proposals/{id}", proposal_get),
         post_("/api/proposals/{id}/approve", proposal_approve),
         post_("/api/proposals/{id}/decline", proposal_decline),
+        delete_(
+            "/api/proposals/{id}/learned/{memory_id}",
+            proposal_learned_undo,
+        ),
         get_("/api/jobs", jobs_list),
         post_("/api/jobs/{id}/cancel", job_cancel),
         get_("/api/memory", memory_list),
@@ -106,6 +110,7 @@ fn entries() -> Vec<Entry> {
         put_("/api/memory/limit", memory_limit_put),
         put_("/api/memory/{id}", memory_update),
         post_("/api/memory/{id}/restore", memory_restore),
+        post_("/api/memory/{id}/confirm", memory_confirm),
         delete_("/api/memory/{id}", memory_delete),
         get_("/api/providers", providers::list),
         post_("/api/providers", providers::create),
@@ -242,6 +247,9 @@ fn display_proposal(mut p: Proposal) -> Value {
             *path = redact(path);
         }
     }
+    for l in &mut p.learned {
+        l.text = redact(&l.text);
+    }
     let mut v = serde_json::to_value(&p).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
         o.remove("conversation_id");
@@ -362,6 +370,20 @@ async fn proposal_decline(State(s): State<AppState>, Path(id): Path<String>) -> 
     Ok(Json(json!({"approved": false})))
 }
 
+async fn proposal_learned_undo(
+    State(s): State<AppState>,
+    Path((id, memory_id)): Path<(String, i64)>,
+) -> ApiResult {
+    blocking(move || {
+        if memory::learn::undo(&s.db.conn()?, &id, memory_id)? {
+            Ok(Json(json!({"ok": true})))
+        } else {
+            Err(ApiError::not_found("learned entry"))
+        }
+    })
+    .await
+}
+
 async fn jobs_list(State(s): State<AppState>) -> ApiResult {
     let jobs: Vec<Job> = s.exec.jobs().into_iter().map(status::display_job).collect();
     Ok(Json(json!(jobs)))
@@ -446,6 +468,19 @@ async fn memory_update(State(s): State<AppState>, Path(id): Path<i64>, body: Byt
 async fn memory_restore(State(s): State<AppState>, Path(id): Path<i64>) -> ApiResult {
     blocking(move || {
         let m = memory::restore(&s.db.conn()?, id)?.ok_or_else(|| ApiError::not_found("memory"))?;
+        Ok(Json(json!(m)))
+    })
+    .await
+}
+
+async fn memory_confirm(State(s): State<AppState>, Path(id): Path<i64>) -> ApiResult {
+    blocking(move || {
+        let profile = hoardini_core::paths::profile_dir()
+            .to_string_lossy()
+            .into_owned();
+        let m = memory::knowledge::confirm(&s.db.conn()?, id, now_ms(), &profile)
+            .map_err(|e| ApiError::bad(format!("{e:#}")))?
+            .ok_or_else(|| ApiError::not_found("memory"))?;
         Ok(Json(json!(m)))
     })
     .await

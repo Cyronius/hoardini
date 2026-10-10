@@ -2,6 +2,7 @@ mod apps;
 mod candidates;
 mod fake_rc;
 mod follow_up;
+mod learn;
 mod online;
 mod rclone;
 mod safety;

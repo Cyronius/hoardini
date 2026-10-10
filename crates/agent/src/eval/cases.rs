@@ -1,5 +1,5 @@
 use super::fixture::DESTINATION;
-use super::score::{CaseSpec, ForbidCall, Rule, ToolGroup, forbid, group, rule};
+use super::score::{CaseSpec, ForbidCall, Rule, ToolGroup, forbid, group, group_arg, rule};
 
 const GIB: f64 = 1_073_741_824.0;
 
@@ -50,6 +50,8 @@ struct C {
     facts: Vec<Rule>,
     forbid: Vec<ForbidCall>,
     forbid_text: Vec<Rule>,
+    search: bool,
+    learns: Vec<String>,
 }
 
 impl C {
@@ -64,6 +66,8 @@ impl C {
             facts: Vec::new(),
             forbid: Vec::new(),
             forbid_text: Vec::new(),
+            search: false,
+            learns: Vec::new(),
         }
     }
 
@@ -74,6 +78,21 @@ impl C {
 
     fn needs(mut self, any_of: &[&str], args_all: &[&str]) -> C {
         self.required.push(group(any_of, args_all));
+        self
+    }
+
+    fn needs_arg(mut self, any_of: &[&str], arg: &str, args_all: &[&str]) -> C {
+        self.required.push(group_arg(any_of, arg, args_all));
+        self
+    }
+
+    fn searches(mut self) -> C {
+        self.search = true;
+        self
+    }
+
+    fn learns_type(mut self, ext: &str) -> C {
+        self.learns.push(ext.into());
         self
     }
 
@@ -120,6 +139,8 @@ impl C {
             facts: self.facts,
             forbid_calls,
             forbid_text: self.forbid_text,
+            search: self.search,
+            learns: self.learns,
         }
     }
 }
@@ -293,6 +314,13 @@ pub fn cases(sz: &Sizes) -> Vec<CaseSpec> {
                 &[],
                 r"(?m:^[A-Z]:\\code(?:\\[^\\\n]+)?\\?$)",
             )
+            .done(),
+        C::new("q4nx", "What are .q4nx files?")
+            .searches()
+            .needs_arg(&["web_search"], "about", &[r"(?m:^(?:\*\*\\)?\*?\.?q4nx$)"])
+            .learns_type("q4nx")
+            .fact("names FastFlowLM", r"fast ?flow ?lm")
+            .fact("says they are model weights", r"weights|model files?\b|\bnpu\b")
             .done(),
     ]
 }

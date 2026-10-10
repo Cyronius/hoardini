@@ -396,6 +396,26 @@ Under the settled last answer the chat shall show up to 3 pills styled like the 
 5. Ask "what is in lmstudio": the turn ends on a proposal card and no pills show; approve it and the answer after the card shows no pills built from the earlier card.
 (2026-10-09: steps 1–5 pass against the mock in headless Chromium; against `hoardini serve` with a scripted model, the model's pill came first, then the two built from the folders card, and the same three came back after a reload.)
 
+### UI-LEARNED-CHIP: What Hoardini learned shows as a chip with Undo
+**Applies to:** hoardini
+**Verification:** manual
+
+`LearnedChip` (`ui/src/components/LearnedChip.tsx`; props `text`, optional `url`, `onUndo`, optional `onPin`, optional `onConfirm`) shall show one line: "learned", the text (the full text as its tooltip), the source link's host when there is a `url`, and its buttons. Undo turns it into "undone" with the text struck through and no buttons; Confirm turns the label into "learned · confirmed"; Pin toggles "learned · pinned" and Unpin. A failed call shows its error inline and keeps the buttons.
+- **After a job:** a finished proposal card (collapsed or opened, UI-PROPOSAL-COLLAPSE) shows one chip per entry of the proposal's `learned` (SRV-LEARNED) directly under it, above any follow-up card, with Pin (`PUT /api/memory/{id}` `pinned`) and Undo (`DELETE /api/proposals/{id}/learned/{memory_id}`).
+- **After a web search:** a `web_search` call whose `data` is `{kind: "learned"}` (AGENT-WEB-LEARN; live from `tool_data`, after a reload from the thread) shows its chip under the search's tool chip, with the source link, Confirm (`POST /api/memory/{id}/confirm`) and Undo (`DELETE /api/memory/{id}`).
+
+**Verification (manual):**
+1. In `ui/`, run `MOCK_PORT=72xx MOCK_IDLE=1 bun run mock` and Vite with its `/api` proxy pointed at it; open it at 1000 × 900.
+2. Post `{"next_job": {"ms": 1200}}` to `/api/mock`, ask "what is in lmstudio" and hold to delete. When the job ends the card reads "Deleted 12 items · freed 53.6 GB · details ▸", and directly under it, above the follow-up card, a chip reads "learned 12 items in ~\.lmstudio — cleaned 53.6 GB on <MM-DD>; 2 items you left unticked are kept" with Pin and Undo.
+3. Press Pin: the label becomes "learned · pinned" and the row (source `job:<id>`) is pinned in `GET /api/memory`.
+4. Press Undo: the chip reads "undone" with the text struck through and no buttons; `GET /api/proposals/{id}` has `learned: []` and the row is gone. After a reload no chip shows.
+5. Ask "what is ~\.hipfire": under the web search chip a chip reads "learned ~\.hipfire: model cache (hipfire)." with an `example.com` link, Confirm and Undo.
+6. Press Confirm: the label becomes "learned · confirmed" and the row is source `user` and pinned. After a reload the chip is back under the web search chip.
+7. Press Undo: "undone", and the row is gone from `GET /api/memory`.
+8. At 430 px wide in a dark theme each chip stays on one line, the text cut short with the full text as its tooltip.
+9. Against `hoardini serve` with a scratch `HOARDINI_DATA_DIR` and `--db`, a scripted OpenAI-compatible model and a SearXNG stand-in: a model's `propose_delete` of two `.log` files and one other file in a scratch folder, approved with the other file unticked, collapses to "Deleted 2 items · freed 16.0 KB" with the chip ".log files in ~\...\work — cleaned 16.0 KB on <MM-DD>; 1 item you left unticked is kept", still there after a reload; a `web_search` about `~\.hipfire` shows its chip live and after a reload; Confirm makes the row `user`-sourced; Undo on the job chip leaves `learned: []` and no `job:` row.
+(2026-10-09: steps 1–8 pass against the mock in headless Chromium through Playwright, in the default theme and at 430 px with a dark color scheme; step 9 passes against `hoardini serve` on a scratch folder with a scripted model and search stand-in, and the learning request had no tools, no profile name, and the results inside the untrusted fence.)
+
 ### UI-DRIVE-SELECTOR: The header shows one drive, picked from a menu
 **Applies to:** hoardini
 **Verification:** manual
