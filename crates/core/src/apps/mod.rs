@@ -81,6 +81,21 @@ pub fn split_command(cmd: &str) -> Option<(String, Option<String>)> {
     ))
 }
 
+// The shell would look a bare name up in the working directory and on PATH first, so only the System folder may supply one.
+pub fn program_path(file: &str) -> Option<String> {
+    let b = file.as_bytes();
+    if (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\')
+        || file.starts_with(r"\\")
+    {
+        return Some(file.to_string());
+    }
+    if file.contains(['\\', '/', ':']) {
+        return None;
+    }
+    let p = hoardini_win::system_tool(file).ok()?;
+    p.is_file().then(|| p.to_string_lossy().into_owned())
+}
+
 fn registry_id(key: &str) -> String {
     let h = blake3::hash(key.to_lowercase().as_bytes()).to_hex();
     format!("reg-{}", &h[..16])
@@ -104,7 +119,10 @@ pub fn installed(inputs: &AppInputs) -> Vec<App> {
     for p in inputs.programs.iter().filter(|p| !p.hidden) {
         let (Some(loc), Some((file, params))) = (
             p.install_location.as_deref(),
-            p.uninstall_string.as_deref().and_then(split_command),
+            p.uninstall_string
+                .as_deref()
+                .and_then(split_command)
+                .and_then(|(f, a)| Some((program_path(&f)?, a))),
         ) else {
             continue;
         };

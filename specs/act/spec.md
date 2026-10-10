@@ -71,7 +71,11 @@ SMB UNC path), compress, dedupe, online-only, system_cleanup (operations Windows
 `steam-<appid>` for a Steam game (its folder `<library>\steamapps\common\<installdir>`, uninstalled through
 `steam://uninstall/<appid>`), and `reg-<16 hex of BLAKE3 of the lower-cased uninstall key>` for a registry program,
 uninstalled by its own `UninstallString` split into program and arguments (`apps::split_command`: a quoted program, else
-the text up to the first `.exe` followed by a space or the end, else the first word). A registry program is left out
+the text up to the first `.exe` followed by a space or the end, else the first word). The program must be an absolute
+path (`X:\...` or `\\server\...`) or a bare file name, which is taken from the System folder only
+(`apps::program_path`, `hoardini_win::system_tool`), because the shell would look a bare name up in the working
+directory and on `PATH` first; a bare name that is not there, or a relative path, leaves the program with no uninstaller.
+A registry program is left out
 when it is hidden (`SystemComponent = 1` or an update with `ParentKeyName`), has no `InstallLocation` or
 `UninstallString`, has an install location too broad to mean one app (a drive, `Program Files`, `Windows`, `Users`, ...;
 `evidence::owner`), or shares its folder with a Steam game or an earlier program. Steam libraries come from
@@ -95,6 +99,7 @@ folder within the same minute. An app whose folder is not in the index is not li
 **Acceptance criteria:**
 - With fake registry, UserAssist, and Steam inputs over a fake `D:\`: Old Game (Steam, 5 GiB, played 100 days ago), Never Opened (4 GiB, no run; a `setup.exe` in its folder and a run of `C:\Users\me\Downloads\setup.exe` yesterday do not count), Big Tool (3 GiB, run 200 days ago), and Unplayed (Steam, 2.5 GiB, never) are listed in that order, and nothing else: not a 3 GiB app run 10 days ago, a 1 GiB app, a hidden one, one without an uninstaller, one at `D:\Program Files`, one not in the index, the Steam client (1 GiB once its three games are taken out, though run 300 days ago), New Game (UserAssist 200 days ago, Steam 3 days ago), "Microsoft Visual Studio Code (User)" (app id `Microsoft.VisualStudioCode` 2 days ago), an app holding `WINWORD.EXE` (app id `Microsoft.Office.WINWORD.EXE.15` 12 days ago), or "Shortcut App" (`{Programs}\Shortcut App.lnk` 20 days ago). The registry entry "Steam App 1001" for Old Game's folder is not listed separately; Old Game's id is `steam-1001`, a registry id is `reg-` plus 16 hex digits, and a second call gives the same ids.
 - Old Game uninstalls through `steam://uninstall/1001`; Never Opened through `D:\Apps\Never\Uninstall Never.exe` with `/x`.
+- `MsiExec.exe /X{...}` uninstalls through `<System folder>\MsiExec.exe` with `/X{...}`; `\\server\apps\uninstall.exe /quiet` stays as it is; programs whose uninstaller is `unins000.exe /S` (not in the System folder), `bin\uninstall.exe` or `D:uninstall.exe` are not listed at all.
 - `split_command`: a quoted program keeps its arguments apart; an unquoted `C:\Program Files\My App\Uninstall My App.exe --remove now` splits after `.exe`; `MsiExec.exe /X{...}` splits after `MsiExec.exe`; `C:\Tools\app.exe.old\run.exe` stays whole; blank text and an unterminated quote give nothing.
 - `libraryfolders.vdf` in the current layout gives both library paths with single backslashes; the old layout gives its numbered path; an `appmanifest` gives the app id, name, folder under the library, and `LastPlayed` in ms (0 = none); one without `installdir` gives nothing.
 
@@ -104,7 +109,7 @@ folder within the same minute. An app whose folder is not in the index is not li
 
 `POST /api/apps/{id}/uninstall` (SRV-APPS) shall look the id up among the installed apps (ACT-APPS-RARELY-USED) and start
 that app's registered uninstaller through the shell (`ShellExecuteExW`, so an uninstaller that needs admin rights shows
-its own UAC prompt), or `steam://uninstall/<appid>` for a Steam game, and return at once. The uninstaller asks for its
+its own UAC prompt; a bare program name such as `MsiExec.exe` is only ever the System folder's, ACT-APPS-RARELY-USED), or `steam://uninstall/<appid>` for a Steam game, and return at once. The uninstaller asks for its
 own confirmation. Hoardini never deletes an app's folder or files itself, and the request body is never read.
 
 **Verification (manual):**
