@@ -525,6 +525,22 @@ fn candidates_are_listed_biggest_first_and_hashed_in_the_background() {
         "the twin changed: {}",
         note(&dup)
     );
+
+    let gone = d.join("b101.bin");
+    let rows_for = |p: &Path| -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM copy_check WHERE path = ?1 COLLATE NOCASE",
+            [s(p)],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert!(rows_for(&gone) > 0);
+    std::fs::remove_file(&gone).unwrap();
+    let fourth = copycheck::run_volume(&fx.db, &env, &reg, &s(&d), &|| true).unwrap();
+    assert_eq!(fourth.pruned as i64, 1, "{fourth:?}");
+    assert_eq!(rows_for(&gone), 0, "answers for a path that is gone go too");
+    assert!(rows_for(&changed) > 0, "the rest stay");
 }
 
 // Traces: EVID-COPY-CHECK, EVID-COPY-BACKGROUND

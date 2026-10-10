@@ -664,6 +664,32 @@ fn hidden_call(c: &ToolCallMsg) -> bool {
     c.function.name.starts_with("propose_") && proposal_id_of(c).is_none()
 }
 
+// A chip confirmed after its run was stored would otherwise offer Confirm again on reload.
+fn learned_now(conn: &Connection, mut v: Value) -> Value {
+    if v.get("kind").and_then(Value::as_str) != Some("learned") {
+        return v;
+    }
+    for it in v
+        .get_mut("items")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = it.get("memory_id").and_then(Value::as_i64) else {
+            continue;
+        };
+        let source: Option<String> = conn
+            .query_row("SELECT source FROM memory WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten();
+        it["confirmed"] = Value::Bool(source.as_deref() == Some("user"));
+    }
+    v
+}
+
 // The UI's view of a stored thread; failed proposal calls stay LLM-only so no empty card renders.
 pub fn agui_messages(db: &Db, conv: &str, profile: Option<&str>) -> anyhow::Result<Vec<AgMessage>> {
     agui_messages_from(db, conv, profile, 0)
@@ -722,10 +748,13 @@ pub fn agui_messages_from(
             content,
             tool_calls: (!calls.is_empty()).then_some(calls),
             tool_call_id: m.tool_call_id.clone(),
-            data: ui.remove(&s.id).map(|v| match profile {
-                Some(p) => redact_value(&v, p),
-                None => v,
-            }),
+            data: ui
+                .remove(&s.id)
+                .map(|v| learned_now(&conn, v))
+                .map(|v| match profile {
+                    Some(p) => redact_value(&v, p),
+                    None => v,
+                }),
         });
     }
     Ok(out)

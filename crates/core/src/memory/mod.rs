@@ -450,9 +450,25 @@ pub fn note_covering_with(
     abs_path: &str,
     profile: &str,
 ) -> anyhow::Result<Option<Memory>> {
-    let found = covering(conn, abs_path, profile)?.into_iter().find(|m| {
-        m.kind != Kind::Protect && !(m.detail.is_some() && knowledge::is_classifier(&m.source))
-    });
+    let mut found = None;
+    for m in covering(conn, abs_path, profile)? {
+        if m.kind == Kind::Protect || (m.detail.is_some() && knowledge::is_classifier(&m.source)) {
+            continue;
+        }
+        // A job row speaks through what it cleaned; once the sweep has reclassified it, its text is the classifier's.
+        if m.detail.is_some() && location::is_job(&m.source) {
+            if let Some(c) = location::cleaned_for_with(conn, profile, abs_path)? {
+                let text = format!("{}.", location::capitalized(&c.reason()));
+                found = Some(Memory { text, ..m });
+                break;
+            }
+            if m.detail.as_ref().and_then(|d| d.by.as_deref()) != Some("job") {
+                continue;
+            }
+        }
+        found = Some(m);
+        break;
+    }
     if let Some(m) = &found {
         touch(conn, [m.id], now_ms())?;
     }

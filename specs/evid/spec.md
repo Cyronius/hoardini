@@ -132,8 +132,9 @@ A knowledge row (memory) whose `detail_json.copy_hint` names a check (`"huggingf
 `"huggingface:<org>/<repo>"`, `"winget:<name>"`, or `{"check", "where"}`) makes that check apply to the paths the row
 covers and tells it where to look first. A hint never sets or raises a confidence.
 
-`run_volume(db, env, registry, root, go)` is one background pass: every candidate is checked, then each one whose answer
-waits on a hash gets a SHA-256, biggest first, and is checked again. Hashes are read through the atime-preserving handle
+`run_volume(db, env, registry, root, go)` is one background pass: first the volume's stored answers for paths that no
+longer exist are deleted (`copycheck::prune`, counted as `RunReport.pruned`), then every candidate is checked, then each
+one whose answer waits on a hash gets a SHA-256, biggest first, and is checked again. Hashes are read through the atime-preserving handle
 (EVID-ATIME-PRESERVE), stored in `file_hash` keyed by volume and file id, and reused while size and mtime hold; a file
 that changes while it is hashed gets no row. Hugging Face blobs (`models--*\blobs\<sha256>`) and Ollama blobs
 (`sha256-<hex>`) are named by their hash and are never read. `go` is polled between files and between 1 MiB chunks.
@@ -147,6 +148,7 @@ over all watched volumes in meta `copy_online_waiting` after each full pass (`se
 - On an indexed folder holding files of 120 MiB and 101 MiB (two of each, the same bytes within each pair) and 99 MiB, a 1.1 GiB folder with `.git`, and a 1.1 GiB plain folder, `candidates` lists the git folder and the four big files, biggest first, and not the 99 MiB file or the plain folder.
 - `run_volume` hashes the four big files, the 120 MiB pair first; each `file_hash` row equals the SHA-256 of the file's bytes, and afterwards each file's `dup` answer is `identical` with its twin as the locator. A second pass hashes nothing; after one file is appended to, the next pass hashes only that file.
 - When `go` turns false inside the first hash, `run_volume` reports `stopped` with nothing hashed and no `file_hash` row; the next pass hashes both files.
+- After `b101.bin` is deleted, the next `run_volume` reports `pruned` 1 and no `copy_check` row is left for that path, while the changed `a120.bin` keeps its rows.
 - A file named like a hub blob whose bytes do not match its name keeps the name as its hash, and no `file_hash` row is written for it.
 - With a glob row `**\*.q4nx` carrying `{"copy_hint": "huggingface:acme"}`, the Hugging Face check applies to `x.q4nx` and its one request is `/api/models?author=acme&limit=10`; without the row it does not apply.
 
