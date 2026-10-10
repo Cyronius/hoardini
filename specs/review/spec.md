@@ -114,16 +114,18 @@ out of every card while it is under 1.5 times the kept size (`location::was_kept
 back only once it grows by half. Items are sorted biggest first and a card lists the first 50; its summary then ends `N
 smaller items (<size>) are not listed.`
 
-**Exclusions.** A unit or item that is, contains, or lies inside an item of another pending proposal (a chat card, or a
-card of a review that stays) or of a proposal declined in the last 30 days is left out, of cards and of Large areas.
+**Exclusions.** A unit or item that is, contains, or lies inside an item of another pending, approved or running proposal
+(a chat card, or a card of a review that stays) or of a proposal declined in the last 30 days is left out, of cards and
+of Large areas.
 System cleanup proposals count by operation (above), not by the paths their items name.
 
 **Thresholds.** A volume review makes a card only when its items hold 500 MiB or more by the index (for `windows`, the
 leftovers); a folder review makes any card that has an item.
 
 `review::get(conn, id)` and `review::latest(conn, volume_id, folder)` read a review back as `{id, volume_id, volume,
-scope_path, scan_id, created_ms, cards: [{card, title, proposal_id}], areas}`; `cards` are the review's proposals that have
-no `parent_id`, biggest `total_alloc` first.
+scope_path, scan_id, created_ms, cards: [{card, title, proposal_id, carried}], areas}`; `cards` are the review's proposals
+that have no `parent_id`, plus the cards earlier reviews carry into it (REVIEW-SUPERSEDE, `carried` true), biggest
+`total_alloc` first.
 
 **Acceptance criteria:**
 - On a drive with 600 GiB used and a NAS destination: `~\AppData\Local\Temp\old-session` (5 GiB, 400 days old) and `~\AppData\Local\CrashDumps\app` are the `temp` card, both ticked, the first `safe` with reason `User temp folder: untouched for 400 days.` and `alloc` 5 GiB; a `live` temp folder written an hour ago is in no card; Chrome's `Cache` is the `caches` card, ticked, its reason starting `Google Chrome cache: `; `code\proj\target` (with `Cargo.toml`) and `code\web\node_modules` are the `build` card, ticked, and `code\data\target` (no `Cargo.toml`) is not; `~\Downloads\setup.exe` (`redownload`) and `photos.zip` are the `downloads` card, unticked, and `notes.pdf` is in no card; `~\Pictures\2019` (30 GiB, 400 days untouched) is the `archive` card, unticked, to `NAS`, reason `Your photos and videos: nothing in it opened or changed for 400 days.`, while `~\Pictures\2026` (written yesterday) is not. The archive card comes first. Every card has `conversation_id` `review`, the review's id and its card id.
@@ -197,14 +199,15 @@ Tests: `specs/review/tests/areas.rs`; the only-copy row in `specs/review/tests/b
   there is none.
 
 Each answers `{review: {id, created_ms, volume, scope_path}, header: {root, used_bytes, free_bytes, ready_bytes}, cards:
-[{card, title, proposal_id}], areas: [...], proposals: {<id>: <proposal>}, building, apps: [...], online: {asked,
-waiting}}`. `ready_bytes` sums the ticked, pending items of the review's pending cards; `proposals` holds every proposal of
-the review, its cards and their follow-ups, in the JSON of `GET /api/proposals/{id}` (which carries `review_id`, `card` and
-`touched`); `building` is true while a review build runs; `apps` are the rarely used apps of ACT-APPS-RARELY-USED (the
+[{card, title, proposal_id, carried}], areas: [...], proposals: {<id>: <proposal>}, building, apps: [...], online: {asked,
+waiting}}`. `ready_bytes` sums the ticked, pending items of the pending cards it lists; `proposals` holds every proposal of
+the review, its cards and their follow-ups, and every carried card with its follow-ups, in the JSON of `GET
+/api/proposals/{id}` (which carries `review_id`, `card` and `touched`); `building` is true while a review build runs; `apps` are the rarely used apps of ACT-APPS-RARELY-USED (the
 SRV-APPS JSON) whose folder lies in the review's scope, so the UI can show "Apps you rarely use" without a second call;
-`online` is the online-checks consent's `asked` and the last pass's `copy_online_waiting` (EVID-COPY-CONSENT, SRV-COPY-
-CHECKS), for the consent prompt; paths show the profile as `~`. One build runs at a time (`review::Builds`: `open` starts
-the background build, `run`, the launch rebuild and the rebuild after estimates wait for a running one and then build).
+`online` is the online-checks consent's `asked` and the last pass's `copy_online_waiting` (EVID-COPY-CONSENT; the same
+number `GET /api/copy-checks/waiting` answers, SRV-COPY-CHECKS), for the consent prompt; paths show the profile as `~`. One build runs at a time (`review::Builds`): `open` starts the drive's build in the background, or, while another
+drive's build runs, queues it to start when that one ends (a later request for a third drive takes the queued place);
+`run`, the launch rebuild and the rebuild after estimates wait for a running build and then build.
 `GET /api/status` and its stream carry `review: {id, created_ms}` for the selected drive's latest volume review (null
 when there is none) and `review_building`; the end of every build bumps the stream, so the UI sees the new review id.
 After a build, the server estimates the scope's top compress candidates on a background-priority thread
@@ -217,7 +220,7 @@ card does not hold, and the review is still the latest of its scope and untouche
 - `POST /api/review/run {path: "C:\code"}` returns a review with `scope_path` `C:\code`; `GET /api/review` still returns the volume review, `?id=` returns the folder one, and an unindexed path is 404.
 - After one more completed refresh, open answers the last review with `building: true` and a new review follows; with that review's `created_ms` 7 hours back, open leads to another; `POST /api/review/run` with no path builds a volume review every time.
 - With a fake app source, a review of `D:\Apps` carries the same `apps` as `GET /api/apps/rarely-used`, and a review of `D:\Apps\Busy` carries none.
-- With a fake clock and a builder held at a gate: the first `Builds::open` answers building with no review and starts one build; a second open and a `start` meanwhile start nothing; once the gate opens and the build is announced, open answers that review; 5 hours later the same one; 6 hours and 1 ms later the old one with building, then a new review built at that time. A build that fails ends and is announced too, and `exclusive` runs at the clock's time.
+- With a fake clock and a builder held at a gate: the first `Builds::open` answers building with no review and starts one build; a second open and a `start` for the same drive meanwhile start nothing; once the gate opens and the build is announced, open answers that review; 5 hours later the same one; 6 hours and 1 ms later the old one with building, then a new review built at that time. A build that fails ends and is announced too, and `exclusive` runs at the clock's time. A build for drive `b` asked for while `a`'s is held at the gate is queued (asking again changes nothing) and runs right after `a`'s, with `building` true until both are announced.
 - In core, `review::open` (the same rule, building on the caller's thread) returns the same review 5 hours later and a new one after 6 hours and 1 ms.
 - A volume review of 3 GiB of zeros in `data\corpus` has no compress card; `compress_estimates` then reports a newly proposable folder, `rebuild_if_current` builds a review with the card, a second `compress_estimates` reports nothing, and `rebuild_if_current` builds nothing for a review that a newer one replaced or that the user touched.
 
@@ -230,13 +233,16 @@ Tests: `specs/srv/tests/srv.rs` (routes), `specs/review/tests/build.rs` (`review
 A proposal is `touched` once the user changes a tick (SRV-PROPOSAL-SELECTION), approves it, or declines it. A new volume
 review shall set every pending, untouched card of the drive's earlier volume reviews to status `superseded` and may
 propose their items again (a folder review does the same for earlier reviews of the same folder only); touched cards stay
-pending, and their items stay out of the new review. When the refresh the server starts at launch finishes, and the
+pending, and their items stay out of the new review. Those touched cards, and the touched follow-up of a card that is no
+longer live, while pending, approved or running, are listed in every later review of the same scope with `carried: true`
+(REVIEW-BUILD `review::get`; its `proposals` and `ready_bytes` count them), so the review always shows every live card;
+they do not make the new review touched. When the refresh the server starts at launch finishes, and the
 selected drive's latest volume review was built from an older refresh and none of its cards was touched or decided, the
 review is rebuilt (`review::rebuild_if_untouched`). A follow-up of a review card (ACT-FOLLOW-UP) keeps the parent's
 `review_id` and `card`; it is listed in the review's `proposals`, not as a card of its own.
 
 **Acceptance criteria:**
-- After ticking only `target` on the first review's `build` card (`touched` becomes true), a review of the `code` folder makes no card, since every item is in a pending card, and replaces nothing; the next volume review sets the untouched `temp` card to `superseded`, proposes its folder again in a new `temp` card, keeps the `build` card pending and makes no `build` card. Declining the new card sets `touched`.
+- After ticking only `target` on the first review's `build` card (`touched` becomes true), a review of the `code` folder makes no card, since every item is in a pending card, and replaces nothing; the next volume review sets the untouched `temp` card to `superseded`, proposes its folder again in a new `temp` card, keeps the `build` card pending and makes no `build` card of its own: it lists that card as `build`, "Build output", `carried`, among its two cards and its `proposal_ids`, `ready_bytes` is 5 GiB (the new temp item and the ticked `target`), and the review is still untouched. A review later the card is still listed; the first review lists nothing carried. Declining the new card sets `touched`; once the build card is declined, the next review no longer lists it.
 - `review::rebuild_if_untouched` returns nothing while no refresh finished since the review; after one it returns a new review and the old `temp` card is `superseded`; after ticking that new card's items off and one more refresh it returns nothing, and the card stays `pending`.
 - Approving one of a `temp` card's two items sets `touched`; the follow-up holds the other item unticked, with the review's `review_id`, card `temp` and conversation `review`, and the review still lists one card.
 - With a review built before one more completed refresh, starting the server with its launch refresh (a fake indexer) leads `GET /api/review` to a new review id.

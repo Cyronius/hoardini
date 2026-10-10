@@ -12,34 +12,31 @@ pub enum Opened {
 
 type Clock = Box<dyn Fn() -> i64 + Send + Sync>;
 type Done = Box<dyn Fn() + Send + Sync>;
+type Job = Box<dyn FnOnce(i64) -> anyhow::Result<()> + Send>;
 
 #[derive(Default)]
 struct State {
-    running: bool,
+    // What the running build is for; empty for an `exclusive` one.
+    running: Option<String>,
+    // A build asked for while another ran; it starts when that one ends.
+    queued: Option<(String, Job)>,
     // Between a build ending and its announcement, so wait() returns only once it is announced.
     announcing: bool,
 }
 
 // One review build at a time, off the caller's thread, so opening the app never waits on Restart Manager.
 pub struct Builds {
-    running: Mutex<State>,
+    state: Mutex<State>,
     idle: Condvar,
     clock: Clock,
     done: Done,
 }
 
-struct Finish<'a>(&'a Builds);
+struct Finish<'a>(&'a Arc<Builds>);
 
 impl Drop for Finish<'_> {
     fn drop(&mut self) {
-        {
-            let mut st = self.0.lock();
-            st.running = false;
-            st.announcing = true;
-        }
-        (self.0.done)();
-        self.0.lock().announcing = false;
-        self.0.idle.notify_all();
+        self.0.finished();
     }
 }
 
@@ -49,7 +46,7 @@ impl Builds {
         done: impl Fn() + Send + Sync + 'static,
     ) -> Arc<Builds> {
         Arc::new(Builds {
-            running: Mutex::new(State::default()),
+            state: Mutex::new(State::default()),
             idle: Condvar::new(),
             clock: Box::new(clock),
             done: Box::new(done),
@@ -57,7 +54,7 @@ impl Builds {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.running.lock().unwrap_or_else(|e| e.into_inner())
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn now(&self) -> i64 {
@@ -65,47 +62,80 @@ impl Builds {
     }
 
     pub fn building(&self) -> bool {
-        self.lock().running
+        let st = self.lock();
+        st.running.is_some() || st.queued.is_some()
     }
 
-    // False when a build is already running; that one's result is what the caller will see.
-    pub fn start<F>(self: &Arc<Self>, job: F) -> bool
+    // False when a build for the same `key` already runs or waits; its result is what the caller will see.
+    pub fn start<F>(self: &Arc<Self>, key: &str, job: F) -> bool
     where
         F: FnOnce(i64) -> anyhow::Result<()> + Send + 'static,
     {
-        {
-            let mut st = self.lock();
-            if st.running {
-                return false;
+        let mut st = self.lock();
+        match &st.running {
+            None => {
+                st.running = Some(key.to_string());
+                drop(st);
+                self.spawn(Box::new(job));
+                true
             }
-            st.running = true;
+            Some(k) if k == key => false,
+            Some(_) if st.queued.as_ref().is_some_and(|(q, _)| q == key) => false,
+            Some(_) => {
+                st.queued = Some((key.to_string(), Box::new(job)));
+                true
+            }
         }
+    }
+
+    fn spawn(self: &Arc<Self>, job: Job) {
         let me = self.clone();
-        let now = self.now();
         let spawned = std::thread::Builder::new()
             .name("hoardini-review".into())
             .spawn(move || {
                 let _f = Finish(&me);
-                if let Err(e) = job(now) {
+                if let Err(e) = job(me.now()) {
                     tracing::warn!(error = %e, "review build failed");
                 }
             });
         if let Err(e) = spawned {
             tracing::warn!(error = %e, "review build did not start");
-            drop(Finish(self));
-            return false;
+            self.finished();
         }
-        true
+    }
+
+    // A build that queued meanwhile starts before listeners hear of this one, so `building` never blinks off.
+    fn finished(self: &Arc<Self>) {
+        let next = {
+            let mut st = self.lock();
+            st.announcing = true;
+            match st.queued.take() {
+                Some((key, job)) => {
+                    st.running = Some(key);
+                    Some(job)
+                }
+                None => {
+                    st.running = None;
+                    None
+                }
+            }
+        };
+        (self.done)();
+        self.lock().announcing = false;
+        self.idle.notify_all();
+        if let Some(job) = next {
+            self.spawn(job);
+        }
     }
 
     // Waits for a running build, then runs `job` here while holding others off.
-    pub fn exclusive<T>(&self, job: impl FnOnce(i64) -> T) -> T {
+    pub fn exclusive<T>(self: &Arc<Self>, job: impl FnOnce(i64) -> T) -> T {
         {
             let mut st = self.lock();
-            while st.running {
+            while st.running.is_some() {
                 st = self.idle.wait(st).unwrap_or_else(|e| e.into_inner());
             }
-            st.running = true;
+            st.running = Some(String::new());
         }
         let _f = Finish(self);
         job(self.now())
@@ -113,7 +143,7 @@ impl Builds {
 
     pub fn wait(&self) {
         let mut st = self.lock();
-        while st.running || st.announcing {
+        while st.running.is_some() || st.queued.is_some() || st.announcing {
             st = self.idle.wait(st).unwrap_or_else(|e| e.into_inner());
         }
     }
@@ -128,14 +158,12 @@ impl Builds {
         F: FnOnce(i64) -> anyhow::Result<()> + Send + 'static,
     {
         let current = latest(conn, volume_id, None)?;
-        if let Some(r) = current {
-            if !needs_rerun(conn, &r, self.now())? {
-                return Ok(Opened::Ready(r));
-            }
-            self.start(job);
-            return Ok(Opened::Building(Some(r)));
+        if let Some(r) = &current
+            && !needs_rerun(conn, r, self.now())?
+        {
+            return Ok(Opened::Ready(r.clone()));
         }
-        self.start(job);
-        Ok(Opened::Building(None))
+        self.start(&format!("volume:{volume_id}"), job);
+        Ok(Opened::Building(current))
     }
 }

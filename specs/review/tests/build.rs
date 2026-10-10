@@ -376,10 +376,62 @@ fn a_new_review_replaces_untouched_cards_and_keeps_touched_ones() {
     assert_eq!(d.status(&b1.id), "pending");
     let t2 = d.card(&second, "temp").unwrap();
     assert_eq!(items(&t2), [(temp.clone(), true)]);
-    assert!(d.card(&second, "build").is_none());
-
+    let build = second
+        .cards
+        .iter()
+        .find(|c| c.card == "build")
+        .expect("the touched card is still listed");
+    assert_eq!(
+        (
+            build.proposal_id.as_str(),
+            build.title.as_str(),
+            build.carried
+        ),
+        (b1.id.as_str(), "Build output", true),
+        "carried over, not made again"
+    );
+    assert_eq!(second.cards.len(), 2);
+    let conn = d.db.conn().unwrap();
+    assert!(
+        review::proposal_ids(&conn, &second.id)
+            .unwrap()
+            .contains(&b1.id)
+    );
+    assert_eq!(
+        review::ready_bytes(&conn, &second.id).unwrap(),
+        (5 * GIB) as i64,
+        "the new temp card and the target still ticked on the carried one"
+    );
+    assert!(
+        review::untouched(&conn, &second.id).unwrap(),
+        "a carried card does not make the new review touched"
+    );
     let declined = proposals::decline(&d.db, &t2.id).unwrap();
     assert!(declined.touched);
+    let third = d.review(Scope::Volume(vid), NOW + 2 * HOUR);
+    assert!(
+        third
+            .cards
+            .iter()
+            .any(|c| c.proposal_id == b1.id && c.carried),
+        "still listed a review later"
+    );
+    assert!(
+        !review::get(&conn, &first.id)
+            .unwrap()
+            .unwrap()
+            .cards
+            .iter()
+            .any(|c| c.carried),
+        "nothing is carried back into an older review"
+    );
+
+    proposals::decline(&d.db, &b1.id).unwrap();
+    let fourth = d.review(Scope::Volume(vid), NOW + 3 * HOUR);
+    assert!(
+        !fourth.cards.iter().any(|c| c.proposal_id == b1.id),
+        "a declined card is no longer live"
+    );
 }
 
 // Traces: REVIEW-SUPERSEDE, REVIEW-TRIGGER
@@ -817,7 +869,11 @@ fn open_answers_at_once_while_one_build_runs_in_the_background() {
         builds.open(&conn, vid, job()).unwrap(),
         Opened::Building(None)
     ));
-    assert!(!builds.start(job()), "one build at a time");
+    let key = format!("volume:{vid}");
+    assert!(
+        !builds.start(&key, job()),
+        "one build at a time for a drive"
+    );
     go.send(()).unwrap();
     builds.wait();
     assert_eq!(started.load(Ordering::SeqCst), 1);
@@ -847,12 +903,35 @@ fn open_answers_at_once_while_one_build_runs_in_the_background() {
     assert_ne!(second.id, first.id);
     assert_eq!(second.created_ms, NOW + 6 * HOUR + 1);
 
-    assert!(builds.start(|_| anyhow::bail!("the index is locked")));
+    assert!(builds.start("x", |_| anyhow::bail!("the index is locked")));
     builds.wait();
     assert!(!builds.building(), "a failed build ends too");
     assert_eq!(announced.load(Ordering::SeqCst), 3);
     assert_eq!(builds.exclusive(|now| now), NOW + 6 * HOUR + 1);
     assert_eq!(announced.load(Ordering::SeqCst), 4);
+
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let step = |name: &'static str| {
+        let (order, gate) = (order.clone(), gate.clone());
+        move |_now: i64| -> anyhow::Result<()> {
+            if name == "a" {
+                gate.lock().unwrap().recv()?;
+            }
+            order.lock().unwrap().push(name);
+            Ok(())
+        }
+    };
+    assert!(builds.start("volume:a", step("a")));
+    assert!(
+        builds.start("volume:b", step("b")),
+        "another drive waits its turn"
+    );
+    assert!(!builds.start("volume:b", step("b")), "once");
+    go.send(()).unwrap();
+    builds.wait();
+    assert_eq!(*order.lock().unwrap(), ["a", "b"]);
+    assert!(!builds.building());
+    assert_eq!(announced.load(Ordering::SeqCst), 6);
 }
 
 // Traces: REVIEW-AREAS, EVID-COPY-CHECK

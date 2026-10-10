@@ -44,6 +44,8 @@ pub struct CardRef {
     pub card: String,
     pub title: String,
     pub proposal_id: String,
+    // A card an earlier review of the same scope made, still live because the user touched it.
+    pub carried: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -143,7 +145,8 @@ struct Taken {
 fn taken(conn: &Connection, replacing: &[String], now: i64) -> anyhow::Result<Taken> {
     let mut st = conn.prepare(
         "SELECT p.id, p.kind, i.path, p.params_json FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id \
-         WHERE p.status = 'pending' OR (p.status = 'declined' AND p.decided_ms >= ?1)",
+         WHERE p.status IN ('pending', 'approved', 'running') \
+         OR (p.status = 'declined' AND p.decided_ms >= ?1)",
     )?;
     let rows = st
         .query_map([now - DECLINED_FOR_MS], |r| {
@@ -534,22 +537,48 @@ pub fn get(conn: &Connection, id: &str) -> anyhow::Result<Option<Review>> {
     let Some((volume_id, volume, scope_path, scan_id, created_ms, areas_json)) = head else {
         return Ok(None);
     };
+    // A touched card of an earlier review stays live, so it is listed here; so is a live follow-up of a finished one.
     let mut st = conn.prepare(
-        "SELECT id, card FROM proposal WHERE review_id = ?1 AND parent_id IS NULL \
-         ORDER BY total_alloc DESC, created_ms, id",
+        "SELECT p.id, p.card, p.review_id != ?1 FROM proposal p WHERE p.review_id = ?1 AND p.parent_id IS NULL \
+         UNION ALL \
+         SELECT p.id, p.card, 1 FROM proposal p JOIN review r ON r.id = p.review_id \
+         WHERE r.volume_id = ?2 AND r.id != ?1 AND r.created_ms <= ?3 \
+         AND ((?4 IS NULL AND r.scope_path IS NULL) OR r.scope_path = ?4 COLLATE NOCASE) \
+         AND p.touched = 1 AND p.status IN ('pending', 'approved', 'running') \
+         AND (p.parent_id IS NULL OR NOT EXISTS (SELECT 1 FROM proposal q WHERE q.id = p.parent_id \
+              AND q.status IN ('pending', 'approved', 'running'))) \
+         ORDER BY 1",
     )?;
-    let cards = st
-        .query_map([id], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+    let mut rows = st
+        .query_map(params![id, volume_id, created_ms, scope_path], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, bool>(2)?,
+            ))
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let size = |pid: &str| -> (i64, i64) {
+        conn.query_row(
+            "SELECT total_alloc, created_ms FROM proposal WHERE id = ?1",
+            [pid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0))
+    };
+    rows.sort_by_cached_key(|(pid, _, _)| {
+        let (alloc, created) = size(pid);
+        (std::cmp::Reverse(alloc), created, pid.clone())
+    });
+    let cards = rows
         .into_iter()
-        .map(|(proposal_id, c)| {
+        .map(|(proposal_id, c, carried)| {
             let c = c.unwrap_or_default();
             CardRef {
                 title: card(&c).map_or_else(|| c.clone(), |x| x.title.to_string()),
                 card: c,
                 proposal_id,
+                carried,
             }
         })
         .collect();
@@ -635,20 +664,43 @@ pub fn rebuild_if_untouched(
 }
 
 pub fn ready_bytes(conn: &Connection, review_id: &str) -> anyhow::Result<i64> {
-    Ok(conn.query_row(
-        "SELECT COALESCE(SUM(i.alloc), 0) FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id \
-         WHERE p.review_id = ?1 AND p.status = 'pending' AND i.status = 'pending' AND i.selected = 1",
-        [review_id],
-        |r| r.get(0),
-    )?)
+    let mut total = 0;
+    for id in proposal_ids(conn, review_id)? {
+        total += conn.query_row(
+            "SELECT COALESCE(SUM(i.alloc), 0) FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id \
+             WHERE p.id = ?1 AND p.status = 'pending' AND i.status = 'pending' AND i.selected = 1",
+            [&id],
+            |r| r.get::<_, i64>(0),
+        )?;
+    }
+    Ok(total)
 }
 
+// The review's own proposals, plus each carried card and its follow-ups.
 pub fn proposal_ids(conn: &Connection, review_id: &str) -> anyhow::Result<Vec<String>> {
     let mut st =
         conn.prepare("SELECT id FROM proposal WHERE review_id = ?1 ORDER BY created_ms, id")?;
-    let ids = st
+    let mut ids = st
         .query_map([review_id], |r| r.get(0))?
         .collect::<rusqlite::Result<Vec<String>>>()?;
+    let Some(r) = get(conn, review_id)? else {
+        return Ok(ids);
+    };
+    let mut kids =
+        conn.prepare("SELECT id FROM proposal WHERE parent_id = ?1 ORDER BY created_ms, id")?;
+    for c in r.cards.iter().filter(|c| c.carried) {
+        let mut todo = vec![c.proposal_id.clone()];
+        while let Some(id) = todo.pop() {
+            if ids.contains(&id) {
+                continue;
+            }
+            todo.extend(
+                kids.query_map([&id], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+            );
+            ids.push(id);
+        }
+    }
     Ok(ids)
 }
 
