@@ -57,7 +57,7 @@ function handle(data: string): void {
 
 let reroute: { url: string; body: unknown } | null = null;
 // Look closer (REVIEW-LOOK-CLOSER) is a normal run the server starts from a path, so the chat reads its stream as usual.
-export const rerouteNextRun = (r: { url: string; body: unknown }) => {
+export const rerouteNextRun = (r: { url: string; body: unknown } | null) => {
   reroute = r;
 };
 

@@ -153,6 +153,8 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
         addMessage({ id: `error_${Date.now()}`, role: "assistant", content: `Error: ${describeRunError(err)}` });
       }
     } finally {
+      // A run that failed before its request must not send the next question to Look closer.
+      if (lookCloser) rerouteNextRun(null);
       sendingRef.current = false;
     }
   };
