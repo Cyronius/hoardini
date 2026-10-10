@@ -382,7 +382,7 @@ Test: `specs/ui/tests/treemap-layout.test.ts`.
 8. Open with `focus` = `~\.flm\models\Qwen3.8-27B-NPU2\model.q4nx`: the view shows Qwen3.8-27B-NPU2 with model.q4nx selected.
 9. Repeat step 2 in Marshmallow Night, and at 430 px wide in both: the panes stack, labels and the selection bar's buttons read, and nothing scrolls sideways.
 10. Against `hoardini serve` on a scratch index: the map and types load, a selection reaches `explore_focus`, and a chat question after it carries "The user is looking at … in Explore." (AGENT-PROMPT-CONTEXT).
-(2026-10-09: steps 1–9 pass against the mock in headless Chromium through Playwright, on a scratch page mounting ExploreView; step 10 was run as below.)
+(2026-10-09: steps 1–9 pass against the mock in headless Chromium through Playwright, on a scratch page mounting ExploreView, with no element past 430 px in step 9. Step 10 passes against a release `hoardini serve` on a scratch folder: the map and types came from its index, selecting `models` in the tree stored the focus, and a chat run against a stub OpenAI-compatible model sent "The user is looking at ~\…\hdata\models in Explore." in its system message. On a copy of a real 1.6 TB C: index, the map of C: (5,000 blocks) answered in 0.35 s and its types in 0.2 s.)
 
 ### UI-DRIVE-SELECTOR: The header shows one drive, picked from a menu
 **Applies to:** hoardini
