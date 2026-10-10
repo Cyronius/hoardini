@@ -592,7 +592,7 @@ fn a_copy_hint_only_says_where_to_look() {
     let hub = StandIn::start(vec![]);
     env.hub_base = hub.base.clone();
 
-    let reg = Registry::with(vec![Box::new(HubCheck::default())]);
+    let reg = Registry::with(vec![Box::new(HubCheck)]);
     assert!(
         check(&fx, &env, &reg, &f).results.is_empty(),
         "no hint, no Hugging Face check"

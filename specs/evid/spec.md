@@ -248,7 +248,7 @@ repo and revision; LM Studio's publisher and repo), the GGUF header (EVID-GGUF-S
 `GET /api/models?search=<file name without its quant tag>&limit=10` (`&filter=gguf` for GGUF; a hint naming an org adds
 `author=<org>`, and a term under 3 characters is left out), taking up to 8 repos. For
 each candidate it reads `GET /api/models/{repo}/tree/{rev}?recursive=1` (following `Link: rel="next"`; a missing revision
-falls back to `main`; trees are cached for an hour) and takes the entry with the same path (or the same file name, or
+falls back to `main`; trees are cached in the process for an hour) and takes the entry with the same path (or the same file name, or
 for a hub blob the same LFS oid) and the same size: `same-name-and-size` pending `hash` until the local SHA-256 is known,
 then `identical` when it equals the entry's `lfs.oid` and `none` when it differs. No match anywhere: `none` "not found on
 Hugging Face". A hub cache repo folder is `identical` when every blob name is an oid in the trees of its snapshot
@@ -273,8 +273,9 @@ with no manifest it is `none`.
 
 `winget` (online, service `winget`) applies to `.exe`, `.msi`, `.msix`, `.msixbundle`, `.appx`, and `.appxbundle` files
 that are not DLLs. It identifies the installer by its PE version info (the product name when it is short, the product
-version), the Authenticode signer of its embedded signature (`evidence::pe::signer`, read through the atime-preserving
-handle), and its file name (`balenaEtcher-2.1.7.Setup.exe` gives "balenaEtcher" and 2.1.7). It runs the local `winget`
+version) and its file name (`balenaEtcher-2.1.7.Setup.exe` gives "balenaEtcher" and 2.1.7), and records the
+Authenticode signer of its embedded signature in the answer (`evidence::pe::signer`, read through the atime-preserving
+handle). It runs the local `winget`
 CLI (`search --name <term> --source winget`, then `show --id <id> --exact --source winget [--version <v>]`, always with
 `--accept-source-agreements --disable-interactivity` and no console window) and parses the fixed-width table and the
 `show` fields (`Version`, `Publisher`, `Installer Url`, `Installer SHA256`). With the same version listed: `identical`

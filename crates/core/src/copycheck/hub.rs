@@ -235,9 +235,12 @@ fn repo_path(repo: &str) -> String {
 type TreeKey = (String, String, String);
 type Cached = (Instant, Arc<Vec<TreeEntry>>);
 
-#[derive(Default)]
-pub struct HubCheck {
-    trees: Mutex<HashMap<TreeKey, Cached>>,
+pub struct HubCheck;
+
+// Process-wide, so passes a few minutes apart reuse a repo's tree instead of asking again.
+fn trees() -> &'static Mutex<HashMap<TreeKey, Cached>> {
+    static T: OnceLock<Mutex<HashMap<TreeKey, Cached>>> = OnceLock::new();
+    T.get_or_init(Mutex::default)
 }
 
 impl HubCheck {
@@ -251,7 +254,7 @@ impl HubCheck {
         rev: &str,
     ) -> anyhow::Result<Option<Arc<Vec<TreeEntry>>>> {
         let key = (base.to_string(), repo.to_ascii_lowercase(), rev.to_string());
-        if let Some((at, t)) = self.trees.lock().get(&key)
+        if let Some((at, t)) = trees().lock().get(&key)
             && at.elapsed() < TREE_TTL
         {
             return Ok(Some(t.clone()));
@@ -282,7 +285,7 @@ impl HubCheck {
             all.extend(parse_tree(&resp.text()?)?);
         }
         let t = Arc::new(all);
-        self.trees.lock().insert(key, (Instant::now(), t.clone()));
+        trees().lock().insert(key, (Instant::now(), t.clone()));
         Ok(Some(t))
     }
 

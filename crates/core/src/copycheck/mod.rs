@@ -412,7 +412,7 @@ impl Registry {
                 Box::new(ArchiveCheck),
                 Box::new(SyncCheck),
                 Box::new(GitCheck),
-                Box::new(HubCheck::default()),
+                Box::new(HubCheck),
                 Box::new(OllamaCheck),
                 Box::new(WingetCheck),
                 Box::new(CatalogCheck),
@@ -640,7 +640,7 @@ fn waiting_on_consent(conn: &Connection, s: &Subject) -> bool {
         &crate::paths::profile_dir().to_string_lossy(),
     );
     [
-        Box::new(HubCheck::default()) as Box<dyn CopyCheck>,
+        Box::new(HubCheck) as Box<dyn CopyCheck>,
         Box::new(WingetCheck),
     ]
     .iter()
