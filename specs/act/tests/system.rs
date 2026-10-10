@@ -702,7 +702,7 @@ fn the_leftovers_helper_clears_only_the_catalogs_machine_wide_folders() {
 
 fn aged(path: &Path, days: i64) {
     let ms = hoardini_core::store::now_ms() - days * 86_400_000;
-    hoardini_win::set_file_times(path, Some(ms), Some(ms)).unwrap();
+    hoardini_win::set_all_times(path, ms).unwrap();
 }
 
 // Traces: ACT-WINDOWS-CLEANUP-RUN

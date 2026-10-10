@@ -283,9 +283,9 @@ impl Cleared {
     }
 }
 
-// The same age the review counts parts by: the last write (REVIEW-UNITS).
+// Installers unpack files with an old last write; the creation or change time shows when they arrived.
 fn recent(st: &Stat, cutoff_ms: i64) -> bool {
-    st.written_ms > cutoff_ms
+    st.newest_ms() > cutoff_ms
 }
 
 fn clear_file(file: &NoFollow, root: &str, cutoff_ms: i64, out: &mut Cleared) {
@@ -362,7 +362,7 @@ fn clear_dir(dir: &NoFollow, root: &str, cutoff_ms: i64, out: &mut Cleared) {
             continue;
         }
         // A fresh file someone holds open counts as recent, not in use.
-        if e.mtime_ms > cutoff_ms {
+        if e.ctime_ms.max(e.mtime_ms) > cutoff_ms {
             out.recent += 1;
             continue;
         }
@@ -576,5 +576,35 @@ mod tests {
         );
         assert!(t.outside.join("x.txt").exists());
         assert_eq!((c.files, c.failed), (0, 1), "{c:?}");
+    }
+
+    // Traces: ACT-WINDOWS-CLEANUP-RUN
+    #[test]
+    fn a_file_unpacked_today_with_an_old_last_write_is_recent() {
+        let t = tree();
+        let unpacked = t.temp.join("setup.cab");
+        std::fs::write(&unpacked, b"cab").unwrap();
+        let old = crate::store::now_ms() - 30 * DAY_MS;
+        hoardini_win::set_file_times(&unpacked, Some(old), Some(old)).unwrap();
+        let changed = t.temp.join("made-read-only-today.log");
+        write_aged(&changed, 3);
+        std::fs::set_permissions(&changed, {
+            let mut p = std::fs::metadata(&changed).unwrap().permissions();
+            p.set_readonly(true);
+            p
+        })
+        .unwrap();
+        let mut c = Cleared::default();
+        clear_contents(&t.temp, crate::store::now_ms() - DAY_MS, &mut c).unwrap();
+        assert!(
+            unpacked.exists(),
+            "created today, whatever its last write says"
+        );
+        assert!(
+            changed.exists(),
+            "made read-only today, so its change time is today"
+        );
+        assert!(!t.temp.join(r"a\x.txt").exists());
+        assert_eq!((c.files, c.recent), (1, 2), "{c:?}");
     }
 }

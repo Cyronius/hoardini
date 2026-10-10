@@ -372,7 +372,7 @@ impl Walker<'_> {
         Ok(out)
     }
 
-    // A child counts as modified when it or anything indexed inside it was.
+    // A child counts as modified when it or anything indexed inside it was written or created; unpacked files keep an old last write.
     fn parts(
         &self,
         node: &NodeInfo,
@@ -387,7 +387,7 @@ impl Walker<'_> {
                 let mut st = self.conn.prepare(
                     "WITH RECURSIVE d(id, top) AS (SELECT id, id FROM node WHERE parent_id = ?1 \
                      UNION ALL SELECT n.id, d.top FROM node n JOIN d ON n.parent_id = d.id) \
-                     SELECT d.top, MAX(n.mtime) FROM d JOIN node n ON n.id = d.id GROUP BY d.top",
+                     SELECT d.top, MAX(MAX(COALESCE(n.mtime, n.ctime), COALESCE(n.ctime, n.mtime)))                      FROM d JOIN node n ON n.id = d.id GROUP BY d.top",
                 )?;
                 st.query_map([node.id], |r| {
                     Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?))
@@ -403,7 +403,7 @@ impl Walker<'_> {
             };
             if old {
                 out.push(Part {
-                    mtime_ms: last.or(k.mtime_ms),
+                    mtime_ms: last.or(k.mtime_ms.max(k.ctime_ms)),
                     path: k.path,
                     size: k.size,
                 });

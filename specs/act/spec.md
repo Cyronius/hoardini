@@ -191,8 +191,8 @@ the command line, the proposal or the environment (`leftover_targets`). Inside e
 it walks by handle (`hoardini_win::NoFollow`): the target and every folder below it are opened as themselves (never
 through a final link) and listed from that handle, and every child is opened relative to its parent's handle
 (`NtCreateFile` with the parent as root directory), so a folder swapped for a junction after it was listed or while its
-contents are cleared is held as the junction and never walked through. It deletes only files whose last write is more
-than 24 hours old, each opened with no sharing so a file anything holds open is left, and deleted through that same
+contents are cleared is held as the junction and never walked through. It deletes only files whose creation, last write
+and change time are all more than 24 hours old (installers unpack files that keep an old last write), each opened with no sharing so a file anything holds open is left, and deleted through that same
 handle (POSIX semantics, read-only cleared), the age taken from that handle too; nothing is deleted unless the handle's
 final path (`GetFinalPathNameByHandleW`) is still strictly under the target's own, so a folder moved out of the target
 mid-walk keeps its files. It never follows or removes a link or junction, removes a subfolder (through its own handle)
@@ -208,6 +208,7 @@ themselves, and reports `N files deleted (<size>); left: <n> in use, <n> newer t
 - Approving a review card's `leftovers` with a fake runner hands the elevated side exactly `[leftovers]`, and the item ends `done` with the helper's detail and freed bytes.
 - `clear_contents` of a scratch `Temp` deletes the three files written 3 days ago (one read-only, one in an old subfolder, which goes too) and reports `3 files deleted (8 B); left: 1 in use, 1 newer than a day`; a file this test holds open with no sharing, a file written now, the folder itself, and a junction inside and the file it points to are all still there. A 5-day-old `MEMORY.DMP` target is deleted on its own.
 - With a test-only hook after a folder is listed (`crates/core/src/syscleanup/helper.rs`): when `Temp\a` is renamed to `Temp\a-moved` and a junction `Temp\a` to an outside folder takes its place, the outside folder's 3-day-old `x.txt` is still there and `Temp\a-moved\x.txt` is the one deleted (1 file, 0 failed); when `Temp\a` is instead moved outside the target, its `x.txt` is still there and counts as could not be deleted.
+- A `setup.cab` written now but given a 30-day-old last write, and a 3-day-old log made read-only now (its change time), are both left as newer than a day, while a 3-day-old file beside them is deleted (`crates/core/src/syscleanup/helper.rs`).
 - `NoFollow` (`crates/win/src/nofollow.rs`): a junction opened through its parent's handle reports itself as a reparse point and its own listing never shows the target's files; a file's handle reports the creation, write and change times set on it, a final path under its folder's, and `None` for a second no-sharing open; `path_inside` holds only strictly below a folder on a component boundary.
 - A `vssadmin` listing with two shadow device paths (one under a German label) counts 2; "No items found" counts 0.
 - `diskpart_scripts(C:\wsl\Ubuntu Disk\ext4.vhdx)` is exactly `select vdisk file="<path>"`, `attach vdisk readonly`, `compact vdisk` and `select vdisk file="<path>"`, `detach vdisk`, one command per line; a path with a quote, a newline or a carriage return is refused. `create_private_dir` on a name a folder or a junction already holds fails, and this unelevated test process cannot write a file into one it created (`crates/win/tests/fs.rs`).

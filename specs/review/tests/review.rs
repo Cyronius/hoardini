@@ -281,6 +281,29 @@ fn temp_is_one_contents_item_without_fresh_children() {
 
 // Traces: REVIEW-UNITS
 #[test]
+fn a_folder_unpacked_an_hour_ago_with_old_last_writes_is_no_part() {
+    let f = fx();
+    let temp = r"C:\Users\tester\AppData\Local\Temp";
+    let cab = format!(r"{temp}\unpacked\setup.cab");
+    f.fs.file(&cab, 3 * GIB);
+    f.fs.file(&format!(r"{temp}\old.iso"), 2 * GIB);
+    f.fs.touch(&cab, NOW - 30 * DAY);
+    f.fs.set_created(&cab, NOW - HOUR);
+    f.fs.touch(&format!(r"{temp}\unpacked"), NOW - 30 * DAY);
+    f.fs.touch(&format!(r"{temp}\old.iso"), NOW - 3 * DAY);
+    f.index();
+
+    let units = f.units(temp);
+    let parts: Vec<&str> = units[0].parts.iter().map(|p| p.path.as_str()).collect();
+    assert_eq!(
+        parts,
+        vec![r"C:\Users\tester\AppData\Local\Temp\old.iso"],
+        "a file created an hour ago counts as new whatever its last write says"
+    );
+}
+
+// Traces: REVIEW-UNITS
+#[test]
 fn steam_games_and_windows_temp_inside_a_kept_windows() {
     let f = fx();
     let win = f.env.system_root.clone();
