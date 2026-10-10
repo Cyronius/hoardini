@@ -149,8 +149,9 @@ built from the units that no card took in full; what a card took, and units the 
 not count.
 
 - **Rows.** A unit that needs admin rights (REVIEW-BUILD) and that the `windows` card does not take, a `target` with no
-  `Cargo.toml` or `pom.xml` beside it, a unit of 1 GiB or more (left after what cards took) that is not admin or `kept`
-  and that `copycheck::only_copy` calls the only copy we know of (EVID-COPY-CHECK: every check that applies answered
+  `Cargo.toml` or `pom.xml` beside it, a unit of 1 GiB or more (left after what cards took) that is not admin, `kept`, a
+  virtual disk or a game (`vm-disk`, `game-library`: always their own only copy) and that `copycheck::only_copy` calls
+  the only copy we know of (EVID-COPY-CHECK: every check that applies answered
   `none`, nothing pending or waiting on consent), and a `kept` unit that has a catalog entry or lies in a Windows system
   area (the Windows folder, Program Files, paging files) are rows of their own. A kept unit's size leaves out the units
   found inside it and the `keep` catalog locations named literally inside it (`WinSxS`, `Installer`, `DriverStore`,
@@ -179,7 +180,7 @@ not count.
 **Acceptance criteria:**
 - On a fake `C:\` the areas are, in order: `C:\code\covenant-agent` 161 GiB, one row although `models\tiny` inside it is a location row too, since it holds `.git` (unknown, no verdict, no actions, why_not starting `Not identified` and ending with the 30-day sentence, since a file in it was written 2 days ago); `~\Pictures` 40 GiB (`photos`, `keep`, `[archive]`, hint `Add a destination to move them off C:.`); `C:\vm\disk.vhdx` 30 GiB (`vm-disk`); `~\.lmstudio\models` 20 GiB (why_not starting `Model files: `); `C:\pagefile.sys` 16 GiB (`system`, why_not starting `Page file: `, hint `Windows manages its size.`); `C:\hiberfil.sys` 12 GiB with its hint; the Windows folder 10 GiB (23 GiB less `Temp`, `SoftwareDistribution\Download` and `WinSxS`; no hint); `WinSxS` 8 GiB (why_not starting `WinSxS component store: `, hint `Windows can trim this itself.`); `C:\Program Files` 5 GiB; `C:\code\small-proj` 2.5 GiB (unknown), shown as the project that holds a 2.5 GiB `.git\objects\pack\p.pack`; and `ProgramData\Microsoft\VisualStudio\Packages` 2 GiB with the hint `Needs admin.`. The Windows `Temp`, `SoftwareDistribution\Download` and the ProgramData `WER` reports are no rows: the one card is `windows` (REVIEW-BUILD). A 512 MiB folder is not listed, and no row is `only_copy`.
 - The review read back with `review::get` has the same areas.
-- In a project `proj` (with `.git`), a 3 GiB `weights\mine.bin` whose only copy check, `dup`, answered `none` is a row of its own, `only_copy`, why_not `Only copy we know of: no other file of this size on the indexed drives.`, and the project row keeps the other 2 GiB.
+- In a project `proj` (with `.git`), a 3 GiB `weights\mine.bin` whose only copy check, `dup`, answered `none` is a row of its own, `only_copy`, why_not `Only copy we know of: no other file of this size on the indexed drives.`, and the project row keeps the other 2 GiB; a 4 GiB `vm\disk.vhdx` with the same answer is no only-copy row and keeps the virtual-disk why_not.
 
 Tests: `specs/review/tests/areas.rs`; the only-copy row in `specs/review/tests/build.rs`.
 

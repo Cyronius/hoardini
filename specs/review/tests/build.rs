@@ -941,14 +941,17 @@ fn a_big_file_every_check_missed_is_an_only_copy_area_of_its_own() {
     d.file(r"proj\.git\HEAD", 1024);
     let own = d.file(r"proj\weights\mine.bin", 3 * GIB);
     d.file(r"proj\data\x.dat", 2 * GIB);
+    let disk = d.file(r"vm\disk.vhdx", 4 * GIB);
     let vid = d.index();
-    store_copy(
-        &d,
-        &own,
-        "dup",
-        Confidence::None,
-        "no other file of this size on the indexed drives",
-    );
+    for p in [&own, &disk] {
+        store_copy(
+            &d,
+            p,
+            "dup",
+            Confidence::None,
+            "no other file of this size on the indexed drives",
+        );
+    }
     let r = d.review(Scope::Volume(vid), NOW);
     let a = r
         .areas
@@ -968,6 +971,9 @@ fn a_big_file_every_check_missed_is_an_only_copy_area_of_its_own() {
         .expect("the project keeps the rest");
     assert!(!p.only_copy);
     assert_eq!(p.size, 2 * GIB);
+    let vm = r.areas.iter().find(|a| a.path == disk).unwrap();
+    assert!(!vm.only_copy, "a virtual disk says what it is instead");
+    assert!(vm.why_not.starts_with("A virtual machine's disk"));
 }
 
 // Traces: REVIEW-BUILD, ACT-WINDOWS-CLEANUP-DETECT

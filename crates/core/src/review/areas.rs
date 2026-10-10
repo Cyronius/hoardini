@@ -110,9 +110,12 @@ pub fn collect<'a>(
         }
         let system = matches!(area_of(cx.env, &u.path), Some(PolicyArea::System { .. }));
         // Every check that applies came up empty, so it is listed as it is, not folded into its project.
+        // A virtual disk or an installed game is always its own only copy; the catalog says more about it.
         let only_copy = !l.admin
             && u.why != Why::Kept
             && own >= AREA_MIN_BYTES
+            && l.entry
+                .is_none_or(|e| !matches!(e.category, Category::VmDisk | Category::GameLibrary))
             && copycheck::only_copy(cx.conn, &u.path);
         let own_row = l.admin
             || l.not_build
