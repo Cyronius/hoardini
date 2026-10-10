@@ -886,11 +886,14 @@ pub fn rebuild_if_untouched(
     build(db, env, lister, Scope::Volume(volume_id), now).map(Some)
 }
 
+// A compress item frees what its estimate saves, not its folder's size.
 pub fn ready_bytes(conn: &Connection, review_id: &str) -> anyhow::Result<i64> {
     let mut total = 0;
     for id in proposal_ids(conn, review_id)? {
         total += conn.query_row(
-            "SELECT COALESCE(SUM(i.alloc), 0) FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id \
+            "SELECT COALESCE(SUM(CASE WHEN p.kind = 'compress' THEN COALESCE(e.saved_bytes, i.alloc) \
+             ELSE i.alloc END), 0) FROM proposal_item i JOIN proposal p ON p.id = i.proposal_id \
+             LEFT JOIN compress_estimate e ON p.kind = 'compress' AND e.path = i.path \
              WHERE p.id = ?1 AND p.status = 'pending' AND i.status = 'pending' AND i.selected = 1",
             [&id],
             |r| r.get::<_, i64>(0),

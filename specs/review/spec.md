@@ -110,7 +110,9 @@ view lists them with sizes; the estimate is their sum); then, for a volume revie
 `syscleanup::candidates` detects from `PolicyEnv::facts()` (ACT-WINDOWS-CLEANUP-DETECT). An operation of a pending or
 recently declined system cleanup proposal (a chat card, or a card of a review that stays) is left out by name.
 
-**Items.** A `contents` unit gives one item per part, any other unit one item. An item's verdict is its catalog entry's
+**Items.** A `contents` unit gives one item per part, any other unit one item. A compress item carries `saves`, what
+its cached estimate says compressing saves (`compress::saved_bytes`; `proposals::get` fills it for every compress
+proposal), since compressing frees that and not the folder's size. An item's verdict is its catalog entry's
 (the gate raises it to the cap) and its reason cites what Hoardini knows: `<entry name>: <first sentence of its notes>`;
 for a part, `<entry name>: untouched for N days.`; for Send elsewhere, `<Label>: nothing in it opened or changed for N
 days.` (the user's answer quotes the answer's text); for Re-downloadable, the copy note (`In winget as Contoso.Tool 2.1.`,
@@ -141,7 +143,7 @@ that have no `parent_id`, plus the cards earlier reviews carry into it (REVIEW-S
 - With 56 old temp parts, the `temp` card lists 50, the 40 GiB one first, and its summary ends ` 6 smaller items (375 MB) are not listed.`
 - `work\setup\tool-2.1.exe` with a stored `identical` winget answer is the `redownload` card, ticked, `redownload`, reason `In winget as Contoso.Tool 2.1.`; `work\copy\image.iso` with an `identical` duplicate answer is in no card. `old\junk`, answered Disposable, is the `disposable` card (title `Folders you said can go`), ticked, reason `You said this folder can go.`. Of two `node_modules` a job row keeps, the one still at its kept size is in no card, and the one grown from 1,000 to 1,600 MiB is in the `build` card with reason `node_modules: Installed JavaScript dependencies. You cleaned this on 01-15 (28.0 GB).` and no memory note.
 - Under a fake OneDrive root `~\OneDrive`, an in-sync `Videos\2019.mp4` untouched for 400 days is the `online_only` card, ticked, `synced`, reason `Synced to OneDrive; nothing in it opened or changed for 400 days.`, although `Videos` is a kept photos-and-video location and `2026.mp4` beside it was written yesterday; `2026.mp4` and the `raw.mov` that is not in sync are in no card, and the `node_modules` under the root is in no card at all.
-- `data\corpus` (3 GiB of text, untouched) is in no card until its estimate is stored; with 1.2 GiB of 3 GiB saved it is the `compress` card, `lzx`, unticked, reason `Windows compression would save about 1.2 GB (40% of it); the files stay usable.` With an `identical` archive answer for `part0.txt` inside it, `part0.txt` is the `redownload` card and there is no compress card.
+- `data\corpus` (3 GiB of text, untouched) is in no card until its estimate is stored; with 1.2 GiB of 3 GiB saved it is the `compress` card, `lzx`, unticked, reason `Windows compression would save about 1.2 GB (40% of it); the files stay usable.` and `saves` 1.2 GiB; ticking it makes `ready_bytes` 1.2 GiB, not 3 GiB. With an `identical` archive answer for `part0.txt` inside it, `part0.txt` is the `redownload` card and there is no compress card.
 - With `%TEMP%\old-a` in a pending chat card, the `temp` card holds `old-b`.
 - On a fake system drive `C:\` with fixed facts (64 GiB RAM, hibernation on), a 6 GiB WinSxS, 2 GiB of old `Windows\Temp` and a 25 GiB `hiberfil.sys`, the `windows` card's operations are `leftovers`, `component_store`, `hibernation`, in that order. With a pending chat card for hibernation the next review's card holds `leftovers` and `component_store`, and the earlier untouched card is `superseded`; once that card is declined, the next review has no `windows` card and no `Temp` area. On the fake `C:\` of REVIEW-AREAS the card holds one ticked `leftovers` item of 6.5 GiB whose parts are `SoftwareDistribution\Download\abc` (3 GiB), `Temp\setup` (2 GiB) and `ProgramData\Microsoft\Windows\WER\ReportArchive` (1.5 GiB).
 
@@ -209,7 +211,8 @@ Tests: `specs/review/tests/areas.rs`; the only-copy row in `specs/review/tests/b
 
 Each answers `{review: {id, created_ms, volume, scope_path}, header: {root, used_bytes, free_bytes, ready_bytes}, cards:
 [{card, title, proposal_id, carried}], areas: [...], proposals: {<id>: <proposal>}, building, apps: [...], online: {asked,
-waiting}}`. `ready_bytes` sums the ticked, pending items of the pending cards it lists; `proposals` holds every proposal of
+waiting}}`. `ready_bytes` sums the ticked, pending items of the pending cards it lists, a compress item by its
+`saves` (its `alloc` when it has no estimate); `proposals` holds every proposal of
 the review, its cards and their follow-ups, and every carried card with its follow-ups, in the JSON of `GET
 /api/proposals/{id}` (which carries `review_id`, `card` and `touched`); `building` is true while a review build runs; `apps` are the rarely used apps of ACT-APPS-RARELY-USED (the
 SRV-APPS JSON) whose folder lies in the review's scope, so the UI can show "Apps you rarely use" without a second call;

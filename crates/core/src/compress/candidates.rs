@@ -322,6 +322,18 @@ fn cached(
         .optional()?)
 }
 
+// What compressing the folder would save, by its last estimate; a compress item counts this, not its size.
+pub fn saved_bytes(conn: &Connection, path: &str) -> anyhow::Result<Option<u64>> {
+    Ok(conn
+        .query_row(
+            "SELECT saved_bytes FROM compress_estimate WHERE path = ?1",
+            [path],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+        .map(index::to_u64))
+}
+
 pub fn estimate_top(db: &Db, cands: &[CompressCandidate], limit: usize) -> anyhow::Result<usize> {
     let conn = db.conn()?;
     let mut ran = 0;

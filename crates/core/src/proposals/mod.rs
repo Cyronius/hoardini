@@ -133,6 +133,8 @@ pub struct ProposalItem {
     pub op: Option<OpView>,
     #[serde(default)]
     pub copy_note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saves: Option<u64>,
 }
 
 // A requested path the gate refused outright (deny list, protect memory, not absolute, nested).
@@ -839,6 +841,7 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
                 memory_note: r.get(11)?,
                 op: None,
                 copy_note: None,
+                saves: None,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -852,6 +855,11 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         // Only live cards show it, and a finished card's paths may be gone.
         for it in &mut items {
             it.copy_note = copycheck::note_for(conn, &it.path);
+        }
+    }
+    if kind == ProposalKind::Compress {
+        for it in &mut items {
+            it.saves = crate::compress::saved_bytes(conn, &it.path)?;
         }
     }
     let finished = matches!(status.as_str(), "done" | "partial" | "failed");

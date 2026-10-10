@@ -3,7 +3,7 @@ pub mod pack;
 
 pub use candidates::{
     CachedEstimate, CompressCandidate, ESTIMATE_TOP, MIN_FOLDER, MIN_SAVED, MIN_SAVED_PERCENT,
-    QUIET_DAYS, candidates, estimate_top, proposable, spawn_estimates,
+    QUIET_DAYS, candidates, estimate_top, proposable, saved_bytes, spawn_estimates,
 };
 
 use std::io::{Read, Seek, SeekFrom, Write};

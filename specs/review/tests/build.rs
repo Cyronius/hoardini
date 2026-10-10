@@ -774,6 +774,14 @@ fn a_folder_worth_compressing_is_a_compress_card_once_its_estimate_is_in() {
         k.items[0].reason.as_deref(),
         Some("Windows compression would save about 1.2 GB (40% of it); the files stay usable.")
     );
+    assert_eq!(k.items[0].saves, Some(1229 * MIB));
+    assert_eq!(review::ready_bytes(&conn, &r.id).unwrap(), 0, "unticked");
+    proposals::select(&d.db, &k.id, &[k.items[0].id]).unwrap();
+    assert_eq!(
+        review::ready_bytes(&conn, &r.id).unwrap(),
+        (1229 * MIB) as i64,
+        "what compressing saves, not the 3 GiB folder"
+    );
 }
 
 fn sparse(path: &str, len: u64) {
