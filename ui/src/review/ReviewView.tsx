@@ -13,7 +13,6 @@ import { chainOf, orderCards, readyBytes } from "./order";
 import { RarelyUsedApps } from "./RarelyUsedApps";
 import { useReview, type Built } from "./state";
 
-// Opens the drive's review at start and on a drive switch; a rebuild elsewhere shows up as a new status.review id.
 function useReviewSync() {
   const root = useStore((s) => selectedVolume(s.status?.volumes)?.root);
   const statusId = useStore((s) => s.status?.review?.id);
@@ -317,7 +316,7 @@ function FolderReview() {
         ))}
       {view && (
         <>
-          <ReviewHeader view={view} ready={ready} title="Clean up" onRun={() => void cleanUp(folder.path)} running={false} />
+          <ReviewHeader view={view} ready={ready} title="Clean up" onRun={() => void cleanUp(folder.path)} running={folder.running} error={folder.error} />
           <OnlineChecksConsent online={view.online} onAnswered={markAsked} />
           <section aria-label="What can go">
             <SectionHead title="What can go" count={cards.length} />

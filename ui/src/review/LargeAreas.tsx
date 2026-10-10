@@ -3,7 +3,7 @@ import { routes } from "../api/client";
 import type { LocationAnswer, ReviewArea } from "../api/types";
 import { ItemTree, RevealButton, Toggle, actionBtn, overlay } from "../components/ItemTree";
 import { askAbout, cleanUpTitle } from "../components/ToolCards";
-import { digits, fileName, humanBytes } from "../format";
+import { digits, fileName, humanBytes, isRootFolder } from "../format";
 import { useStore } from "../store";
 import { useReview } from "./state";
 
@@ -30,11 +30,16 @@ export function WhatIsButtons({ path, onAnswered }: { path: string; onAnswered?:
   const [err, setErr] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const more = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!menu) return;
     const down = (e: MouseEvent) => !more.current?.contains(e.target as Node) && setMenu(false);
-    const key = (e: KeyboardEvent) => e.key === "Escape" && setMenu(false);
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenu(false);
+      toggle.current?.focus();
+    };
     document.addEventListener("mousedown", down);
     document.addEventListener("keydown", key);
     return () => {
@@ -74,8 +79,8 @@ export function WhatIsButtons({ path, onAnswered }: { path: string; onAnswered?:
       >
         Look closer
       </button>
-      <div ref={more} className="relative">
-        <button type="button" className={`${pill} px-2`} aria-haspopup="menu" aria-expanded={menu} aria-label="More answers" title="More answers" disabled={busy} onClick={() => setMenu((m) => !m)}>
+      <div ref={more} className="relative" onBlur={(e) => menu && !more.current?.contains(e.relatedTarget as Node | null) && setMenu(false)}>
+        <button ref={toggle} type="button" className={`${pill} px-2`} aria-haspopup="menu" aria-expanded={menu} aria-label="More answers" title="More answers" disabled={busy} onClick={() => setMenu((m) => !m)}>
           ⋯
         </button>
         {menu && (
@@ -222,7 +227,6 @@ export function SectionHead({ title, count, children }: { title: string; count?:
   );
 }
 
-// From Explore's What is this? or a `what_is` pill: the same answers for any path, at the top of the review.
 export function WhatIsCard({ path }: { path: string }) {
   const showWhatIs = useReview((s) => s.showWhatIs);
   const area = useReview((s) => [...(s.folder?.view?.areas ?? []), ...(s.main?.areas ?? [])].find((a) => a.path.toLowerCase() === path.toLowerCase()));
@@ -284,6 +288,8 @@ export function WhatIsCard({ path }: { path: string }) {
               </button>
             )}
           </p>
+        ) : isRootFolder(path) ? (
+          <p className="text-[length:var(--fs-sm)] text-muted">A whole drive or profile takes no answer: what is inside is judged folder by folder. Pick a folder inside it.</p>
         ) : (
           <WhatIsButtons path={path} onAnswered={(text, a) => setSaved({ text, a })} />
         )}

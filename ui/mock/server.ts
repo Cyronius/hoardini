@@ -333,7 +333,7 @@ function learnFrom(p: T.Proposal): void {
     },
   };
   memories.push(m);
-  p.learned = [{ memory_id: m.id, text, confirmed: false }];
+  p.learned = [{ memory_id: m.id, text, confirmed: false, pinned: false }];
 }
 
 function runJob(p: T.Proposal, itemIds: number[]): T.Job {
@@ -393,8 +393,6 @@ function runJob(p: T.Proposal, itemIds: number[]): T.Job {
   return job;
 }
 
-// ---- Folder tree (GET /api/index/children) ----
-// Profile paths show as "~", as the real server sends them.
 type TreeNode = { path: string; name: string; kind: "dir" | "file"; size: number; files: number; mtime_ms: number; kids?: TreeNode[]; small?: { count: number; bytes: number }; parent?: TreeNode; grown?: boolean };
 const DAY = 86_400_000;
 const hash = (s: string) => [...s.toLowerCase()].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7);
@@ -512,7 +510,6 @@ const tree = build("", [
   ],
 ]);
 
-// What made-up contents are made of, by the nearest folder named here.
 const HINTS: Record<string, string[]> = {
   "c:\\program files": ["dll", "exe", "pak"],
   "~\\appdata\\local\\programs": ["dll", "exe", "pak"],
@@ -596,7 +593,6 @@ function childrenOf(path: string, limit: number) {
 
 const revealed: string[] = [];
 
-// ---- Review (REVIEW-BUILD, REVIEW-AREAS, REVIEW-TRIGGER, REVIEW-SUPERSEDE) ----
 type ItemSeed = { path: string; gb: number; verdict: T.Verdict; reason: string; kind?: "dir" | "file"; memory_note?: string; copy_note?: string };
 type CardSeed = { card: string; title: string; kind: T.ProposalKind; ticked: boolean; summary: string; items: ItemSeed[]; format?: string; ops?: () => T.ProposalItem[] };
 
@@ -724,7 +720,6 @@ const cardSeeds = (): CardSeed[] => [
   },
 ];
 
-// The `windows` card (REVIEW-BUILD): the leftovers the review found, then what detection offers on this PC.
 const LEFTOVER_PARTS: [string, number][] = [
   ["C:\\Windows\\SoftwareDistribution\\Download\\4b1f9c0e7d2a6f31", 3.4],
   ["C:\\Windows\\LiveKernelReports\\WATCHDOG", 1.1],
@@ -816,7 +811,6 @@ const areaSeeds = (): T.ReviewArea[] =>
     area("~\\Pictures", 6.8, "your photos and videos", "photos", "keep", "Your photos and videos: 94% of its bytes are images or video.", null, ["archive"]),
   ].sort((a, b) => b.size - a.size);
 
-// GET /api/apps/rarely-used (SRV-APPS): this PC's big programs that have not run for 90 days.
 const apps: T.RarelyUsedApp[] = [
   { id: "steam-1091500", name: "Cyberpunk 2077", publisher: "CD PROJEKT RED", source: "steam", path: "C:\\Games\\steamapps\\common\\Cyberpunk 2077", size: Math.round(71.3 * GB), last_run_ms: now() - 133 * DAY, last_run_from: "Steam LastPlayed" },
   { id: "reg-6f1c0a9be2d47c31", name: "Visual Studio Community 2022", publisher: "Microsoft Corporation", source: "registry", path: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community", size: Math.round(38.4 * GB), last_run_ms: null, last_run_from: null },
@@ -893,7 +887,6 @@ function buildReview(scope: string | null): MockReview {
 
 const latestVolumeReview = () => [...reviews].reverse().find((r) => r.volume === selectedDrive().root && !r.scope_path);
 
-// One background build at a time, like review::Builds; `review_building` rides on the status stream.
 let buildTimer: ReturnType<typeof setTimeout> | null = null;
 const BUILD_MS = Number(process.env.MOCK_BUILD_MS ?? 2500);
 function buildLater(ms = BUILD_MS): void {
@@ -911,7 +904,6 @@ function buildLater(ms = BUILD_MS): void {
 const LIVE: T.Proposal["status"][] = ["pending", "approved", "running"];
 const sameScope = (a: MockReview, b: MockReview) => a.volume === b.volume && (a.scope_path ?? "").toLowerCase() === (b.scope_path ?? "").toLowerCase();
 
-// Touched cards of earlier reviews, or their touched follow-up once the card itself ended (REVIEW-SUPERSEDE).
 function carriedInto(r: MockReview): T.ReviewCardRef[] {
   const out: T.ReviewCardRef[] = [];
   for (const old of reviews.slice(0, reviews.indexOf(r))) {
@@ -961,11 +953,12 @@ function reviewView(r: MockReview): T.ReviewView {
   };
 }
 
-// Before the drive's first review: its header only, while the build runs.
 function firstView(): T.ReviewView {
   const d = selectedDrive();
   return { review: null, header: { root: d.root, used_bytes: d.total_bytes - d.free_bytes, free_bytes: d.free_bytes, ready_bytes: 0 }, cards: [], areas: [], proposals: {}, ...extras(d.root) };
 }
+
+const CONTAINERS = new Set(["c:\\users", "~", "~\\appdata", "~\\appdata\\local", "~\\appdata\\roaming", "~\\.lmstudio", "c:\\programdata", "c:\\program files", "c:\\windows"]);
 
 function answerLocation(path: string, answer: T.LocationAnswer): T.Memory {
   const table: Record<T.LocationAnswer, { label: string; verdict: T.Verdict; actions: T.ReviewArea["actions"]; text: string }> = {
@@ -984,7 +977,6 @@ function answerLocation(path: string, answer: T.LocationAnswer): T.Memory {
   return m;
 }
 
-// ---- Explore (GET /api/index/map, GET /api/index/types, PUT /api/explore/focus) ----
 type Known = T.MapTag & { self?: boolean };
 // What the mock "knows", by folder; the nearest one at or above a path wins, as on the server (SRV-INDEX-MAP).
 const KNOWN: Record<string, Known> = {
@@ -1541,6 +1533,7 @@ async function route(req: Request): Promise<Response> {
       if (seg[1] === "run" && method === "POST") {
         const { path: folder } = await body<{ path?: string }>();
         if (folder && !/^(~|[A-Za-z]:)\\/.test(folder)) return err("folder in the index not found", 404);
+        await sleep(Number(process.env.MOCK_RUN_MS ?? 0));
         return json(reviewView(buildReview(folder?.trim() || null)));
       }
       if (seg[1] === "look-closer" && method === "POST") {
@@ -1569,6 +1562,7 @@ async function route(req: Request): Promise<Response> {
       const b = await body<{ path?: string; answer?: T.LocationAnswer }>();
       if (!b.path) return err("path is required");
       if (!b.answer || !["keep", "disposable", "move-elsewhere", "never-touch"].includes(b.answer)) return err("invalid request body: unknown answer");
+      if (CONTAINERS.has(norm(b.path)) || /^[a-z]:$/.test(norm(b.path))) return err(`${b.path} holds other folders; answer for a folder inside it`);
       dirty = true;
       return json(answerLocation(b.path, b.answer));
     }
@@ -1605,7 +1599,7 @@ async function route(req: Request): Promise<Response> {
         if (!memories[idx]!.detail) return err("only location and file-type rows can be confirmed");
         Object.assign(memories[idx]!, { source: "user", pinned: true, updated_ms: now(), last_used_ms: now() });
         const id = memories[idx]!.id;
-        for (const l of [...proposals.values()].flatMap((x) => x.learned ?? [])) if (l.memory_id === id) l.confirmed = true;
+        for (const l of [...proposals.values()].flatMap((x) => x.learned ?? [])) if (l.memory_id === id) Object.assign(l, { confirmed: true, pinned: true });
         for (const msg of thread.messages) {
           const d = msg.data as T.LearnedData | undefined;
           if (d?.kind === "learned") for (const l of d.items) if (l.memory_id === id) l.confirmed = true;
@@ -1613,6 +1607,7 @@ async function route(req: Request): Promise<Response> {
         return json(memories[idx]);
       }
       Object.assign(memories[idx]!, await body<Partial<T.Memory>>(), { updated_ms: now(), last_used_ms: now() });
+      for (const l of [...proposals.values()].flatMap((x) => x.learned ?? [])) if (l.memory_id === memories[idx]!.id) l.pinned = memories[idx]!.pinned;
       return json(memories[idx]);
     }
     case "setup":

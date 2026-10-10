@@ -25,6 +25,9 @@ pub struct Learned {
     // The user confirmed the row (its source is `user`), so the chip offers no Confirm.
     #[serde(default)]
     pub confirmed: bool,
+    // So a reloaded chip offers Unpin for a row pinned earlier.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 fn same_or_under(a: &str, p: &str) -> bool {
@@ -412,6 +415,7 @@ pub fn learned_for(conn: &Connection, proposal_id: &str) -> anyhow::Result<Vec<L
                 memory_id: m.id,
                 text: learned_text(&m.key, &c, &k),
                 confirmed: m.source == "user",
+                pinned: m.pinned,
             })
         })
         .collect())

@@ -21,6 +21,18 @@ export type HomeTab = "review" | "explore";
 type Outbox = { text: string; lookCloser?: string; n: number };
 
 const prefs = loadPrefs();
+
+// A review refetch can land between a tick and its PUT's reply; the tick on screen must not flip back.
+const held = new Map<string, Set<number>>();
+export const heldTicks = (id: string) => held.get(id) ?? null;
+export function holdTicks(id: string, ids: Set<number> | null) {
+  if (ids) held.set(id, ids);
+  else held.delete(id);
+}
+const withHeld = (p: Proposal): Proposal => {
+  const h = held.get(p.id);
+  return h && p.status === "pending" ? { ...p, items: p.items.map((i) => (i.status === "pending" ? { ...i, selected: h.has(i.id) } : i)) } : p;
+};
 let outboxSeq = 0;
 
 export type ThreadMeta = Pick<ThreadDetail, "window_start_id" | "has_hidden" | "fresh" | "earlier" | "showing_all">;
@@ -55,12 +67,12 @@ interface State {
   themePref: string;
 
   home: HomeTab;
-  // Narrow windows only: the Chat tab is in front of the home tabs.
   chatFront: boolean;
   chatCollapsed: boolean;
   chatWidth: number | null;
-  // Asked from outside the chat (Explore, Look closer); the chat sends it once it is idle.
   outbox: Outbox | null;
+  // The chat remounts when its thread reloads (Look closer, Clear chat); the draft outlives it.
+  chatDraft: string;
   exploreAt: { path: string; n: number } | null;
 
   // Bumped when the chat must remount from `seedMessages` (page load, cleared history).
@@ -90,6 +102,7 @@ interface State {
   setChatCollapsed(c: boolean): void;
   setChatWidth(w: number): void;
   askChat(text: string, lookCloser?: string): void;
+  setChatDraft(text: string): void;
   takeOutbox(n: number): void;
   openExplore(path: string): void;
   putProposal(p: Proposal): void;
@@ -124,6 +137,7 @@ export const useStore = create<State>((set, get) => ({
   chatCollapsed: prefs.collapsed,
   chatWidth: prefs.chatWidth,
   outbox: null,
+  chatDraft: "",
   exploreAt: null,
 
   threadNonce: 0,
@@ -186,10 +200,11 @@ export const useStore = create<State>((set, get) => ({
     set({ outbox: { text, lookCloser, n: ++outboxSeq } });
     get().showChat();
   },
+  setChatDraft: (chatDraft) => set({ chatDraft }),
   takeOutbox: (n) => set((s) => (s.outbox?.n === n ? { outbox: null } : s)),
   openExplore: (path) => set((s) => ({ home: "explore", chatFront: false, exploreAt: { path, n: (s.exploreAt?.n ?? 0) + 1 } })),
-  putProposal: (p) => set((s) => ({ proposals: { ...s.proposals, [p.id]: p } })),
-  putProposals: (ps) => set((s) => ({ proposals: { ...s.proposals, ...ps } })),
+  putProposal: (p) => set((s) => ({ proposals: { ...s.proposals, [p.id]: withHeld(p) } })),
+  putProposals: (ps) => set((s) => ({ proposals: { ...s.proposals, ...Object.fromEntries(Object.entries(ps).map(([k, p]) => [k, withHeld(p)])) } })),
   async loadProposal(id) {
     try {
       const p = await routes.proposal(id);

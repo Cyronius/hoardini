@@ -35,7 +35,6 @@ function rank(c: ReviewCardRef, proposals: ById): [group: number, ready: number,
   return [ENDED.includes(top.status) ? 3 : 2, 0, top.total_alloc];
 }
 
-// Most ready to free first, then pending cards with nothing ticked, then work under way, finished, replaced.
 export function orderCards(cards: ReviewCardRef[], proposals: ById): ReviewCardRef[] {
   return cards
     .map((c, i) => ({ c, i, r: rank(c, proposals) }))

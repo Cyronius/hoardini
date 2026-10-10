@@ -61,7 +61,6 @@ export type SystemOpView = {
   irreversible: boolean;
   estimate_known: boolean;
   size: number | null;
-  // The folders the review's `leftovers` operation clears; shown only.
   parts?: { path: string; size: number }[];
 };
 export type ProposalItem = {
@@ -105,15 +104,13 @@ export type Proposal = {
   items: ProposalItem[];
   parent_id: string | null;
   follow_up_id: string | null;
-  // What the finished job recorded on location rows (MEM-LEARN-JOB); absent from older servers.
   learned?: Learned[];
   review_id?: string | null;
   card?: string | null;
   touched?: boolean;
 };
-export type Learned = { memory_id: number; text: string; url?: string; confirmed?: boolean };
+export type Learned = { memory_id: number; text: string; url?: string; confirmed?: boolean; pinned?: boolean };
 
-// Review (REVIEW-BUILD, REVIEW-AREAS, REVIEW-TRIGGER): POST /api/review/open, POST /api/review/run, GET /api/review.
 export type ReviewArea = {
   path: string;
   size: number;
@@ -126,17 +123,14 @@ export type ReviewArea = {
   actions: ("delete" | "dedupe" | "archive" | "compress")[];
   only_copy?: boolean;
 };
-// `carried`: a card of an earlier review the user touched, still live (REVIEW-SUPERSEDE).
 export type ReviewCardRef = { card: string; title: string; proposal_id: string; carried?: boolean };
 export type ReviewView = {
-  // Null while the drive's first review builds (REVIEW-TRIGGER).
   review: { id: string; created_ms: number; volume: string; scope_path: string | null } | null;
   header: { root: string; used_bytes: number | null; free_bytes: number | null; ready_bytes: number };
   cards: ReviewCardRef[];
   areas: ReviewArea[];
   proposals: Record<string, Proposal>;
   building?: boolean;
-  // From servers that fold the rarely used apps into the review; else the UI asks /api/apps/rarely-used.
   apps?: RarelyUsedApp[];
   online?: OnlineState;
 };
@@ -159,7 +153,6 @@ export type Memory = {
   forgotten_ms: number | null;
   detail?: MemoryDetail | null;
 };
-// Location and file-type rows (MEM-LOCATION, MEM-FILETYPE); absent fields mean empty.
 export type MemoryDetail = {
   category?: string;
   label?: string;

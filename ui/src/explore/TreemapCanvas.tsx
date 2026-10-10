@@ -178,9 +178,8 @@ export function TreemapCanvas<T extends { size: number }>(p: TreemapCanvasProps<
     <div ref={box} className={`relative min-h-0 min-w-0 overflow-hidden ${p.className ?? ""}`}>
       <canvas
         ref={canvas}
-        role="img"
+        {...(p.onKeyDown ? { role: "application", "aria-roledescription": "treemap", tabIndex: 0 } : { role: "img" })}
         aria-label={p.ariaLabel}
-        tabIndex={0}
         className="absolute inset-0 block h-full w-full cursor-pointer rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-brass"
         style={{ width: size.w, height: size.h }}
         onMouseMove={(e) => setHover(at(e))}

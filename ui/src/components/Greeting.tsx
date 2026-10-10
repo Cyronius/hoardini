@@ -5,7 +5,6 @@ import { selectedVolume } from "./mascot/girth";
 
 export const starter = "rounded-full border border-brass/40 bg-brass/10 px-3 py-1 text-[length:var(--fs-sm)] font-bold text-brass hover:bg-brass/20";
 
-// The chat's fresh state; the drive's numbers are in the review header (UI-WELCOME-BACK).
 export function Starters({ onAsk }: { onAsk: (text: string) => void }) {
   const dupes = useStore((s) => s.summary?.duplicate_hint);
   return (
@@ -29,7 +28,6 @@ export function Starters({ onAsk }: { onAsk: (text: string) => void }) {
   );
 }
 
-// A drive with no finished index yet: the review cannot exist until the first scan ends.
 export function Hello() {
   const status = useStore((s) => s.status);
   const vol = selectedVolume(status?.volumes);

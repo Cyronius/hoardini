@@ -5,7 +5,6 @@ import { useStore } from "../store";
 
 const POLL_MS = 30_000;
 
-// Asked once, when online candidates wait and the user has not answered yet (EVID-COPY-CONSENT).
 export function OnlineChecksConsent({ online, onAnswered }: { online?: OnlineState; onAnswered?: () => void }) {
   const lastRefresh = useStore((s) => s.status?.index.last_refresh_ms);
   const openDrawer = useStore((s) => s.openDrawer);

@@ -1989,8 +1989,24 @@ async fn a_finished_job_lists_what_it_learned_and_the_chip_routes_undo_and_confi
     );
     let memory_id = learned[0]["memory_id"].as_i64().unwrap();
     assert_eq!(learned[0]["confirmed"], false);
+    assert_eq!(learned[0]["pinned"], false);
     let (_, t) = f.call("GET", "/api/thread", None).await;
     assert_eq!(t["proposals"][&p.id]["learned"], done["learned"]);
+    let (st, _) = f
+        .call(
+            "PUT",
+            &format!("/api/memory/{memory_id}"),
+            Some(json!({"pinned": true})),
+        )
+        .await;
+    assert_eq!(st, 200);
+    let (_, pinned) = f
+        .call("GET", &format!("/api/proposals/{}", p.id), None)
+        .await;
+    assert_eq!(
+        pinned["learned"][0]["pinned"], true,
+        "a reload after Pin offers Unpin"
+    );
     let (st, _) = f
         .call("POST", &format!("/api/memory/{memory_id}/confirm"), None)
         .await;

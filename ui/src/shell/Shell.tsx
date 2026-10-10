@@ -36,6 +36,17 @@ function Tabs({ wide }: { wide: boolean }) {
   const showChat = useStore((s) => s.showChat);
   const ready = useDriveReady();
   const front = !wide && chatFront ? "chat" : home;
+  const order: (HomeTab | "chat")[] = wide ? ["review", "explore"] : ["review", "explore", "chat"];
+  const pick = (id: HomeTab | "chat") => (id === "chat" ? showChat() : setHome(id));
+  const keys = (e: KeyboardEvent<HTMLElement>) => {
+    const i = order.indexOf(front);
+    const n = order.length;
+    const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    pick(order[to]!);
+    document.getElementById(`tab-${order[to]}`)?.focus();
+  };
   const tab = (id: HomeTab | "chat", label: string, extra?: ReactNode) => (
     <button
       key={id}
@@ -43,22 +54,24 @@ function Tabs({ wide }: { wide: boolean }) {
       role="tab"
       id={`tab-${id}`}
       aria-selected={front === id}
+      aria-controls={id === "chat" ? "panel-chat" : "panel-home"}
+      tabIndex={front === id ? 0 : -1}
       className={tabCls(front === id)}
-      onClick={() => (id === "chat" ? showChat() : setHome(id))}
+      onClick={() => pick(id)}
     >
       {label}
       {extra}
     </button>
   );
   return (
-    <nav role="tablist" aria-label="Views" className="flex shrink-0 items-end gap-1 border-b border-line-soft bg-ink-900 px-3 pt-1.5">
+    <nav role="tablist" aria-label="Views" className="flex shrink-0 items-end gap-1 border-b border-line-soft bg-ink-900 px-3 pt-1.5" onKeyDown={keys}>
       {tab(
         "review",
         "Review",
         ready > 0 && <span className="rounded-full bg-brass px-1.5 py-px text-[length:var(--fs-xs)] tabular-nums text-on-accent">{humanBytes(ready, 0)}</span>,
       )}
       {tab("explore", "Explore")}
-      {!wide && tab("chat", "Chat", busy && front !== "chat" && <span className="h-2 w-2 rounded-full bg-brass pulse-soft" aria-label="answering" />)}
+      {!wide && tab("chat", "Chat", busy && front !== "chat" && <span role="status" className="h-2 w-2 rounded-full bg-brass pulse-soft" aria-label="answering" />)}
     </nav>
   );
 }
@@ -73,13 +86,14 @@ function Resizer({ width, max, onLive, onDone }: { width: number; max: number; o
     document.body.classList.add("select-none");
   };
   const moveTo = (e: PointerEvent<HTMLDivElement>) => dragging.current && onLive(fit(window.innerWidth - e.clientX));
-  const up = (e: PointerEvent<HTMLDivElement>) => {
-    if (!dragging.current) return;
+  const end = () => {
+    if (!dragging.current) return false;
     dragging.current = false;
     document.body.classList.remove("select-none");
     onLive(null);
-    onDone(fit(window.innerWidth - e.clientX));
+    return true;
   };
+  const up = (e: PointerEvent<HTMLDivElement>) => end() && onDone(fit(window.innerWidth - e.clientX));
   const key = (e: KeyboardEvent<HTMLDivElement>) => {
     const by = e.key === "ArrowLeft" ? STEP_PX : e.key === "ArrowRight" ? -STEP_PX : 0;
     if (by) {
@@ -104,7 +118,7 @@ function Resizer({ width, max, onLive, onDone }: { width: number; max: number; o
       onPointerDown={down}
       onPointerMove={moveTo}
       onPointerUp={up}
-      onPointerCancel={up}
+      onPointerCancel={end}
       onKeyDown={key}
       onDoubleClick={() => onDone(fit(CHAT_DEFAULT_PX))}
     >
@@ -148,13 +162,13 @@ function Rail() {
       >
         <ChatIcon />
         <span className="text-[length:var(--fs-xs)] font-bold tracking-wide [writing-mode:vertical-rl]">Chat</span>
-        {busy && <span className="h-2 w-2 rounded-full bg-brass pulse-soft" aria-label="answering" />}
+        {busy && <span role="status" className="h-2 w-2 rounded-full bg-brass pulse-soft" aria-label="answering" />}
       </button>
     </div>
   );
 }
 
-// A home view that throws while rendering shows this in its place, so the header and the chat keep working.
+// Without it one throw in a home view blanks the whole window, the chat included.
 class HomeBoundary extends Component<{ name: string; hidden?: boolean; onRetry?: () => Promise<void>; children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
 
@@ -218,7 +232,7 @@ export function Shell() {
       <div className={`flex min-h-0 flex-1 ${wide ? "flex-row" : "flex-col"}`}>
         <div className={`flex min-w-0 flex-col ${homeShown ? "min-h-0 flex-1" : "flex-none"}`}>
           <Tabs wide={wide} />
-          <div className={`min-h-0 flex-1 flex-col ${homeShown ? "flex" : "hidden"}`} role="tabpanel" aria-labelledby={`tab-${home}`}>
+          <div id="panel-home" className={`min-h-0 flex-1 flex-col ${homeShown ? "flex" : "hidden"}`} role="tabpanel" aria-labelledby={`tab-${home}`}>
             <HomeBoundary name="Review" hidden={home !== "review"} onRetry={reopenReview}>
               <ReviewView hidden={home !== "review"} />
             </HomeBoundary>
@@ -233,7 +247,8 @@ export function Shell() {
         </div>
         {wide && !collapsed && <Resizer width={panel} max={max} onLive={setLive} onDone={setChatWidth} />}
         <aside
-          aria-label="Chat"
+          id="panel-chat"
+          {...(wide ? { "aria-label": "Chat" } : { role: "tabpanel", "aria-labelledby": "tab-chat" })}
           className={`min-h-0 min-w-0 flex-col bg-ink-900 ${chatShown ? "flex" : "hidden"} ${wide ? "shrink-0 border-l border-line-soft" : "flex-1"}`}
           style={wide ? { width: panel } : undefined}
         >

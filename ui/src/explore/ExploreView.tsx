@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { ApiError, routes } from "../api/client";
 import type { ChildRow, IndexMap, MapNode, MapTag, More, TypeRow } from "../api/types";
 import { ItemTree, RevealButton, SizeBar, actionBtn } from "../components/ItemTree";
-import { digits, humanBytes, samePath } from "../format";
+import { digits, humanBytes, isRootFolder, samePath } from "../format";
 import { STATES, STATE_LABEL, TYPE_SLOTS, useExplorePalette, type ExplorePalette, type Swatch } from "./palette";
 import { TreemapCanvas, type BlockLabel } from "./TreemapCanvas";
 
@@ -390,12 +390,25 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
             </span>
           ))}
         </nav>
-        <div role="radiogroup" aria-label="Color blocks by" className="flex rounded-full border border-line bg-ink-850 p-0.5 text-[length:var(--fs-xs)] font-bold">
+        <div
+          role="radiogroup"
+          aria-label="Color blocks by"
+          className="flex rounded-full border border-line bg-ink-850 p-0.5 text-[length:var(--fs-xs)] font-bold"
+          onKeyDown={(e) => {
+            if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+            e.preventDefault();
+            const to = mode === "knowledge" ? "type" : "knowledge";
+            setColor(to);
+            (e.currentTarget.querySelector(`[data-mode="${to}"]`) as HTMLElement | null)?.focus();
+          }}
+        >
           {(["knowledge", "type"] as const).map((m) => (
             <button
               key={m}
               type="button"
               role="radio"
+              data-mode={m}
+              tabIndex={mode === m ? 0 : -1}
               aria-checked={mode === m}
               className={`rounded-full px-2.5 py-0.5 ${mode === m ? "bg-brass text-on-accent" : "text-muted hover:text-paper"}`}
               onClick={() => setColor(m)}
@@ -452,7 +465,7 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
                   Clean up
                 </button>
               )}
-              {onWhatIsThis && sel.kind !== "more" && sel.kind !== "small" && (
+              {onWhatIsThis && sel.kind !== "more" && sel.kind !== "small" && !isRootFolder(sel.path) && (
                 <button type="button" className={btn} onClick={() => onWhatIsThis(sel.path)}>
                   What is this?
                 </button>
@@ -550,7 +563,8 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
             )}
           </div>
           {types?.path === shown && types.err && <p className="px-1 py-1 text-[length:var(--fs-xs)] text-err">Could not list types: {types.err}</p>}
-          {!typeRows && !(types?.path === shown && types.err) && <p className="pulse-soft px-1 py-1 text-[length:var(--fs-xs)] text-faint">Loading...</p>}
+          {!typeRows && !shown && data.err && <p className="px-1 py-1 text-[length:var(--fs-xs)] text-faint">Nothing to list: the folder did not load.</p>}
+          {!typeRows && !(types?.path === shown && types.err) && !(!shown && data.err) && <p className="pulse-soft px-1 py-1 text-[length:var(--fs-xs)] text-faint">Loading...</p>}
           <ul className="mt-1 space-y-0.5">
             {typeRows?.map((t) => {
               const k = typeKey(t);

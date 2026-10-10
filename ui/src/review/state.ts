@@ -1,23 +1,20 @@
 import { create } from "zustand";
 import { ApiError, routes } from "../api/client";
 import type { LocationAnswer, Memory, ReviewCardRef, ReviewView } from "../api/types";
+import { selectedVolume } from "../components/mascot/girth";
 import { samePath } from "../format";
 import { useStore } from "../store";
 
 export type Built = ReviewView & { review: NonNullable<ReviewView["review"]> };
-type Folder = { path: string; view: Built | null; error: string | null };
+type Folder = { path: string; view: Built | null; error: string | null; running: boolean };
 
 interface ReviewState {
-  // Always a built review; `bare` holds the drive's header while its first one builds.
   main: Built | null;
   bare: ReviewView | null;
   status: "loading" | "ready" | "no-index" | "error";
   error: string | null;
-  // Review now is waiting on its build.
   running: boolean;
-  // The server builds in the background (REVIEW-TRIGGER `building`).
   building: boolean;
-  // Cards of a review that a rebuild replaced while the user looked; they stay on screen until reload.
   carry: ReviewCardRef[];
   folder: Folder | null;
   whatIs: string | null;
@@ -35,23 +32,25 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export const useReview = create<ReviewState>((set, get) => {
   const accept = (view: ReviewView) => {
+    // Open, refetch and the answer reread race; a reply for another drive or older than what is shown is stale.
+    const root = selectedVolume(useStore.getState().status?.volumes)?.root;
+    if (root && !samePath(root, view.header.root)) return;
+    const prev = get().main;
+    const same = !!prev && samePath(prev.header.root, view.header.root);
+    if (same && (!view.review || view.review.created_ms < prev.review.created_ms)) return;
     useStore.getState().putProposals(view.proposals);
     const building = !!view.building;
-    const prev = get().main;
     if (!view.review) {
-      const same = !!prev && samePath(prev.header.root, view.header.root);
-      set({ main: same ? prev : null, carry: same ? get().carry : [], bare: view, building, status: "ready", error: null });
+      set({ main: null, carry: [], bare: view, building, status: "ready", error: null });
       return;
     }
-    if (prev && prev.review.id !== view.review.id) {
-      const ids = new Set(view.cards.map((c) => c.proposal_id));
-      const old = prev.review.volume === view.review.volume ? [...get().carry, ...prev.cards] : [];
-      const carry = old.filter((c, i) => !ids.has(c.proposal_id) && old.findIndex((o) => o.proposal_id === c.proposal_id) === i);
-      set({ carry });
-      // The rebuild superseded the untouched ones; the store still holds them as pending.
-      for (const c of carry) void useStore.getState().loadProposal(c.proposal_id);
-    }
-    set({ main: view as Built, bare: null, building, status: "ready", error: null });
+    // Cards that leave the review (replaced, or carried no longer once they ran) stay on screen until reload.
+    const ids = new Set(view.cards.map((c) => c.proposal_id));
+    const old = same ? [...get().carry, ...prev.cards] : [];
+    const carry = old.filter((c, i) => !ids.has(c.proposal_id) && old.findIndex((o) => o.proposal_id === c.proposal_id) === i);
+    // A newer review superseded the untouched ones; the store still holds them as pending.
+    if (prev && prev.review.id !== view.review.id) for (const c of carry) void useStore.getState().loadProposal(c.proposal_id);
+    set({ main: view as Built, bare: null, carry, building, status: "ready", error: null });
   };
 
   return {
@@ -95,13 +94,16 @@ export const useReview = create<ReviewState>((set, get) => {
     },
     async cleanUp(path) {
       useStore.getState().setHome("review");
-      set({ folder: { path, view: null, error: null } });
+      const prev = get().folder;
+      const shown = prev && samePath(prev.path, path) ? prev.view : null;
+      if (prev?.running && shown) return;
+      set({ folder: { path, view: shown, error: null, running: true } });
       try {
         const view = (await routes.reviewRun(path)) as Built;
         useStore.getState().putProposals(view.proposals);
-        if (get().folder?.path === path) set({ folder: { path, view, error: null } });
+        if (get().folder?.path === path) set({ folder: { path, view, error: null, running: false } });
       } catch (e) {
-        if (get().folder?.path === path) set({ folder: { path, view: null, error: message(e) } });
+        if (get().folder?.path === path) set({ folder: { path, view: shown, error: message(e), running: false } });
       }
     },
     closeFolder: () => set({ folder: null }),
@@ -123,7 +125,7 @@ export const useReview = create<ReviewState>((set, get) => {
       ]);
       return m;
     },
-    // The consent was answered; the views on screen still carry the `asked` they were fetched with.
+    // The views on screen keep the `asked` they were fetched with.
     markAsked() {
       const asked = <V extends ReviewView>(v: V | null): V | null => (v?.online && !v.online.asked ? { ...v, online: { ...v.online, asked: true } } : v);
       const { main, bare, folder } = get();

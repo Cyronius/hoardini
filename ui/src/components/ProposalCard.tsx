@@ -3,7 +3,7 @@ import { routes } from "../api/client";
 import type { Job, Proposal, ProposalItem, SystemOpView, Verdict } from "../api/types";
 import { settle } from "../agent/decisions";
 import { fileName, humanBytes } from "../format";
-import { useStore } from "../store";
+import { heldTicks, holdTicks, useStore } from "../store";
 import { ItemTree, RevealButton, Toggle } from "./ItemTree";
 import { LearnedChip } from "./LearnedChip";
 
@@ -145,8 +145,7 @@ function ItemRow({
           {item.reason && <span className="block text-[length:var(--fs-xs)] text-muted">{item.reason}</span>}
           {item.memory_note && <span className="block text-[length:var(--fs-xs)] text-faint">Noted: {item.memory_note}</span>}
           {item.copy_note && !saysCopy(item) && <span className="block text-[length:var(--fs-xs)] text-faint">Copy: {item.copy_note}</span>}
-          {/* `reason` is the model's; the cap comes from policy code, so they are never joined into one sentence. */}
-          {/* A `redownload` or `synced` cap from a copy check is already explained by the Copy line. */}
+          {/* A copy check's `redownload` or `synced` cap is already explained by the Copy line. */}
           {item.cap && !blocked && (item.cap === "review" || item.cap === "keep" || !item.copy_note) && (
             <span className="block text-[length:var(--fs-xs)] text-brass">Capped to "{VERDICT_LABEL[item.cap]}" by a safety rule</span>
           )}
@@ -308,7 +307,7 @@ function ProposalBody({ proposalId, title, note }: { proposalId: string; title?:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const tickSeq = useRef(0);
+  const sending = useRef(false);
 
   useEffect(() => {
     if (!proposal) void loadProposal(proposalId);
@@ -335,16 +334,28 @@ function ProposalBody({ proposalId, title, note }: { proposalId: string; title?:
     if (next.has(id)) next.delete(id);
     else next.add(id);
     if (!persisted) return setPicked(next);
-    const seq = ++tickSeq.current;
-    putProposal({ ...proposal, touched: true, items: proposal.items.map((i) => (i.status === "pending" ? { ...i, selected: next.has(i.id) } : i)) });
+    holdTicks(proposalId, next);
+    putProposal({ ...proposal, touched: true });
     setError(null);
-    routes.selectItems(proposalId, [...next]).then(
-      (p) => seq === tickSeq.current && putProposal(p),
-      (e: unknown) => {
-        setError(e instanceof Error ? e.message : String(e));
-        void loadProposal(proposalId);
-      },
-    );
+    if (!sending.current) void flushTicks();
+  };
+  // One PUT in flight per card; ticks made meanwhile go in the next one, so replies never land out of order.
+  const flushTicks = async () => {
+    sending.current = true;
+    try {
+      for (let want = heldTicks(proposalId); want; want = heldTicks(proposalId)) {
+        const p = await routes.selectItems(proposalId, [...want]);
+        if (heldTicks(proposalId) !== want) continue;
+        holdTicks(proposalId, null);
+        putProposal(p);
+      }
+    } catch (e) {
+      holdTicks(proposalId, null);
+      setError(e instanceof Error ? e.message : String(e));
+      void loadProposal(proposalId);
+    } finally {
+      sending.current = false;
+    }
   };
 
   const approve = async () => {
@@ -410,6 +421,7 @@ function ProposalBody({ proposalId, title, note }: { proposalId: string; title?:
           onUndo={() => routes.undoLearned(proposalId, l.memory_id)}
           onPin={(pinned) => routes.updateMemory(l.memory_id, { pinned })}
           confirmed={l.confirmed}
+          pinned={l.pinned}
         />
       ))
     : null;
