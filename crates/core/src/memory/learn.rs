@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -176,10 +176,16 @@ pub fn learn_from_job(
         return Ok(0);
     }
     let done: Vec<&ProposalItem> = p.items.iter().filter(|i| i.status == "done").collect();
+    // On a review card that starts unticked, an item left unticked is one nobody chose to keep.
+    let unticked_card = p
+        .card
+        .as_deref()
+        .and_then(crate::review::card)
+        .is_some_and(|c| !c.ticked);
     let kept: Vec<&ProposalItem> = p
         .items
         .iter()
-        .filter(|i| !i.selected && i.status == "skipped")
+        .filter(|i| !unticked_card && !i.selected && i.status == "skipped")
         .collect();
     if done.is_empty() && kept.is_empty() {
         return Ok(0);
@@ -194,7 +200,8 @@ pub fn learn_from_job(
         .flatten()
         .map(|a| normalize_path(&env.expand(&a)));
 
-    let tx = conn.unchecked_transaction()?;
+    // Immediate: a deferred read that later writes fails at once, past the busy timeout, while another writer is busy.
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let all: Vec<&ProposalItem> = done.iter().chain(&kept).copied().collect();
     let mut rows: Vec<Option<Memory>> = Vec::with_capacity(all.len());
     for it in &all {

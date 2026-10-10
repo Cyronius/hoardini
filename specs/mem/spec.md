@@ -225,7 +225,9 @@ card decided, after the follow-up (ACT-FOLLOW-UP) and before the job's terminal 
 (`memory::learn::learn_from_job`):
 
 - Each item whose status is `done` is added to `cleaned` on the location row that covers it.
-- Each item left unticked on the approved card (not selected, `skipped`) is added to `kept`.
+- Each item left unticked on the approved card (not selected, `skipped`) is added to `kept`, except on a review card
+  whose registry entry starts unticked (`downloads`, `compress`, `archive`, REVIEW-BUILD) or its follow-up: there an
+  unticked item is one nobody chose, so it is not kept.
 - Failed, skipped-after-approval, blocked and declined items, and dedupe jobs, add nothing.
 
 The covering row is the nearest location row at or above the item, passing over `container` rows. Items with no
@@ -233,7 +235,9 @@ covering row get a new row with source `job:<proposal_id>`, kind `verdict`, cate
 `job`, and a one-sentence text (`You cleaned 3 items here.`, `You kept 1 item here.`). It sits at the first of these
 that is not a volume root and not a system or container area (POLICY-DENY): the proposal's `anchor` when it holds the
 item, else the deepest folder holding all such items of the job, else the item's parent; when none qualifies, the item
-is not recorded. Later jobs add to that row, and the sweep classifies it like any other (MEM-LOCATION).
+is not recorded. Later jobs add to that row, and the sweep classifies it like any other (MEM-LOCATION). The writes run
+in one immediate transaction, so a job ending while another connection writes (a refresh, the copy worker, a review
+build) waits on the busy timeout instead of losing what it learned.
 
 Entries (`ms` the job's end, paths and rules as stored keys: `~\...` under the profile, `\`):
 
@@ -291,6 +295,9 @@ left in it, and it is not pinned; it returns false when the row holds nothing of
   reason is `you cleaned this on 01-15 (28.0 GB)`; `D:\code\logs\b.log` gives `you archived this on 01-16 (5.0 MB)`;
   `D:\code\logs\sub\c.log` and `D:\code\other.bin` give none; `D:\code\[x]\y.bin` matches its bracketed rule; a
   `~\scratch\x.bin` entry matches `C:\Users\Tester\scratch\x.bin`.
+- While another connection holds the write lock for 300 ms, `learn_from_job` waits and records the done item.
+- A done `go.bin` and an unticked `left.bin` on a `downloads` review card give no `kept` entry; on a `temp` card
+  `left.bin` is kept.
 - A `job:p9` row at `~\Pictures` holding a `cleaned` entry, swept once the folder holds 60 GiB of photos and video,
   becomes category `photos`, `keep`, actions `[archive]`, `by` `mix`, with a `Your photos and videos: ...` text, and
   keeps source `job:p9` and its entry.
