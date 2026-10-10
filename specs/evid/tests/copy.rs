@@ -551,7 +551,7 @@ fn candidates_are_listed_biggest_first_and_hashed_in_the_background() {
     assert!(rows_for(&changed) > 0, "the rest stay");
 }
 
-// Traces: EVID-COPY-CHECK, EVID-COPY-BACKGROUND
+// Traces: EVID-COPY-CHECK
 #[test]
 fn a_pass_stops_mid_hash_when_told_and_resumes_later() {
     let fx = Fx::new();
@@ -1274,7 +1274,7 @@ fn a_model_folder_seen_only_in_part_is_no_copy() {
     );
 }
 
-// Traces: EVID-COPY-MODELHUB, EVID-COPY-BACKGROUND
+// Traces: EVID-COPY-MODELHUB, EVID-COPY-CHECK
 #[test]
 fn a_model_folders_smaller_files_are_hashed_in_the_hash_phase() {
     let fx = Fx::new();
@@ -1415,7 +1415,7 @@ fn a_folder_answer_goes_stale_when_a_file_inside_is_rewritten() {
     assert_ne!(r.confidence, Confidence::Identical, "{}", note(&r));
 }
 
-// Traces: EVID-COPY-CONSENT, EVID-COPY-BACKGROUND
+// Traces: EVID-COPY-CONSENT
 #[test]
 fn turning_a_service_off_mid_pass_stops_its_requests() {
     let fx = Fx::new();

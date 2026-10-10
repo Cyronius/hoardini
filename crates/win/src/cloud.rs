@@ -136,6 +136,7 @@ pub fn provider_display_name(registration: &str) -> String {
 mod tests {
     use super::*;
 
+    // Traces: EVID-COPY-SYNC
     #[test]
     fn provider_names_come_from_the_registration_id() {
         assert_eq!(
@@ -151,6 +152,7 @@ mod tests {
         assert_eq!(provider_display_name("Nextcloud!S-1!x"), "Nextcloud");
     }
 
+    // Traces: EVID-COPY-SYNC
     #[test]
     fn an_ordinary_file_is_not_a_placeholder() {
         let dir = tempfile::tempdir().unwrap();

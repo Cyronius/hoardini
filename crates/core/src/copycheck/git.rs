@@ -287,6 +287,7 @@ impl CopyCheck for GitCheck {
 mod tests {
     use super::*;
 
+    // Traces: EVID-COPY-GIT
     #[test]
     fn status_entries_are_counted_by_kind() {
         let s = parse_status("?? a.bin\0!! target/\0 M src/x.rs\0R  new.rs\0old.rs\0");
@@ -301,6 +302,7 @@ mod tests {
         assert_eq!(parse_status(""), Status::default());
     }
 
+    // Traces: EVID-COPY-GIT
     #[test]
     fn index_entries_must_match_case_and_carry_no_skip_flag() {
         assert_eq!(index_trouble("H a/b.bin\0", "a/b.bin", false), None);
@@ -316,6 +318,7 @@ mod tests {
         assert_eq!(index_trouble("H x\0H y/z\0", ".", true), None);
     }
 
+    // Traces: EVID-COPY-GIT
     #[test]
     fn remote_urls_lose_credentials_and_suffixes() {
         assert_eq!(

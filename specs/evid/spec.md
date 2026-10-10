@@ -246,7 +246,7 @@ against a fake one.
 - With a fake root `<tmp>\OneDrive` (provider OneDrive): an in-sync file is `identical`, locator `OneDrive`, note "synced to OneDrive"; a file the fake reports as not in sync, and a plain file that is no placeholder, are `none` pending `sync`; a file outside the root gets no `sync` answer.
 - A folder whose two files are in sync is `identical` although it also holds a `desktop.ini` that is no placeholder; with one of the two not in sync it is `none` with "1 of 2 files not in sync".
 - A file answered while not pinned reads as pinned in `sync_result` once the fake reports it pinned.
-- Provider names: `OneDrive!S-1-...!Personal|x` is OneDrive, `Dropbox!...` Dropbox, `iCloudDrive!...` iCloud Drive (`hoardini_win::provider_display_name`, in-crate test); an ordinary file is no placeholder (`placeholder_info` gives `None`).
+- Provider names: `OneDrive!S-1-...!Personal|x` is OneDrive, `Dropbox!...` Dropbox, `iCloudDrive!...` iCloud Drive (`hoardini_win::provider_display_name`, in-crate tests in `crates/win/src/cloud.rs`); an ordinary file is no placeholder (`placeholder_info` gives `None`).
 
 **Verification (manual, live provider, read-only):**
 1. On a PC with Dropbox or OneDrive, `cloud::system().roots()` lists the sync root with its provider name.
@@ -276,7 +276,7 @@ touching the file, so git answers are asked again on every pass.
 - An untracked file is `none` "not tracked by git" and makes the folder `none`; an ignored file has no answer; a modified tracked file is `none` "changed since the last commit".
 - After a local commit that changes the file and is not pushed, the file is `none` "changed in 1 commit(s) not pushed to <upstream>", while another tracked file the commit did not touch stays `identical`.
 - With `core.ignorecase` true, `model.bin` renamed on disk to `Model.bin` and rewritten is `none` "tracked by git under another letter case", and `sub` renamed to `Sub` with a file inside changed is `none`; a tracked `notes.txt` marked assume-unchanged and rewritten is `none` "git is told to skip changes to it (assume-unchanged or skip-worktree)".
-- `https://user:token@host/org/repo.git` shows as `host/org/repo` (in-crate test).
+- `https://user:token@host/org/repo.git` shows as `host/org/repo` (in-crate tests in `crates/core/src/copycheck/git.rs`, which also check the case and skip-flag rule on recorded `ls-files -v` output).
 
 ### EVID-COPY-MODELHUB: Model weights on Hugging Face, and Ollama blobs
 **Applies to:** hoardini

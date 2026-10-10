@@ -510,7 +510,7 @@ fn a_job_with_only_the_recycle_bin_never_asks_for_admin_rights() {
     assert_eq!(fx.get(&p.id).status, "done");
 }
 
-// Traces: ACT-WINDOWS-CLEANUP-RUN, REVIEW-BUILD
+// Traces: ACT-WINDOWS-CLEANUP-RUN, ACT-WINDOWS-CLEANUP-DETECT, REVIEW-BUILD
 #[test]
 fn a_review_cards_leftovers_go_to_the_helper_by_name_not_by_path() {
     let fx = Fx::new();
@@ -670,7 +670,7 @@ Contents of shadow copy set ID: {d}\r\n\
     );
 }
 
-// Traces: ACT-WINDOWS-CLEANUP-RUN
+// Traces: ACT-WINDOWS-CLEANUP-RUN, ACT-WINDOWS-CLEANUP-DETECT
 #[test]
 fn the_leftovers_helper_clears_only_the_catalogs_machine_wide_folders() {
     assert_eq!(

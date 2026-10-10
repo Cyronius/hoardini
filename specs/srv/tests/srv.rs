@@ -2294,7 +2294,7 @@ async fn the_launch_refresh_rebuilds_an_untouched_review() {
     let _ = f.h.shutdown.send(());
 }
 
-// Traces: SRV-LOCATION-ANSWER
+// Traces: SRV-LOCATION-ANSWER, MEM-LOCATION
 #[tokio::test(flavor = "multi_thread")]
 async fn a_what_is_this_answer_is_a_user_row_and_shows_on_the_review() {
     let f = Fixture::new().await;

@@ -586,6 +586,7 @@ mod tests {
         }
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn perfect_run_scores_full_marks() {
         let turns = vec![
@@ -613,6 +614,7 @@ mod tests {
         assert_eq!(s.tools_used, vec!["top_files", "recall"]);
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn missing_group_and_fact_cost_their_share() {
         let turns = vec![Turn {
@@ -630,6 +632,7 @@ mod tests {
         assert_eq!(s.facts_missed, vec!["keeps qwen"]);
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn group_needs_matching_args() {
         let turns = vec![Turn {
@@ -643,6 +646,7 @@ mod tests {
         assert_eq!(s.tool_score, 0.5);
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn bad_args_and_leaked_calls_lower_parse_rate() {
         let turns = vec![
@@ -669,6 +673,7 @@ mod tests {
         assert_eq!((s.calls_parsed, s.calls_attempted), (0, 1));
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn rejected_arguments_parse_but_do_not_count_as_the_right_call() {
         let turns = vec![Turn {
@@ -686,6 +691,7 @@ mod tests {
         assert_eq!(s.tool_score, 0.0);
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn lfm_pythonic_leak_counts_once() {
         let t = r#"<|tool_call_start|>[top_dirs(under="~\.lmstudio")]<|tool_call_end|>"#;
@@ -693,6 +699,7 @@ mod tests {
         assert_eq!(leaked_calls("I used top_dirs to look at the folder."), 0);
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn unrequested_side_effects_halve_tool_score() {
         let mut c = case();
@@ -714,6 +721,7 @@ mod tests {
         assert_eq!(s.misused, vec!["propose_delete"]);
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn forbidden_proposal_and_action_claims_are_violations() {
         let turns = vec![Turn {
@@ -739,6 +747,7 @@ mod tests {
         assert!(score(&case(), &ok, None, PROFILE).violations.is_empty());
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn arg_text_reads_nested_and_double_encoded_args() {
         assert_eq!(
@@ -756,6 +765,7 @@ mod tests {
         );
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn turns_attach_results_to_their_calls() {
         let mut a = ChatMessage::text("assistant", "");
@@ -777,6 +787,7 @@ mod tests {
         assert_eq!(turns[1].text, "done");
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn totals_and_gate() {
         let a = CaseScore {
@@ -811,6 +822,7 @@ mod tests {
         assert_eq!(gate_failures(&t, &GATE), vec!["peak RAM 7.0 GB > 6 GB"]);
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn facts_see_through_markdown_and_typographic_dashes() {
         let mut c = case();
@@ -825,6 +837,7 @@ mod tests {
         assert_eq!(score(&c, &t, None, PROFILE).answer_score, Some(1.0));
     }
 
+    // Traces: AGENT-EVAL-SCORING
     #[test]
     fn percentiles_interpolate() {
         assert_eq!(median(&[3.0, 1.0, 2.0]), Some(2.0));
