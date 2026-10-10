@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { ChatSession } from "../components/Chat";
 import { IconButton } from "../components/IconButton";
 import { ChatIcon, PanelCloseIcon } from "../components/icons";
@@ -154,6 +154,39 @@ function Rail() {
   );
 }
 
+// A home view that throws while rendering shows this in its place, so the header and the chat keep working.
+class HomeBoundary extends Component<{ name: string; hidden?: boolean; onRetry?: () => Promise<void>; children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error(`${this.props.name} view failed`, error);
+  }
+
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    const retry = () => void Promise.resolve(this.props.onRetry?.()).finally(() => this.setState({ error: null }));
+    return (
+      <div className={`${this.props.hidden ? "hidden" : ""} min-h-0 flex-1 overflow-y-auto px-4 pt-4`}>
+        <div role="alert" className="mx-auto max-w-4xl rounded-2xl border border-err/30 bg-err/10 p-4 text-[length:var(--fs-sm)]">
+          <p className="font-bold text-paper">The {this.props.name} view hit a problem and stopped.</p>
+          <p className="mt-1 break-words text-paper-dim">{error.message || String(error)}</p>
+          <p className="mt-1 text-muted">The chat and the other tabs still work. Try again, or reload the page.</p>
+          <button type="button" className="mt-2 rounded-lg border border-line bg-ink-900 px-3 py-1 font-bold text-paper-dim hover:border-brass/60 hover:text-brass" onClick={retry}>
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
+const reopenReview = () => useReview.getState().open();
+
 export function Shell() {
   const width = useWindowWidth();
   const wide = isWide(width);
@@ -186,11 +219,15 @@ export function Shell() {
         <div className={`flex min-w-0 flex-col ${homeShown ? "min-h-0 flex-1" : "flex-none"}`}>
           <Tabs wide={wide} />
           <div className={`min-h-0 flex-1 flex-col ${homeShown ? "flex" : "hidden"}`} role="tabpanel" aria-labelledby={`tab-${home}`}>
-            <ReviewView hidden={home !== "review"} />
+            <HomeBoundary name="Review" hidden={home !== "review"} onRetry={reopenReview}>
+              <ReviewView hidden={home !== "review"} />
+            </HomeBoundary>
             {home === "explore" && root && (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <ExploreView key={exploreAt?.n ?? 0} root={root} focus={exploreAt?.path} onAsk={onAsk} onCleanUp={onCleanUp} onWhatIsThis={onWhatIsThis} />
-              </div>
+              <HomeBoundary name="Explore">
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <ExploreView key={exploreAt?.n ?? 0} root={root} focus={exploreAt?.path} onAsk={onAsk} onCleanUp={onCleanUp} onWhatIsThis={onWhatIsThis} />
+                </div>
+              </HomeBoundary>
             )}
           </div>
         </div>
