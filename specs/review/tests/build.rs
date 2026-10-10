@@ -486,6 +486,11 @@ fn approving_a_review_card_touches_it_and_its_follow_up_stays_in_the_review() {
     let d = Disk::new();
     let a = d.folder(r"~\AppData\Local\Temp\old-a", "x.bin", 2 * GIB);
     let b = d.folder(r"~\AppData\Local\Temp\old-b", "y.bin", GIB);
+    // The job walks the real folders again (POLICY-REVALIDATE), so they are as old on disk as in the index.
+    for p in [&a, &b] {
+        hoardini_win::set_all_times(Path::new(p), hoardini_core::store::now_ms() - 3 * DAY)
+            .unwrap();
+    }
     let vid = d.index();
     let r = d.review(Scope::Volume(vid), NOW);
     let t = d.card(&r, "temp").unwrap();

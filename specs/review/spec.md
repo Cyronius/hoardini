@@ -24,7 +24,7 @@ the `parts` past the entry's minimum age. At each folder, in order:
    only the children not modified for that long (a child counts as modified when it or any indexed folder or file inside
    it was written or created since: installers unpack files that keep an old last write, and the index's creation time
    shows when they arrived; the index holds no change time, so the elevated helper adds that at execution,
-   ACT-WINDOWS-CLEANUP-RUN); a modified child folder of 1 GiB or more is split the same way, down to three levels, so the old scratch
+   ACT-WINDOWS-CLEANUP-RUN, and a part is walked again before it is deleted, POLICY-REVALIDATE); a modified child folder of 1 GiB or more is split the same way, down to three levels, so the old scratch
    folders beside a live one still count. A file a `contents` entry names is a `self` unit.
 3. A Windows system area of the deny list (POLICY-DENY: the Windows folder, Program Files, `ProgramData\Microsoft`,
    `System Volume Information`, `$Recycle.Bin`, paging files, Hoardini's data) or a catalog entry with verdict `keep`

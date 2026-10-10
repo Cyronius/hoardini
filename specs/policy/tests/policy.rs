@@ -1295,3 +1295,61 @@ fn a_twin_in_a_recycle_bin_or_a_temp_folder_is_no_copy() {
         "a twin in the temp folder the review empties is no copy"
     );
 }
+
+fn age_all(paths: &[&Path], days: i64) {
+    let ms = hoardini_core::store::now_ms() - days * 86_400_000;
+    for p in paths {
+        hoardini_win::set_all_times(p, ms).unwrap();
+    }
+}
+
+// Traces: POLICY-REVALIDATE
+#[test]
+fn a_temp_part_with_something_new_deep_inside_is_skipped() {
+    let fx = Fx::new();
+    let temp = fx.profile.join(r"AppData\Local\Temp");
+    let live = temp.join("session-a");
+    let idle = temp.join("session-b");
+    let (la, lb) = (
+        write(&live.join(r"sub\a.bin"), &data(4096, 1)),
+        write(&idle.join(r"sub\b.bin"), &data(4096, 2)),
+    );
+    age_all(&[&la, &lb], 3);
+    age_all(&[&live.join("sub"), &idle.join("sub")], 3);
+    age_all(&[&live, &idle], 3);
+    index_dir(&fx, &temp);
+    let card = proposals::ReviewCard {
+        review_id: "review-1".into(),
+        card: "temp".into(),
+        ticked: true,
+    };
+    let p = proposals::create_review_card(
+        &fx.db,
+        &fx.env,
+        fx.request(ProposalKind::Delete, &[&live, &idle], None),
+        &card,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(p.items.iter().all(|i| i.selected), "{:#?}", p.items);
+
+    let fresh = write(&live.join(r"sub\new.log"), b"written now");
+    let ex = fx.executor();
+    let r = ex.approve(&p.id, &ids(&p)).unwrap();
+    wait(&ex, &r.job_id);
+    let after = fx.get(&p.id);
+    let it = item(&after, &live);
+    assert_eq!(it.status, "skipped");
+    assert_eq!(
+        it.detail.as_deref(),
+        Some(
+            "Changed since the proposal: something in it was written or created in the last 24 hours"
+        )
+    );
+    assert!(
+        fresh.exists() && la.exists(),
+        "nothing in the live part is deleted"
+    );
+    assert!(!idle.exists(), "the part with nothing new in it goes");
+    assert_eq!(after.status, "partial");
+}

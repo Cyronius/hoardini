@@ -98,7 +98,12 @@ file ID. Any difference, a deny reason, an open handle, or a missing path shall 
 it shall not execute. The proposal ends `partial` when some approved items ran and others did not. The open-handle
 check is the slow one, so it runs first; the deny list and the kind, size, mtime, file-ID, and link comparisons run
 after it, immediately before the item executes, so a path swapped for a junction during the slow check is caught.
-Last, a delete whose stored cap is `redownload` on a path no catalog entry knows (a cap a copy relaxed,
+An item of a review card (REVIEW-BUILD) inside a catalog `contents` location with a minimum age (`%TEMP%`,
+`Windows\Temp`: a part, REVIEW-UNITS, which was old when proposed; a chat card's item is the user's own request and is not walked) is walked again, links not followed and at most 250,000 entries, because a file new deep inside changes no time the
+proposal compared: when the path or anything in it was written or created within that age the item is skipped with
+`Changed since the proposal: something in it was written or created in the last <hours> hours`, and when the walk cannot
+finish (too many entries, or a folder it cannot list) with `Too many files inside, or one unreadable, to confirm nothing
+in it is new`. Last, a delete whose stored cap is `redownload` on a path no catalog entry knows (a cap a copy relaxed,
 POLICY-VERDICT-CAP) runs the copy check again (`copycheck::identical_for`); when no copy counts any more (gone or changed,
 in a Recycle Bin or a cleared place, or ticked on a live delete or archive card, this job's own included) the item is
 `skipped` with a detail starting `Its copy no longer counts`, so two twins approved on two cards never both go.
@@ -107,6 +112,7 @@ in a Recycle Bin or a cleared place, or ticked on a live delete or archive card,
 - A folder replaced by a junction while the open-handle check runs is skipped with a detail starting `Changed since the proposal` (verified by a test-only hook between the two phases in `crates/core/src/policy/gate.rs`).
 - Of four proposed files, one grown, one with only its mtime changed, and one deleted and re-created with the same size and mtime are `skipped` with a detail starting `Changed since the proposal` and still exist; the untouched one is deleted.
 - `approve` returns only the untouched item's id; the proposal status is `partial`.
+- Of two 3-day-old `%TEMP%` parts on a review card, ticked, one gets a file written in an already existing subfolder after the proposal: approving both skips it with `Changed since the proposal: something in it was written or created in the last 24 hours`, keeps every file in it, deletes the other part, and leaves the proposal `partial`.
 - A file proposed alone as `redownload` on the strength of its duplicate twin, whose twin is then deleted by hand, is `skipped` at approval with `Its copy no longer counts...` and still exists. Of two twins on two live delete cards, once the second card's twin is ticked, approving the first card skips its item and keeps the file; approving the second then deletes only its own (`specs/policy/tests/policy.rs`).
 
 ### POLICY-VERDICT-CAP: The shown verdict never exceeds the cap
