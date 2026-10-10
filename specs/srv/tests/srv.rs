@@ -2189,6 +2189,14 @@ async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart
         .call("POST", "/api/review/run", Some(json!({"path": r"C:\nope"})))
         .await;
     assert_eq!(st, 404);
+    let (st, _) = f
+        .call(
+            "POST",
+            "/api/review/run",
+            Some(json!({"path": r"C:\code\covenant-agent\models\m.dat"})),
+        )
+        .await;
+    assert_eq!(st, 400, "a file is no folder to review");
 
     seed_drive(&dbp);
     let (_, stale) = f.call("POST", "/api/review/open", None).await;
@@ -2414,6 +2422,18 @@ async fn the_server_keeps_a_cards_ticks_and_any_change_or_decision_touches_it() 
         .call("PUT", &url, Some(json!({"item_ids": [999_999]})))
         .await;
     assert_eq!(st, 409);
+    let idb = p.items.iter().find(|i| i.id != ida).unwrap().id;
+    db.conn()
+        .unwrap()
+        .execute(
+            "UPDATE proposal_item SET status = 'blocked', block_reason = 'Not found' WHERE id = ?1",
+            [idb],
+        )
+        .unwrap();
+    let (st, v) = f
+        .call("PUT", &url, Some(json!({"item_ids": [ida, idb]})))
+        .await;
+    assert_eq!(st, 409, "a blocked item, whatever its reason says: {v}");
     let (st, _) = f
         .call(
             "PUT",

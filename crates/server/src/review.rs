@@ -204,8 +204,12 @@ pub async fn run(State(s): State<AppState>, body: Bytes) -> ApiResult {
         let scope = match b.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => {
                 let p = index::normalize_path(&env.expand(p));
-                if index::node_id_by_path(&st.db.conn()?, &p)?.is_none() {
-                    return Err(ApiError::not_found("folder in the index"));
+                match index::node_by_path(&st.db.conn()?, &p)? {
+                    None => return Err(ApiError::not_found("folder in the index")),
+                    Some(n) if n.kind != index::NodeKind::Dir => {
+                        return Err(ApiError::bad(format!("{p} is a file, not a folder")));
+                    }
+                    Some(_) => {}
                 }
                 Scope::Folder(p)
             }

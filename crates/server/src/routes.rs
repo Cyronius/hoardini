@@ -408,7 +408,15 @@ async fn proposal_select(
 ) -> ApiResult {
     let b: SelectBody = parse(&body)?;
     let st = s.clone();
-    let p = blocking(move || proposals::select(&st.db, &id, &b.item_ids).map_err(classify)).await?;
+    // Only an unknown proposal is 404; an item blocked as "Not found" is still a conflict.
+    let p = blocking(move || {
+        if proposals::get(&st.db, &id)?.is_none() {
+            return Err(ApiError::not_found("proposal"));
+        }
+        proposals::select(&st.db, &id, &b.item_ids)
+            .map_err(|e| ApiError::new(StatusCode::CONFLICT, format!("{e:#}")))
+    })
+    .await?;
     s.bump();
     Ok(Json(display_proposal(p)))
 }

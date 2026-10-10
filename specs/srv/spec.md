@@ -278,7 +278,7 @@ Approving or declining a proposal also marks it `touched`.
 
 **Acceptance criteria:**
 - Of two unticked items, `PUT {item_ids: [a]}` answers `touched: true` with `a` ticked and `b` not, and `GET /api/proposals/{id}` shows the same items.
-- An unknown item id answers 409, an unknown proposal 404, and after a decline the route answers 409.
+- An unknown item id answers 409, an item blocked with the reason "Not found" answers 409 (not 404), an unknown proposal 404, and after a decline the route answers 409.
 - An approved proposal shows `touched: true`.
 
 Test: `specs/srv/tests/srv.rs`.

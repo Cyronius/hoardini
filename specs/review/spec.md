@@ -204,7 +204,7 @@ Tests: `specs/review/tests/areas.rs`; the only-copy row in `specs/review/tests/b
   latest review (or, before the first one, `review: null` with the drive's header, no cards, no areas) with `building:
   true`. It answers 404 while the drive has no completed index.
 - `POST /api/review/run {path?}` builds one now and answers it once built: of the selected drive, or, with `path` (a
-  folder in the index; `~` allowed; else 404), of that folder, which is the "Clean up <folder>" action. A folder review
+  folder in the index; `~` allowed; a path not in the index is 404, a file 400), of that folder, which is the "Clean up <folder>" action. A folder review
   never replaces the volume review.
 - `GET /api/review` returns the selected drive's latest volume review, and `GET /api/review?id=` any review; 404 when
   there is none.
@@ -235,7 +235,7 @@ still the latest of its scope and untouched, it is built again (`review::rebuild
 
 **Acceptance criteria:**
 - Before any index, `POST /api/review/open` is 404. On a fake `C:\` (1,200 GiB used, 800 GiB free) the first open answers `review: null`, `building: true`, the header root `C:\` and no cards; once the status says `review_building: false`, `GET /api/review` gives a review of `C:\` with no `scope_path`, header `{root: "C:\", used_bytes: 1200 GiB, free_bytes: 800 GiB, ready_bytes: 0}`, no cards, no proposals, `building: false`, `apps: []`, `online: {asked: false, waiting: 0}`, and the 161 GiB `C:\code\covenant-agent` area (`unknown`, label `unknown`, no verdict, no hint, no actions); a second open (`building: false`), `GET /api/review` and the status's `review.id` give the same id. With consent asked and `copy_online_waiting` 3, `online` is `{asked: true, waiting: 3}`.
-- `POST /api/review/run {path: "C:\code"}` returns a review with `scope_path` `C:\code`; `GET /api/review` still returns the volume review, `?id=` returns the folder one, and an unindexed path is 404.
+- `POST /api/review/run {path: "C:\code"}` returns a review with `scope_path` `C:\code`; `GET /api/review` still returns the volume review, `?id=` returns the folder one, an unindexed path is 404, and a file in the index is 400.
 - After one more completed refresh, open answers the last review with `building: true` and a new review follows; with that review's `created_ms` 7 hours back, open leads to another; `POST /api/review/run` with no path builds a volume review every time.
 - With a fake app source, a review of `D:\Apps` carries the same `apps` as `GET /api/apps/rarely-used`, and a review of `D:\Apps\Busy` carries none.
 - With a fake clock and a builder held at a gate: the first `Builds::open` answers building with no review and starts one build; a second open and a `start` for the same drive meanwhile start nothing; once the gate opens and the build is announced, open answers that review; 5 hours later the same one; 6 hours and 1 ms later the old one with building, then a new review built at that time. A build that fails ends and is announced too, and `exclusive` runs at the clock's time. A build for drive `b` asked for while `a`'s is held at the gate is queued (asking again changes nothing) and runs right after `a`'s, with `building` true until both are announced.
