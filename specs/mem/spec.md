@@ -26,8 +26,8 @@ Detail fields: `category` (a catalog category such as `model-store`, or `system`
 scale; `actions`, the proposal kinds still allowed there (`delete`, `dedupe`, `archive`, `compress`); `app` and `use`,
 what the folder or type belongs to; `copy_hint`, a copy check that knows where to look (a place to look, never a
 verdict); `size_at` and `assessed_ms`, the folder size and time of the last assessment; `by`, the step that decided
-(`deny`, `protect:<id>`, `catalog:<entry>`, `mix`, `index`, `user`); `cleaned` and `kept`, entries owned by job learning
-(MEM-LEARN-JOB). An absent field means null or empty, and fields this list does not name are kept as written. Location
+(`deny`, `protect:<id>`, `catalog:<entry>`, `mix`, `index`, `user`, `job`); `cleaned` and `kept`, entries owned by job
+learning (MEM-LEARN-JOB). An absent field means null or empty, and fields this list does not name are kept as written. Location
 and file-type rows are kept one per scope and key (`memory::knowledge::upsert`), apart from notes on the same key, get no
 `review_after_ms` (locations are reassessed instead), and reach evidence, the `recall` tool and item notes through
 `recall_path` like notes do.
@@ -140,8 +140,10 @@ classified, with no model call, by the first step that applies:
 The row's text is one sentence naming what decided (`Your photos and videos: 92% of its bytes are images or video.`).
 A row is reassessed when the folder's size has moved by 25% or more from `size_at`, or 90 days after `assessed_ms`; a
 user's answer is never reassessed. A reassessment writes only where MEM-SOURCE-RANK allows; where it may not, only
-`size_at` and `assessed_ms` move. When a folder is no longer large, its row is deleted unless its source is not the
-classifier's (`deny`, `catalog`, `mix`, `index`), it is pinned, or it has `cleaned` or `kept` entries.
+`size_at` and `assessed_ms` move. The exception is a row a finished job made (source `job:<id>`, MEM-LEARN-JOB): the
+reassessment writes its text, category, label, verdict, actions, `size_at`, `assessed_ms` and `by` like a classifier
+row's, and its source and entries stay. When a folder is no longer large, its row is deleted unless its source is not
+the classifier's (`deny`, `catalog`, `mix`, `index`), it is pinned, or it has `cleaned` or `kept` entries.
 
 `location::answer(conn, env, path, answer, now)` records the user's answer to "What is this?" as a `user` row, pinned,
 keeping `cleaned` and `kept`: `keep` gives verdict `keep` with `[archive, compress]`; `disposable`, `safe` with all four;
@@ -210,3 +212,82 @@ check.
 - A `web:` file-type row written with verdict `redownload` has no verdict.
 
 Test: `specs/mem/tests/knowledge.rs`.
+
+### MEM-LEARN-JOB: Finished jobs teach the location rows
+**Applies to:** hoardini
+**Verification:** test
+
+When a delete, archive or compress job ends (done, partial, failed or cancelled), the executor shall record what the
+card decided, after the follow-up (ACT-FOLLOW-UP) and before the job's terminal update is broadcast
+(`memory::learn::learn_from_job`):
+
+- Each item whose status is `done` is added to `cleaned` on the location row that covers it.
+- Each item left unticked on the approved card (not selected, `skipped`) is added to `kept`.
+- Failed, skipped-after-approval, blocked and declined items, and dedupe jobs, add nothing.
+
+The covering row is the nearest location row at or above the item, passing over `container` rows. Items with no
+covering row get a new row with source `job:<proposal_id>`, kind `verdict`, category `unknown`, no verdict, `by`
+`job`, and a one-sentence text (`You cleaned 3 items here.`, `You kept 1 item here.`). It sits at the first of these
+that is not a volume root and not a system or container area (POLICY-DENY): the proposal's `anchor` when it holds the
+item, else the deepest folder holding all such items of the job, else the item's parent; when none qualifies, the item
+is not recorded. Later jobs add to that row, and the sweep classifies it like any other (MEM-LOCATION).
+
+Entries (`ms` the job's end, paths and rules as stored keys: `~\...` under the profile, `\`):
+
+- `cleaned`: `{ms, bytes, path, rule, job, kind}`. `bytes` is the item's journaled freed bytes (ACT-JOURNAL), else its
+  `alloc`. `job` is the proposal ID, and `kind` is `delete`, `archive` or `compress`.
+- `rule` is a glob (`*` within a folder, `**` across folders, the characters `*?[]{}` of a name bracketed as `[*]`):
+  - When a catalog entry matched (EVID-CATALOG) at the item, or above it for an entry whose unit is `self` or
+    `contents`, a `**\...` pattern of that entry is anchored under the row (`D:\code\**\target`), and any other match
+    is the matched folder itself when it is at or under the row.
+  - Otherwise it is the exact path, except that two or more uncatalogued done files of the job with the same parent
+    and extension get `<parent>\*.<ext>`.
+- `kept`: `{ms, path, size, job}`, `size` the item's `alloc`.
+
+A new entry replaces one with the same path in its list; a `cleaned` entry also removes a `kept` entry for the path.
+Each list keeps the newest 100.
+
+Reading them back:
+
+- `location::was_kept(conn, path, size)` is true when a row at or above `path` keeps an entry for exactly that path
+  and `size` is less than 1.5 times the kept size, so the review leaves it out until it grows by half.
+- `location::cleaned_for(conn, path)` returns the newest `cleaned` entry, on any row at or above `path`, whose path is
+  `path` or whose rule matches `path` or a folder above it. `Cleaned::reason()` reads
+  `you cleaned this on 10-09 (28.0 GB)` (`archived`, `compressed` by kind; the date in UTC).
+
+`memory::learn::learned_for(conn, proposal_id)` lists, per row holding entries of that job, `{memory_id, text}`:
+`target folders in C:\code — cleaned 28.0 GB on 10-09`, then `; 1 item you left unticked is kept` when there are
+kept entries (`2 items you left unticked in C:\code are kept` when there are only those). The text names the shared
+rule (`.log files`, `target folders`), else the one item's name, else `N items`. The proposal JSON carries it as
+`learned` for `done`, `partial` and `failed` proposals other than dedupe (SRV-LEARNED). `learn::undo(conn,
+proposal_id, memory_id)` removes that job's entries from the row and deletes the row when the job made it, nothing is
+left in it, and it is not pinned; it returns false when the row holds nothing of that job.
+
+**Acceptance criteria:**
+- A delete of `work\code\proj\target` (under an `index` row for `work\code`), `notes\one.log`, `notes\two.log`,
+  `misc\odd.dat` and a file deleted before approval, with `keep\big.bin` left unticked: the `work\code` row keeps
+  source `index` and gains exactly `{ms, bytes, path, rule, job, kind}` =
+  `{<job end>, <target alloc>, <target>, work\code\**\target, <proposal>, delete}`. A new `job:<proposal>` row at
+  `work` reads `You cleaned 3 items here.`, has category `unknown`, no verdict and `by` `job`, and holds the two logs
+  with rule `work\notes\*.log`, `odd.dat` with its own path, and `kept` `[{ms, path: keep\big.bin, size: <alloc>,
+  job}]`. The vanished file is nowhere.
+- That proposal's `learned` is `target folders in work\code — cleaned <size> on <MM-DD>` for the first row and
+  `3 items in work — cleaned <sum> on <MM-DD>; 1 item you left unticked is kept` for the new row; its pending
+  follow-up has none.
+- With the proposal's `anchor` set to `work\cards`, a deleted `cards\deep\x\file.bin` gives a row at `work\cards`
+  (`You cleaned file.bin here.`); a second job's file under it joins that row. Undo of the first job leaves the row
+  with the second job's entry; a second undo returns false; undo of a job that made a row alone deletes the row.
+- An archive whose copy fails verification, a declined delete, and a delete dedupe leave no `learned`, no `job:` row
+  and no entry naming a job.
+- With kept `D:\code\big.iso` at 1,000 bytes: `was_kept` is true at 1,000 and 1,499 (any case) and false at 1,500,
+  for another file, and for `D:\code`; an entry on `D:\code` still counts for `D:\code\sub\k.bin` under a nearer
+  `D:\code\sub` row; an unknown entry shape is skipped.
+- `cleaned_for` of `D:\code\b\target` and `D:\code\b\target\debug\x.o` returns the `D:\code\**\target` entry, whose
+  reason is `you cleaned this on 01-15 (28.0 GB)`; `D:\code\logs\b.log` gives `you archived this on 01-16 (5.0 MB)`;
+  `D:\code\logs\sub\c.log` and `D:\code\other.bin` give none; `D:\code\[x]\y.bin` matches its bracketed rule; a
+  `~\scratch\x.bin` entry matches `C:\Users\Tester\scratch\x.bin`.
+- A `job:p9` row at `~\Pictures` holding a `cleaned` entry, swept once the folder holds 60 GiB of photos and video,
+  becomes category `photos`, `keep`, actions `[archive]`, `by` `mix`, with a `Your photos and videos: ...` text, and
+  keeps source `job:p9` and its entry.
+
+Test: `specs/act/tests/learn.rs` (through the executor), `specs/mem/tests/learn.rs`, `specs/mem/tests/knowledge.rs`.

@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::destinations::rclone::Endpoint;
 use crate::index::{self, WinLister};
+use crate::memory;
 use crate::policy::{self, PolicyEnv};
 use crate::proposals::{self, StoredItem};
 use crate::store::{Db, now_ms};
@@ -570,8 +571,11 @@ fn run_proposal_job(
         let _ = proposals::set_status(&conn, &proposal_id, "failed");
     }
     drop(turn);
-    // Before the terminal broadcast, so the client's refetch on job end already sees follow_up_id.
+    // Before the terminal broadcast, so the client's refetch on job end already sees follow_up_id and learned.
     follow_up(&ctx.db, &ctx.shared.env, &proposal_id);
+    if let Err(e) = memory::learn::learn_from_job(&conn, &ctx.shared.env, &proposal_id, now_ms()) {
+        tracing::warn!(proposal = %proposal_id, error = %e, "could not learn from the finished job");
+    }
     finish_job(&ctx, Some(&conn), &mut job);
 }
 

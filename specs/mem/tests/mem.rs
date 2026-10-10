@@ -6,6 +6,7 @@ use hoardini_core::memory::{
 use hoardini_core::store::{Db, now_ms};
 
 mod knowledge;
+mod learn;
 
 const P: &str = r"C:\Users\tester";
 

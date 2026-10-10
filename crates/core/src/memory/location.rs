@@ -372,6 +372,15 @@ pub fn refresh_volume(
         detail.size_at = Some(l.size);
         detail.assessed_ms = Some(now);
         detail.by = Some(a.by);
+        // A job row only records what was cleaned there; what the folder is stays the sweep's call (MEM-LEARN-JOB).
+        if let Some(m) = existing.filter(|m| is_job(&m.source)) {
+            conn.execute(
+                "UPDATE memory SET text = ?1, detail_json = ?2, updated_ms = ?3 WHERE id = ?4",
+                params![a.text, serde_json::to_string(&detail)?, now, m.id],
+            )?;
+            sum.written += 1;
+            continue;
+        }
         let (m, written) = knowledge::upsert_with(
             conn,
             Knowledge {
@@ -403,6 +412,139 @@ pub fn refresh_volume(
         }
     }
     Ok(sum)
+}
+
+pub fn is_job(source: &str) -> bool {
+    source.starts_with("job:")
+}
+
+// `rule` is a glob in key syntax (`~\...`, `*` within a folder, `**` across folders, metacharacters bracketed).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cleaned {
+    pub ms: i64,
+    pub bytes: u64,
+    pub path: String,
+    pub rule: String,
+    pub job: String,
+    pub kind: String,
+}
+
+impl Cleaned {
+    pub fn verb(&self) -> &'static str {
+        match self.kind.as_str() {
+            "archive" => "archived",
+            "compress" => "compressed",
+            _ => "cleaned",
+        }
+    }
+
+    pub fn reason(&self) -> String {
+        format!(
+            "you {} this on {} ({})",
+            self.verb(),
+            short_date(self.ms),
+            paths::humanize_bytes(self.bytes)
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Kept {
+    pub ms: i64,
+    pub path: String,
+    pub size: u64,
+    pub job: String,
+}
+
+pub(crate) fn short_date(ms: i64) -> String {
+    let d = crate::history::fmt_date(ms);
+    d.get(5..).unwrap_or(&d).to_string()
+}
+
+// Entries this build cannot read are skipped, never dropped from the row.
+pub fn cleaned_entries(d: &Detail) -> Vec<Cleaned> {
+    d.cleaned
+        .iter()
+        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+        .collect()
+}
+
+pub fn kept_entries(d: &Detail) -> Vec<Kept> {
+    d.kept
+        .iter()
+        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+        .collect()
+}
+
+fn covering_rows(conn: &Connection, key: &str) -> anyhow::Result<Vec<Memory>> {
+    let mut out = Vec::new();
+    for k in path_and_ancestors(key) {
+        if let Some(m) = knowledge_at(conn, Scope::Path, &k)? {
+            out.push(m);
+        }
+    }
+    Ok(out)
+}
+
+pub fn was_kept(conn: &Connection, path: &str, size: u64) -> bool {
+    was_kept_with(conn, &paths::profile_dir().to_string_lossy(), path, size).unwrap_or(false)
+}
+
+// Growing by half means data the user has not seen, so it is worth asking about again.
+pub fn was_kept_with(
+    conn: &Connection,
+    profile: &str,
+    path: &str,
+    size: u64,
+) -> anyhow::Result<bool> {
+    let key = normalize_key_with(
+        Scope::Path,
+        path.strip_prefix(r"\\?\").unwrap_or(path),
+        profile,
+    );
+    for m in covering_rows(conn, &key)? {
+        let Some(d) = &m.detail else { continue };
+        if kept_entries(d).iter().any(|k| {
+            k.path.eq_ignore_ascii_case(&key) && u128::from(size) * 2 < u128::from(k.size) * 3
+        }) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub fn cleaned_for(conn: &Connection, path: &str) -> Option<Cleaned> {
+    cleaned_for_with(conn, &paths::profile_dir().to_string_lossy(), path)
+        .ok()
+        .flatten()
+}
+
+pub fn cleaned_for_with(
+    conn: &Connection,
+    profile: &str,
+    path: &str,
+) -> anyhow::Result<Option<Cleaned>> {
+    let key = normalize_key_with(
+        Scope::Path,
+        path.strip_prefix(r"\\?\").unwrap_or(path),
+        profile,
+    );
+    let chain: Vec<String> = path_and_ancestors(&key)
+        .into_iter()
+        .map(|k| k.replace('\\', "/"))
+        .collect();
+    let mut best: Option<Cleaned> = None;
+    for m in covering_rows(conn, &key)? {
+        let Some(d) = &m.detail else { continue };
+        for c in cleaned_entries(d) {
+            let hit = c.path.eq_ignore_ascii_case(&key)
+                || super::compile_glob(&c.rule).is_ok_and(|g| chain.iter().any(|p| g.is_match(p)));
+            if hit && best.as_ref().is_none_or(|b| c.ms > b.ms) {
+                best = Some(c);
+            }
+        }
+    }
+    Ok(best)
 }
 
 pub fn location_at(conn: &Connection, profile: &str, path: &str) -> anyhow::Result<Option<Memory>> {

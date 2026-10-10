@@ -1,4 +1,5 @@
 pub mod knowledge;
+pub mod learn;
 pub mod location;
 
 use globset::{GlobBuilder, GlobMatcher};
