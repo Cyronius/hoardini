@@ -318,3 +318,28 @@ fn smb_connect_rejects_non_unc() {
     let err = smb_connect(r"C:\not\a\share", None, None).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 }
+
+// Traces: ACT-WINDOWS-CLEANUP-RUN
+#[test]
+fn a_private_dir_is_always_new_and_this_unelevated_process_cannot_write_in_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("private");
+    create_private_dir(&p).unwrap();
+    assert!(p.is_dir());
+    assert_eq!(
+        create_private_dir(&p).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    let squat = dir.path().join("squat");
+    create_junction(&squat, dir.path()).unwrap();
+    assert!(
+        create_private_dir(&squat).is_err(),
+        "a junction on the name is never reused"
+    );
+    let denied = std::fs::write(p.join("compact.txt"), b"select disk 0").unwrap_err();
+    assert_eq!(
+        denied.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "only SYSTEM and Administrators may write it (run the tests unelevated)"
+    );
+}

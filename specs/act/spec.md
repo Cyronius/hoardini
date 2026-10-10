@@ -178,6 +178,13 @@ others say there is no undo), or `failed` with the error; the proposal ends `don
 jobs do, and gets no follow-up. Cancel takes effect before the prompt; once the elevated helper runs, the Windows tools
 run to their end. Restore points are counted from `vssadmin list shadows` by their
 `\Device\HarddiskVolumeShadowCopyN` device paths, which are not localized (`syscleanup::count_shadows`).
+Compaction's two diskpart scripts (`syscleanup::diskpart_scripts`: select, attach read-only and compact; then select and
+detach) quote the one disk path and refuse a path holding a quote or a control character. diskpart runs them with `/s`
+(only then does a failed command set its exit code) from files the helper creates new (never reusing an existing file)
+in a folder it creates new under `<Windows>\Temp\hoardini-diskpart-<uuid>` (`hoardini_win::create_private_dir`: refused
+when anything already has the name; a protected DACL giving only SYSTEM and Administrators write access, with owner
+rights cut to reading), where Users may neither delete nor rename, so no unelevated process, the user's own included, can
+rewrite or swap a script between its writing and diskpart reading it; the folder is removed afterwards.
 For `leftovers` the elevated side derives its targets itself, from the catalog compiled into the exe and the Windows and
 ProgramData folders as Windows reports them (`hoardini_win::windows_directory`, `program_data_directory`), never from
 the command line, the proposal or the environment (`leftover_targets`). Inside each target (`syscleanup::clear_contents`)
@@ -203,6 +210,7 @@ themselves, and reports `N files deleted (<size>); left: <n> in use, <n> newer t
 - With a test-only hook after a folder is listed (`crates/core/src/syscleanup/helper.rs`): when `Temp\a` is renamed to `Temp\a-moved` and a junction `Temp\a` to an outside folder takes its place, the outside folder's 3-day-old `x.txt` is still there and `Temp\a-moved\x.txt` is the one deleted (1 file, 0 failed); when `Temp\a` is instead moved outside the target, its `x.txt` is still there and counts as could not be deleted.
 - `NoFollow` (`crates/win/src/nofollow.rs`): a junction opened through its parent's handle reports itself as a reparse point and its own listing never shows the target's files; a file's handle reports the creation, write and change times set on it, a final path under its folder's, and `None` for a second no-sharing open; `path_inside` holds only strictly below a folder on a component boundary.
 - A `vssadmin` listing with two shadow device paths (one under a German label) counts 2; "No items found" counts 0.
+- `diskpart_scripts(C:\wsl\Ubuntu Disk\ext4.vhdx)` is exactly `select vdisk file="<path>"`, `attach vdisk readonly`, `compact vdisk` and `select vdisk file="<path>"`, `detach vdisk`, one command per line; a path with a quote, a newline or a carriage return is refused. `create_private_dir` on a name a folder or a junction already holds fails, and this unelevated test process cannot write a file into one it created (`crates/win/tests/fs.rs`).
 
 ### ACT-WINDOWS-CLEANUP: Windows' own tools free the space, behind one admin prompt
 **Applies to:** hoardini

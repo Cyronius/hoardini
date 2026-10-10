@@ -6,7 +6,7 @@ use hoardini_core::proposals::{self, NewSystemCleanup, ProposalKind};
 use hoardini_core::store::Db;
 use hoardini_core::syscleanup::{
     self, CleanupCandidate, Cleared, OpResult, SystemFacts, SystemOp, WslDisk, clear_contents,
-    count_shadows, helper_params, leftover_targets, parse_helper_args,
+    count_shadows, diskpart_scripts, helper_params, leftover_targets, parse_helper_args,
 };
 use hoardini_win::RecycleBin;
 
@@ -628,6 +628,27 @@ fn the_elevated_helper_gets_only_known_operations_on_its_command_line() {
         );
     }
     assert!(parse_helper_args(&args(&["--result", "relative.jsonl"])).is_err());
+}
+
+// Traces: ACT-WINDOWS-CLEANUP-RUN
+#[test]
+fn diskpart_gets_fixed_scripts_for_one_quoted_disk_path() {
+    let (compact, detach) = diskpart_scripts(r"C:\wsl\Ubuntu Disk\ext4.vhdx").unwrap();
+    assert_eq!(
+        compact,
+        "select vdisk file=\"C:\\wsl\\Ubuntu Disk\\ext4.vhdx\"\nattach vdisk readonly\ncompact vdisk\n"
+    );
+    assert_eq!(
+        detach,
+        "select vdisk file=\"C:\\wsl\\Ubuntu Disk\\ext4.vhdx\"\ndetach vdisk\n"
+    );
+    for bad in [
+        "C:\\x\"\nselect disk 0\nclean\n.vhdx",
+        "C:\\x\r\nclean.vhdx",
+        "C:\\a\"b.vhdx",
+    ] {
+        assert!(diskpart_scripts(bad).is_err(), "{bad:?}");
+    }
 }
 
 // Traces: ACT-WINDOWS-CLEANUP-RUN

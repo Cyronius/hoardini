@@ -194,31 +194,51 @@ fn hibernation() -> anyhow::Result<Option<String>> {
     Ok(None)
 }
 
+// Detach runs on its own, so a failed compact never leaves the disk attached.
+pub fn diskpart_scripts(path: &str) -> anyhow::Result<(String, String)> {
+    if path.chars().any(|c| c == '"' || c.is_control()) {
+        bail!("cannot hand {path:?} to diskpart");
+    }
+    Ok((
+        format!("select vdisk file=\"{path}\"\nattach vdisk readonly\ncompact vdisk\n"),
+        format!("select vdisk file=\"{path}\"\ndetach vdisk\n"),
+    ))
+}
+
+// Users may not rename or delete inside Windows\Temp and only admins may write this folder, so no unelevated process can swap a script.
+fn private_script_dir() -> anyhow::Result<PathBuf> {
+    let dir = hoardini_win::windows_directory()?
+        .join("Temp")
+        .join(format!(
+            "hoardini-diskpart-{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+    hoardini_win::create_private_dir(&dir)
+        .with_context(|| format!("could not create {}", dir.display()))?;
+    Ok(dir)
+}
+
+// diskpart reports a failed command in its exit code only when it runs a script file (/s).
 fn diskpart(script: &str, dir: &Path, name: &str) -> anyhow::Result<std::process::Output> {
     let file = dir.join(name);
-    std::fs::write(&file, script)?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&file)?
+        .write_all(script.as_bytes())?;
     let mut c = tool("diskpart.exe")?;
     c.arg("/s").arg(&file);
     run(c, "diskpart")
 }
 
-// Detach runs on its own, so a failed compact never leaves the disk attached.
 fn compact_vhdx(path: &str) -> anyhow::Result<Option<String>> {
     if !std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
         bail!("{path} is not there anymore");
     }
-    let dir = std::env::temp_dir().join(format!("hoardini-diskpart-{}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
-    let compact = diskpart(
-        &format!("select vdisk file=\"{path}\"\nattach vdisk readonly\ncompact vdisk\n"),
-        &dir,
-        "compact.txt",
-    );
-    let _ = diskpart(
-        &format!("select vdisk file=\"{path}\"\ndetach vdisk\n"),
-        &dir,
-        "detach.txt",
-    );
+    let (compact_script, detach_script) = diskpart_scripts(path)?;
+    let dir = private_script_dir()?;
+    let compact = diskpart(&compact_script, &dir, "compact.txt");
+    let _ = diskpart(&detach_script, &dir, "detach.txt");
     let _ = std::fs::remove_dir_all(&dir);
     let out = compact?;
     if !out.status.success() {

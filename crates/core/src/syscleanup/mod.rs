@@ -8,7 +8,8 @@ use crate::paths::humanize_bytes;
 use crate::policy::Verdict;
 
 pub use helper::{
-    Cleared, OpResult, clear_contents, count_shadows, helper_params, parse_helper_args, run_helper,
+    Cleared, OpResult, clear_contents, count_shadows, diskpart_scripts, helper_params,
+    parse_helper_args, run_helper,
 };
 
 pub const MIN_SAVING: u64 = 1 << 30;

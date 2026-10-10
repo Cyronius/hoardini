@@ -3,18 +3,23 @@ use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
-use windows::Win32::Foundation::{FILETIME, GENERIC_WRITE};
+use windows::Win32::Foundation::{FILETIME, GENERIC_WRITE, HLOCAL, LocalFree};
+use windows::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{
-    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_READ_ATTRIBUTES,
-    FILE_WRITE_ATTRIBUTES, FileIdInfo, FileTimeToLocalFileTime, GetFileInformationByHandleEx,
-    SetFileTime,
+    CreateDirectoryW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
+    FILE_READ_ATTRIBUTES, FILE_WRITE_ATTRIBUTES, FileIdInfo, FileTimeToLocalFileTime,
+    GetFileInformationByHandleEx, SetFileTime,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
     FILE_ZERO_DATA_INFORMATION, FSCTL_SET_REPARSE_POINT, FSCTL_SET_SPARSE, FSCTL_SET_ZERO_DATA,
 };
+use windows::core::PCWSTR;
 
-use crate::util::{open, raw, werr};
+use crate::util::{open, raw, werr, wide_path, wide_str};
 use crate::{IO_REPARSE_TAG_MOUNT_POINT, unix_ms_to_filetime};
 
 fn filetime(ms: i64) -> FILETIME {
@@ -172,4 +177,35 @@ pub fn set_sparse_and_zero_range(path: &Path, offset: u64, len: u64) -> io::Resu
         )
     }
     .map_err(werr)
+}
+
+// Protected DACL: SYSTEM and Administrators only, and OWNER RIGHTS cut to reading so an unelevated owner cannot rewrite it.
+const PRIVATE_DIR_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FR;;;OW)";
+
+// Fails when anything already has the name, so a folder or junction put there first is never reused.
+pub fn create_private_dir(path: &Path) -> io::Result<()> {
+    let sddl = wide_str(PRIVATE_DIR_SDDL)?;
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    // SAFETY: `sddl` is NUL-terminated; the descriptor is freed below with LocalFree.
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            PCWSTR(sddl.as_ptr()),
+            SDDL_REVISION_1,
+            &mut sd,
+            None,
+        )
+    }
+    .map_err(werr)?;
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd.0,
+        bInheritHandle: false.into(),
+    };
+    let created = wide_path(path).and_then(|w| {
+        // SAFETY: `w` is NUL-terminated and `sa` outlives the call.
+        unsafe { CreateDirectoryW(PCWSTR(w.as_ptr()), Some(&sa)) }.map_err(werr)
+    });
+    // SAFETY: `sd` came from ConvertStringSecurityDescriptorToSecurityDescriptorW.
+    unsafe { LocalFree(Some(HLOCAL(sd.0))) };
+    created
 }
