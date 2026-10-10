@@ -1,5 +1,6 @@
 mod eval;
 mod support;
+mod web_learn;
 
 use std::path::Path;
 use std::sync::Arc;

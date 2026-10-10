@@ -18,9 +18,13 @@ use crate::provider::{
     AssembledTurn, ChatMessage, ChatRequest, Client, ProviderConfig, ProviderError, StreamEvent,
     ToolCallMsg, is_context_overflow,
 };
+use crate::search::{SearchResult, format_for_llm};
 use crate::thread::{self, Stored};
 use crate::tools::util::{redact_all, redact_value};
-use crate::tools::{Kind, Outcome, Registry, ToolCtx, ToolError, refresh_note};
+use crate::tools::{
+    About, DATA_VERSION, Kind, Outcome, Registry, ToolCtx, ToolError, learn_prompt, parse_identity,
+    refresh_note, remember_identity,
+};
 
 // Implemented by the server's indexer supervisor; the agent only asks.
 pub trait IndexControl: Send + Sync {
@@ -179,6 +183,13 @@ impl Emitter {
     }
 }
 
+struct Pending {
+    call_id: String,
+    result_id: String,
+    about: About,
+    results: Vec<SearchResult>,
+}
+
 struct Run {
     env: Arc<AgentEnv>,
     provider: ProviderConfig,
@@ -189,6 +200,8 @@ struct Run {
     steps: u32,
     limit_reached: bool,
     parse_retry_used: bool,
+    resolved: Option<(ProviderConfig, Option<String>)>,
+    learn: Vec<Pending>,
 }
 
 // Streams AG-UI events into `tx`; the server aborts the task to cancel a run.
@@ -228,9 +241,14 @@ pub async fn run_agent(
         steps: 0,
         limit_reached: false,
         parse_retry_used: false,
+        resolved: None,
+        learn: Vec::new(),
     };
     let result = run.go(&mut em, input).await;
     em.close_open().await;
+    if result.is_ok() {
+        run.learn_from_searches(&mut em).await;
+    }
     let stats = json!({
         "elapsed_ms": started.elapsed().as_millis() as u64,
         "steps": run.steps,
@@ -313,6 +331,7 @@ impl Run {
 
     async fn go(&mut self, em: &mut Emitter, input: RunAgentInput) -> Result<(), Stop> {
         let (cfg, key) = self.resolve_provider()?;
+        self.resolved = Some((cfg.clone(), key.clone()));
         let db = self.env.db.clone();
         let conv = self.thread_id.clone();
         let provider_id = self.provider.id.clone();
@@ -601,9 +620,23 @@ impl Run {
                     content,
                     custom,
                     data,
+                    learn,
                 }) => {
                     let result_id = new_id();
                     self.emit_result(em, &result_id, &call.id, &content).await?;
+                    if let Some(l) = learn {
+                        self.learn.push(Pending {
+                            call_id: call.id.clone(),
+                            result_id: result_id.clone(),
+                            about: l.about,
+                            results: l.results,
+                        });
+                    }
+                    if call.function.name == "remember"
+                        && let Some(a) = remembered(&call.function.arguments, &self.profile)
+                    {
+                        self.learn.retain(|p| !p.about.same(&a));
+                    }
                     only_suggestions &= call.function.name == "suggest_next" && data.is_some();
                     if let Some(data) = data {
                         em.custom(
@@ -664,6 +697,88 @@ impl Run {
         })
     }
 
+    // Each `about` gets one small request after the run, so the answer the model gave is never held up.
+    async fn learn_from_searches(&mut self, em: &mut Emitter) {
+        let Some((cfg, key)) = self.resolved.clone() else {
+            return;
+        };
+        let mut todo: Vec<Pending> = Vec::new();
+        for p in std::mem::take(&mut self.learn).into_iter().rev() {
+            if !todo.iter().any(|t| t.about.same(&p.about)) {
+                todo.push(p);
+            }
+        }
+        for p in todo.into_iter().rev() {
+            let item = match self.learn_one(&cfg, key.as_deref(), &p).await {
+                Ok(Some(item)) => item,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::debug!(error = %e, "learning from a web search failed");
+                    continue;
+                }
+            };
+            let data = json!({"v": DATA_VERSION, "kind": "learned", "items": [item]});
+            let (db, id, stored) = (self.env.db.clone(), p.result_id.clone(), data.clone());
+            if blocking(move || thread::set_ui(&db.conn()?, &id, &stored))
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            let shown =
+                json!({"tool_call_id": p.call_id, "data": redact_value(&data, &self.profile)});
+            if em.custom("tool_data", shown).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    async fn learn_one(
+        &self,
+        cfg: &ProviderConfig,
+        key: Option<&str>,
+        p: &Pending,
+    ) -> anyhow::Result<Option<Value>> {
+        let Some(url) = p.results.first().map(|r| r.url.clone()) else {
+            return Ok(None);
+        };
+        let ask = format!(
+            "What is {}?\n{}",
+            p.about.subject(&self.profile),
+            format_for_llm(&p.results)
+        );
+        let mut messages = vec![
+            ChatMessage::text("system", &learn_prompt()),
+            ChatMessage::text("user", &ask),
+        ];
+        redact_messages(&mut messages, &self.profile);
+        let req = ChatRequest {
+            messages,
+            ..ChatRequest::default()
+        };
+        let turn = self
+            .env
+            .client
+            .chat(cfg, key, &req)
+            .await
+            .map_err(|e| anyhow::anyhow!(self.scrub(&describe(&e, cfg))))?;
+        let Some(id) = parse_identity(&turn.text) else {
+            return Ok(None);
+        };
+        let (db, about, profile, now) = (
+            self.env.db.clone(),
+            p.about.clone(),
+            self.profile.clone(),
+            self.env.now(),
+        );
+        let link = url.clone();
+        let m = tokio::task::spawn_blocking(move || {
+            remember_identity(&db.conn()?, &about, id, &link, now, &profile)
+        })
+        .await??;
+        Ok(m.map(|m| json!({"memory_id": m.id, "text": m.text, "url": url})))
+    }
+
     async fn emit_call(
         &self,
         em: &mut Emitter,
@@ -703,6 +818,11 @@ impl Run {
         })
         .await
     }
+}
+
+fn remembered(raw: &str, profile: &str) -> Option<About> {
+    let args = crate::tools::parse_args(raw).ok()?;
+    About::from_scope(args.get("scope")?.as_str()?, profile)
 }
 
 fn args_with_proposal(raw: &str, proposal_id: &str) -> String {

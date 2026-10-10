@@ -1,0 +1,4 @@
+{"query":"q4nx file","number_of_results":0,"results":[
+{"url":"https://github.com/FastFlowLM/FastFlowLM","title":"FastFlowLM: run LLMs on AMD Ryzen AI NPUs","content":"FastFlowLM (flm) runs language models on the NPU of AMD Ryzen AI PCs. Its models are quantized weights in .q4nx files.","engine":"duckduckgo","score":1.5,"category":"general"},
+{"url":"https://huggingface.co/FastFlowLM","title":"FastFlowLM models - Hugging Face","content":"NPU model weights in the q4nx format, downloaded by flm pull.","engine":"brave","score":1.0,"category":"general"}
+],"answers":[],"corrections":[],"infoboxes":[],"suggestions":[],"unresponsive_engines":[]}

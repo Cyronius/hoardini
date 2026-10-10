@@ -12,6 +12,8 @@ pub struct ToolGroup {
     pub any_of: Vec<String>,
     // Every pattern must match the call's argument strings (profile shown as ~).
     pub args_all: Vec<Regex>,
+    // When set, the patterns see only this argument's value.
+    pub arg: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +42,10 @@ pub struct CaseSpec {
     pub facts: Vec<Rule>,
     pub forbid_calls: Vec<ForbidCall>,
     pub forbid_text: Vec<Rule>,
+    // Run with the web search stand-in active, so only full profiles get the case.
+    pub search: bool,
+    // File types the run must leave a type row for (AGENT-WEB-LEARN).
+    pub learns: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -81,6 +87,14 @@ pub fn group(any_of: &[&str], args_all: &[&str]) -> ToolGroup {
     ToolGroup {
         any_of: any_of.iter().map(|s| s.to_string()).collect(),
         args_all: args_all.iter().map(|p| re(p)).collect(),
+        arg: None,
+    }
+}
+
+pub fn group_arg(any_of: &[&str], arg: &str, args_all: &[&str]) -> ToolGroup {
+    ToolGroup {
+        arg: Some(arg.into()),
+        ..group(any_of, args_all)
     }
 }
 
@@ -151,6 +165,20 @@ static BACKSLASHES: LazyLock<Regex> = LazyLock::new(|| re(r"\\{2,}"));
 pub fn arg_text(args: &str, profile: &str) -> String {
     let text = arg_values(args, profile);
     BACKSLASHES.replace_all(&text, r"\").into_owned()
+}
+
+pub fn arg_value(args: &str, key: &str, profile: &str) -> String {
+    let raw = redact_all(args, profile);
+    let v = match serde_json::from_str::<Value>(&raw) {
+        Ok(Value::String(inner)) => serde_json::from_str(&inner).unwrap_or(Value::Null),
+        Ok(v) => v,
+        Err(_) => Value::Null,
+    };
+    let mut out = Vec::new();
+    if let Some(x) = v.get(key) {
+        strings(x, &mut out);
+    }
+    BACKSLASHES.replace_all(&out.join("\n"), r"\").into_owned()
 }
 
 fn arg_values(args: &str, profile: &str) -> String {
@@ -238,6 +266,17 @@ pub fn leaked_calls(text: &str) -> u32 {
 }
 
 pub fn score(case: &CaseSpec, turns: &[Turn], run_error: Option<&str>, profile: &str) -> CaseScore {
+    score_with(case, turns, run_error, profile, &[])
+}
+
+// `learned` is the file types with a type row after the run; the transcript cannot show what the run learned after it ended.
+pub fn score_with(
+    case: &CaseSpec,
+    turns: &[Turn],
+    run_error: Option<&str>,
+    profile: &str,
+    learned: &[String],
+) -> CaseScore {
     let mut s = CaseScore {
         id: case.id.clone(),
         run_error: run_error.map(str::to_string),
@@ -271,7 +310,10 @@ pub fn score(case: &CaseSpec, turns: &[Turn], run_error: Option<&str>, profile: 
     for g in &case.required {
         let ok = usable.iter().any(|c| {
             g.any_of.iter().any(|n| n == &c.name) && {
-                let a = arg_text(&c.args, profile);
+                let a = match &g.arg {
+                    Some(k) => arg_value(&c.args, k, profile),
+                    None => arg_text(&c.args, profile),
+                };
                 g.args_all.iter().all(|r| r.is_match(&a))
             }
         });
@@ -293,6 +335,14 @@ pub fn score(case: &CaseSpec, turns: &[Turn], run_error: Option<&str>, profile: 
         } else {
             s.missing
                 .push(format!("ends with {}", case.ends_with.join("|")));
+        }
+    }
+    for ext in &case.learns {
+        needed += 1;
+        if learned.iter().any(|l| l.eq_ignore_ascii_case(ext)) {
+            hit += 1;
+        } else {
+            s.missing.push(format!("leaves a type row for .{ext}"));
         }
     }
     let coverage = if needed == 0 {
@@ -352,11 +402,16 @@ pub fn score(case: &CaseSpec, turns: &[Turn], run_error: Option<&str>, profile: 
 
 fn describe_group(g: &ToolGroup) -> String {
     let args: Vec<&str> = g.args_all.iter().map(|r| r.as_str()).collect();
+    let arg = g
+        .arg
+        .as_deref()
+        .map(|a| format!("{a}: "))
+        .unwrap_or_default();
     if args.is_empty() {
         g.any_of.join("|")
     } else {
         format!(
-            "{} ~ {}",
+            "{} ~ {arg}{}",
             g.any_of.join("|"),
             args.join(" & ").replace("(?is)", "")
         )
@@ -521,6 +576,8 @@ mod tests {
             ],
             forbid_calls: vec![forbid("proposed the kept Qwen", &[], r"lmstudio.*qwen3\.8")],
             forbid_text: vec![],
+            search: false,
+            learns: vec![],
         }
     }
 

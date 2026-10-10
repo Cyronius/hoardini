@@ -1,5 +1,5 @@
 use hoardini_agent::eval::{
-    CaseSpec, GATE, Sizes, Turn, build_fixture, cases, gate_failures, score, totals,
+    CaseSpec, GATE, Sizes, Turn, build_fixture, cases, gate_failures, score, score_with, totals,
 };
 use hoardini_core::history::{self, Since};
 use hoardini_core::index::{self, TopFilesQuery};
@@ -411,4 +411,124 @@ fn fixture_disk_has_the_shape_the_cases_ask_about() {
         .query_row("SELECT name FROM destination", [], |r| r.get(0))
         .unwrap();
     assert_eq!(dest, "NAS");
+}
+
+// Traces: AGENT-EVAL-SCORING, AGENT-WEB-LEARN
+#[test]
+fn q4nx_needs_about_on_the_search_and_a_type_row_left_behind() {
+    let c = case("q4nx");
+    assert!(c.search);
+    let search = |args: &str| {
+        vec![
+            turn(
+                "",
+                vec![call("web_search", args, Some("<<<UNTRUSTED_WEB_CONTENT"))],
+            ),
+            turn("They are FastFlowLM NPU model weights.", vec![]),
+        ]
+    };
+    let about = search(r#"{"query":"q4nx file","about":"*.q4nx"}"#);
+    let learned = vec!["q4nx".to_string()];
+    let s = score_with(&c, &about, None, PROFILE, &learned);
+    assert_eq!((s.tool_score, s.answer_score), (1.0, Some(1.0)));
+    assert!(s.missing.is_empty(), "{:?}", s.missing);
+
+    let left = "leaves a type row for .q4nx";
+    let s = score_with(&c, &about, None, PROFILE, &[]);
+    assert_eq!(
+        (s.tool_score, s.missing.clone()),
+        (0.5, vec![left.to_string()])
+    );
+    assert_eq!(score(&c, &about, None, PROFILE).missing, vec![left]);
+
+    let query_only = search(r#"{"query":"what is a q4nx file"}"#);
+    let s = score_with(&c, &query_only, None, PROFILE, &learned);
+    assert_eq!(s.tool_score, 0.5);
+    assert_eq!(
+        s.missing,
+        vec![r"web_search ~ about: (?m:^(?:\*\*\\)?\*?\.?q4nx$)"]
+    );
+    let in_query = search(r#"{"query":"*.q4nx","about":"~\\.flm"}"#);
+    assert_eq!(
+        score_with(&c, &in_query, None, PROFILE, &learned).tool_score,
+        0.5
+    );
+}
+
+// Traces: AGENT-EVAL-SCORING, AGENT-WEB-LEARN
+#[tokio::test(flavor = "multi_thread")]
+async fn the_q4nx_case_searches_the_standin_and_records_the_type_row_it_left() {
+    use super::support::{MockLlm, Turn as Script, call as script_call};
+    use hoardini_agent::eval::{Options, run};
+    use hoardini_agent::provider::ProviderConfig;
+    let mock = MockLlm::start(vec![
+        Script::Calls(
+            None,
+            vec![script_call(
+                "s1",
+                "web_search",
+                serde_json::json!({"query": "q4nx files", "about": "*.q4nx"}),
+            )],
+        ),
+        Script::Text("They are FastFlowLM NPU model weights.".into()),
+        Script::Text(
+            r#"{"app": "FastFlowLM", "use": "NPU model weights", "category": "model-weights"}"#
+                .into(),
+        ),
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut provider = ProviderConfig::new("mock", &mock.base_url);
+    provider.model = Some("mock-model".into());
+    provider.timeout_s = 10;
+    let opts = |p: ProviderConfig, db: &str| Options {
+        provider: p,
+        label: "mock".into(),
+        root: root.to_string_lossy().into_owned(),
+        db_path: dir.path().join(db),
+        only: vec!["q4nx".into()],
+        repeat: 1,
+        ram: None,
+        secrets: None,
+        turn_timeout: std::time::Duration::from_secs(60),
+        verbose: false,
+    };
+    let report = run(opts(provider.clone(), "eval.db")).await.unwrap();
+    assert_eq!(report.cases.len(), 1);
+    let case = &report.cases[0];
+    assert_eq!(case.learned, vec!["q4nx"]);
+    assert_eq!(
+        (case.score.tool_score, case.score.answer_score),
+        (1.0, Some(1.0))
+    );
+    assert_eq!(
+        mock.requests().len(),
+        3,
+        "question, answer, and the learning request"
+    );
+    let conn = Db::open(dir.path().join("eval.db"))
+        .unwrap()
+        .conn()
+        .unwrap();
+    let left: (i64, i64) = conn
+        .query_row(
+            r"SELECT (SELECT COUNT(*) FROM search_provider), (SELECT COUNT(*) FROM memory WHERE key = '**\*.q4nx')",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        left,
+        (0, 0),
+        "the stand-in and the learned row are gone after the case"
+    );
+
+    provider.small = true;
+    let small = run(opts(provider, "small.db")).await.unwrap();
+    assert!(
+        small.cases.is_empty(),
+        "the small toolset has no web_search"
+    );
 }

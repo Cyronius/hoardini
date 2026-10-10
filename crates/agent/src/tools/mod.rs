@@ -53,6 +53,7 @@ pub enum Outcome {
         custom: Vec<(String, Value)>,
         // The UI's card payload; stored in `message.ui_json` and never sent to the model.
         data: Option<Value>,
+        learn: Option<WebLearn>,
     },
     Proposal {
         proposal_id: String,
@@ -65,17 +66,39 @@ impl Outcome {
             content: util::cap(content.into()),
             custom: Vec::new(),
             data: None,
+            learn: None,
         }
     }
 
     pub fn with_data(self, data: Value) -> Outcome {
         match self {
             Outcome::Text {
-                content, custom, ..
+                content,
+                custom,
+                learn,
+                ..
             } => Outcome::Text {
                 content,
                 custom,
                 data: Some(data),
+                learn,
+            },
+            other => other,
+        }
+    }
+
+    pub fn with_learn(self, learn: WebLearn) -> Outcome {
+        match self {
+            Outcome::Text {
+                content,
+                custom,
+                data,
+                ..
+            } => Outcome::Text {
+                content,
+                custom,
+                data,
+                learn: Some(learn),
             },
             other => other,
         }
@@ -128,6 +151,9 @@ registry! {
 }
 
 pub use index_status::refresh_note;
+pub use web_search::{
+    About, Identity, WebLearn, known, learn_prompt, parse_identity, remember_identity,
+};
 
 #[derive(Clone)]
 pub struct Registry {

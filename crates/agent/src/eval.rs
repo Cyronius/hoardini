@@ -27,9 +27,12 @@ pub use cases::{Sizes, cases, size_re};
 pub use fixture::{Fixture, build as build_fixture, reset_memories};
 pub use meter::{EvalMeter, RequestStat};
 pub use score::{
-    Call, CaseScore, CaseSpec, GATE, Gate, Totals, Turn, arg_text, forbid, gate_failures, group,
-    leaked_calls, median, percentile, rule, score, totals, turns_from,
+    Call, CaseScore, CaseSpec, GATE, Gate, Totals, Turn, arg_text, arg_value, forbid,
+    gate_failures, group, group_arg, leaked_calls, median, percentile, rule, score, score_with,
+    totals, turns_from,
 };
+
+pub const Q4NX_SEARCH: &str = include_str!("eval/q4nx_search.json");
 
 // (working set, peak working set, private bytes) of the model server, when the eval owns it.
 pub type RamProbe = Arc<dyn Fn() -> Option<(u64, u64, u64)> + Send + Sync>;
@@ -54,6 +57,8 @@ pub struct CaseRun {
     pub score: CaseScore,
     pub requests: Vec<RequestStat>,
     pub transcript: Vec<Value>,
+    #[serde(default)]
+    pub learned: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -176,6 +181,41 @@ async fn run_turn(
     }
 }
 
+// A loopback SearXNG stand-in, so a case that searches stays offline and every model reads the same results.
+pub async fn search_standin(body: &'static str) -> Result<String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = l.local_addr()?;
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = l.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 8192];
+                let _ = s.read(&mut buf).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = s.write_all(head.as_bytes()).await;
+                let _ = s.write_all(body.as_bytes()).await;
+                let _ = s.shutdown().await;
+            });
+        }
+    });
+    Ok(format!("http://{addr}"))
+}
+
+fn set_search(db: &Db, base_url: Option<&str>) -> Result<()> {
+    let conn = db.conn()?;
+    conn.execute("DELETE FROM search_provider WHERE id = 'searxng'", [])?;
+    if let Some(url) = base_url {
+        conn.execute(
+            "INSERT INTO search_provider(id, kind, config_json, is_active, created_ms) VALUES ('searxng', 'searxng', ?1, 1, ?2)",
+            rusqlite::params![json!({"base_url": url}).to_string(), now_ms()],
+        )?;
+    }
+    Ok(())
+}
+
 pub async fn run(opts: Options) -> Result<Report> {
     let started_ms = now_ms();
     let db = Db::open(&opts.db_path)?;
@@ -188,6 +228,13 @@ pub async fn run(opts: Options) -> Result<Report> {
     if !opts.only.is_empty() {
         all.retain(|c| opts.only.iter().any(|o| o == &c.id));
     }
+    // The small toolset has no web_search (AGENT-SMALL-PROFILE).
+    all.retain(|c| !(c.search && opts.provider.small));
+    let search_url = if all.iter().any(|c| c.search) {
+        Some(search_standin(Q4NX_SEARCH).await?)
+    } else {
+        None
+    };
     let meter = Arc::new(EvalMeter::default());
     let mut env = AgentEnv::new(
         db.clone(),
@@ -217,6 +264,7 @@ pub async fn run(opts: Options) -> Result<Report> {
     for rep in 0..opts.repeat.max(1) {
         for case in &all {
             let thread_id = new_id();
+            set_search(&db, search_url.as_deref().filter(|_| case.search))?;
             let _ = meter.take();
             let t0 = Instant::now();
             let mut run_error = None;
@@ -235,7 +283,18 @@ pub async fn run(opts: Options) -> Result<Report> {
                 .map(|s| s.msg)
                 .collect();
             let turns = turns_from(&msgs);
-            let sc = score(case, &turns, run_error.as_deref(), &fx.profile);
+            let learned: Vec<String> = {
+                let conn = db.conn()?;
+                let mut out = Vec::new();
+                for ext in &case.learns {
+                    if hoardini_core::memory::knowledge::filetype(&conn, ext)?.is_some() {
+                        out.push(ext.clone());
+                    }
+                }
+                out
+            };
+            let sc = score_with(case, &turns, run_error.as_deref(), &fx.profile, &learned);
+            set_search(&db, None)?;
             reset_memories(&db, built.memories_baseline)?;
             if opts.verbose {
                 eprintln!("{}", case_line(&sc, wall_s));
@@ -246,6 +305,7 @@ pub async fn run(opts: Options) -> Result<Report> {
                 score: sc,
                 requests,
                 transcript: transcript_json(&turns, &fx.profile),
+                learned,
             });
         }
     }
@@ -344,7 +404,13 @@ pub fn rescore(mut r: Report, sizes: &Sizes) -> Report {
     for run in &mut r.cases {
         if let Some(case) = all.iter().find(|c| c.id == run.score.id) {
             let turns = turns_from_json(&run.transcript);
-            run.score = score(case, &turns, run.score.run_error.as_deref(), "");
+            run.score = score_with(
+                case,
+                &turns,
+                run.score.run_error.as_deref(),
+                "",
+                &run.learned,
+            );
         }
     }
     let (ram, private) = (r.totals.peak_ram_bytes, r.totals.peak_private_bytes);
