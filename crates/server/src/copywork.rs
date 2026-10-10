@@ -107,6 +107,7 @@ impl CopyWorker {
         let reg = Registry::standard();
         let go = || self.go();
         let mut finished = true;
+        let mut waiting = 0;
         for root in index::watched(&conn) {
             if !go() {
                 finished = false;
@@ -115,6 +116,7 @@ impl CopyWorker {
             match copycheck::run_volume(&self.db, &env, &reg, &root, &go) {
                 Ok(r) => {
                     finished &= !r.stopped;
+                    waiting += r.online_waiting;
                     tracing::info!(
                         volume = %root,
                         candidates = r.candidates,
@@ -130,6 +132,9 @@ impl CopyWorker {
             }
         }
         if finished {
+            if let Err(e) = copycheck::set_online_waiting(&conn, waiting) {
+                tracing::debug!(error = %e, "waiting count not stored");
+            }
             self.owed.store(false, Ordering::SeqCst);
             if let Ok(mut g) = self.finished_at.lock() {
                 *g = Some(Instant::now());

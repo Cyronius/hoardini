@@ -124,8 +124,9 @@ covers and tells it where to look first. A hint never sets or raises a confidenc
 waits on a hash gets a SHA-256, biggest first, and is checked again. Hashes are read through the atime-preserving handle
 (EVID-ATIME-PRESERVE), stored in `file_hash` keyed by volume and file id, and reused while size and mtime hold; a file
 that changes while it is hashed gets no row. Hugging Face blobs (`models--*\blobs\<sha256>`) and Ollama blobs
-(`sha256-<hex>`) are named by their hash and are never read. `go` is polled between files and between 1 MiB chunks. The
-pass stores in meta `copy_online_waiting` how many candidates wait on an unanswered online consent.
+(`sha256-<hex>`) are named by their hash and are never read. `go` is polled between files and between 1 MiB chunks.
+`RunReport.online_waiting` counts the candidates that wait on an unanswered online consent; the server stores the total
+over all watched volumes in meta `copy_online_waiting` after each full pass (`set_online_waiting`).
 
 **Acceptance criteria:**
 - `effect` maps identical, same-name-and-size, claimed, none to may-start-ticked, review, follow-catalog, only-copy; `verdict_for` gives `synced` for an identical `sync` answer, `redownload` for an identical `huggingface` answer, `review` for same-name-and-size, and nothing for claimed and none.
@@ -133,6 +134,7 @@ pass stores in meta `copy_online_waiting` how many candidates wait on an unanswe
 - `only_copy` is false with no answers, true when the only answer is `none`, false when that answer is pending, and false when another check answered `identical`.
 - On an indexed folder holding files of 120 MiB and 101 MiB (two of each, the same bytes within each pair) and 99 MiB, a 1.1 GiB folder with `.git`, and a 1.1 GiB plain folder, `candidates` lists the git folder and the four big files, biggest first, and not the 99 MiB file or the plain folder.
 - `run_volume` hashes the four big files, the 120 MiB pair first; each `file_hash` row equals the SHA-256 of the file's bytes, and afterwards each file's `dup` answer is `identical` with its twin as the locator. A second pass hashes nothing; after one file is appended to, the next pass hashes only that file.
+- When `go` turns false inside the first hash, `run_volume` reports `stopped` with nothing hashed and no `file_hash` row; the next pass hashes both files.
 - A file named like a hub blob whose bytes do not match its name keeps the name as its hash, and no `file_hash` row is written for it.
 - With a glob row `**\*.q4nx` carrying `{"copy_hint": "huggingface:acme"}`, the Hugging Face check applies to `x.q4nx` and its search term starts with `acme`; without the row it does not apply.
 
@@ -307,3 +309,4 @@ done` with its candidate, checked, and hashed counts and how many wait on consen
 3. After the refresh, the log shows `copy checks done` for each folder with `online_waiting` above 0, and `GET /api/copy-checks/waiting` reports it.
 4. `PUT /api/settings {"online_checks": {"asked": true, "services": {"huggingface": true, "winget": true}}}`. A new pass hashes the waiting files. `GET /api/copy-checks?path=~\.lmstudio\models\lmstudio-community\SmolLM2-135M-Instruct-GGUF\SmolLM2-135M-Instruct-Q4_K_M.gguf` then shows `huggingface` `identical` "identical to lmstudio-community/SmolLM2-135M-Instruct-GGUF on Hugging Face", and `~\Downloads\balenaEtcher-2.1.7.Setup.exe` shows `winget` `identical` "in winget as Balena.Etcher 2.1.7".
 5. While it hashes, Process Explorer shows the `hoardini-copycheck` thread at background priority. Closing the status stream stops the pass within a second (the log shows `stopped=true`), and opening it again with `looking: true` resumes.
+(2026-10-09: steps 1-4 pass, debug build, live Hugging Face and winget. The first pass logged `online_waiting=1` for each folder; `/api/copy-checks/waiting` then said 1 because each volume overwrote the count, which was fixed to the total and re-run: 2. After consent the pass hashed 105,454,144 + 200,093,336 bytes; the GGUF was `identical` to `lmstudio-community/SmolLM2-135M-Instruct-GGUF` (`lfs.oid` bda48499...), the installer `identical` "in winget as Balena.Etcher 2.1.7" with signer "Balena Ltd", and `~\Downloads\omarchy-4.0.4.iso` "only copy we know of" (no disk-image check yet). Step 5 was not run: the files hashed in under 3 s.)

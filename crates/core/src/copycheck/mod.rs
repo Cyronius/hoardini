@@ -813,7 +813,6 @@ pub fn run_volume(
             waiting.push(s);
         }
     }
-    let _ = set_meta(&conn, WAITING_KEY, &report.online_waiting.to_string());
     to_hash.sort_by(|a, b| b.size.cmp(&a.size));
     for s in to_hash {
         match hash::hash_subject(&conn, &s, go) {
@@ -836,6 +835,11 @@ pub fn run_volume(
         check_subject(&cx, reg, &s);
     }
     Ok(report)
+}
+
+// The server stores the total over every watched volume after a full pass.
+pub fn set_online_waiting(conn: &Connection, n: usize) -> anyhow::Result<()> {
+    set_meta(conn, WAITING_KEY, &n.to_string())
 }
 
 pub fn online_waiting(conn: &Connection) -> usize {

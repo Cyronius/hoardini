@@ -537,6 +537,30 @@ fn candidates_are_listed_biggest_first_and_hashed_in_the_background() {
     );
 }
 
+// Traces: EVID-COPY-CHECK, EVID-COPY-BACKGROUND
+#[test]
+fn a_pass_stops_mid_hash_when_told_and_resumes_later() {
+    let fx = Fx::new();
+    let d = fx.data();
+    sparse(&d.join("x.bin"), 101 * MIB);
+    sparse(&d.join("y.bin"), 101 * MIB);
+    fx.index();
+    let env = fx.env();
+    let reg = Registry::standard();
+    let polls = AtomicUsize::new(0);
+    // Two polls go to the candidate loop, so the stop lands inside the first file's hash.
+    let go = || polls.fetch_add(1, Ordering::SeqCst) < 6;
+    let r = copycheck::run_volume(&fx.db, &env, &reg, &s(&d), &go).unwrap();
+    assert!(r.stopped && r.hashed == 0, "{r:?}");
+    let conn = fx.db.conn().unwrap();
+    let rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM file_hash", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 0, "a stopped hash leaves no row");
+    let r = copycheck::run_volume(&fx.db, &env, &reg, &s(&d), &|| true).unwrap();
+    assert_eq!((r.stopped, r.hashed), (false, 2));
+}
+
 // Traces: EVID-COPY-CHECK
 #[test]
 fn content_addressed_blobs_are_never_hashed() {
