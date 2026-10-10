@@ -1,12 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { routes } from "../api/client";
-import type { OnlineChecks } from "../api/types";
+import type { OnlineChecks, OnlineState } from "../api/types";
 import { useStore } from "../store";
 
 const POLL_MS = 30_000;
 
 // Asked once, when online candidates wait and the user has not answered yet (EVID-COPY-CONSENT).
-export function OnlineChecksConsent({ waiting: given }: { waiting?: number }) {
+export function OnlineChecksConsent({ online, onAnswered }: { online?: OnlineState; onAnswered?: () => void }) {
   const lastRefresh = useStore((s) => s.status?.index.last_refresh_ms);
   const openDrawer = useStore((s) => s.openDrawer);
   const drawer = useStore((s) => s.drawer);
@@ -14,16 +14,32 @@ export function OnlineChecksConsent({ waiting: given }: { waiting?: number }) {
   const [waiting, setWaiting] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const given = online != null;
+  const drawerUsed = useRef(false);
+  const answered = useRef(onAnswered);
+  answered.current = onAnswered;
 
+  // The Settings tab's switches also answer, so the settings are read again once the drawer was used.
   useEffect(() => {
+    if (drawer) drawerUsed.current = true;
+    if (given && (drawer || !drawerUsed.current)) return;
+    let live = true;
     routes
       .settings()
-      .then((s) => setConsent(s.online_checks))
+      .then((s) => {
+        if (!live) return;
+        setConsent(s.online_checks);
+        if (s.online_checks.asked) answered.current?.();
+      })
       .catch(() => {});
-  }, [lastRefresh, drawer]);
+    return () => {
+      live = false;
+    };
+  }, [given, lastRefresh, drawer]);
 
+  const asked = consent?.asked ?? online?.asked ?? null;
   useEffect(() => {
-    if (given != null || !consent || consent.asked) return;
+    if (given || asked !== false) return;
     const load = () =>
       routes
         .copyChecksWaiting()
@@ -32,10 +48,10 @@ export function OnlineChecksConsent({ waiting: given }: { waiting?: number }) {
     void load();
     const t = setInterval(load, POLL_MS);
     return () => clearInterval(t);
-  }, [given, consent, lastRefresh]);
+  }, [given, asked, lastRefresh]);
 
-  const n = given ?? waiting;
-  if (!consent || consent.asked || n === 0) return null;
+  const n = online?.waiting ?? waiting;
+  if (asked !== false || n === 0) return null;
 
   const answer = async (allow: boolean) => {
     setBusy(true);
@@ -43,6 +59,7 @@ export function OnlineChecksConsent({ waiting: given }: { waiting?: number }) {
     try {
       const s = await routes.putSettings({ online_checks: { asked: true, services: { huggingface: allow, winget: allow } } });
       setConsent(s.online_checks);
+      onAnswered?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

@@ -11,17 +11,19 @@ import { useStore } from "../store";
 import { LargeAreas, SectionHead, WhatIsCard } from "./LargeAreas";
 import { chainOf, orderCards, readyBytes } from "./order";
 import { RarelyUsedApps } from "./RarelyUsedApps";
-import { useReview } from "./state";
+import { useReview, type Built } from "./state";
 
 // Opens the drive's review at start and on a drive switch; a rebuild elsewhere shows up as a new status.review id.
 function useReviewSync() {
   const root = useStore((s) => selectedVolume(s.status?.volumes)?.root);
   const statusId = useStore((s) => s.status?.review?.id);
+  const statusBuilding = useStore((s) => s.status?.review_building);
   const lastRefresh = useStore((s) => s.status?.index.last_refresh_ms);
   const connected = useStore((s) => s.connected);
   const { open, refetch } = useReview.getState();
   const noIndex = useReview((s) => s.status === "no-index");
   const shownId = useReview((s) => s.main?.review.id);
+  const building = useReview((s) => s.building);
 
   useEffect(() => {
     if (root && connected) void open();
@@ -30,8 +32,23 @@ function useReviewSync() {
     if (noIndex && lastRefresh) void open();
   }, [noIndex, lastRefresh, open]);
   useEffect(() => {
-    if (statusId && shownId && statusId !== shownId) void refetch();
-  }, [statusId, shownId, refetch]);
+    if (statusId && statusId !== shownId && !noIndex) void refetch();
+  }, [statusId, shownId, noIndex, refetch]);
+  // Only the end of a build the stream saw counts: its first frame may predate the build `open` started.
+  const wasBuilding = useRef(false);
+  useEffect(() => {
+    const ended = wasBuilding.current && statusBuilding === false;
+    wasBuilding.current = !!statusBuilding;
+    if (ended && building) void refetch();
+  }, [building, statusBuilding, refetch]);
+}
+
+// Review now has its own "Reviewing…", so its build is not shown twice.
+function useBuilding(): boolean {
+  const building = useReview((s) => s.building);
+  const running = useReview((s) => s.running);
+  const statusBuilding = useStore((s) => s.status?.review_building);
+  return !running && (building || !!statusBuilding);
 }
 
 function useNow(ms: number) {
@@ -48,21 +65,22 @@ function useReady(cards: ReviewCardRef[]): number {
   return useStore((s) => readyBytes(cards.flatMap((c) => chainOf(c.proposal_id, s.proposals))));
 }
 
-function SpaceBar({ used, free, ready }: { used: number; free: number; ready: number }) {
+function SpaceBar({ used, free, ready }: { used: number; free: number; ready: number | null }) {
   const total = used + free;
   if (total <= 0) return null;
   const pct = (n: number) => `${(n / total) * 100}%`;
-  const r = Math.min(ready, used);
+  const r = Math.min(ready ?? 0, used);
+  const label = ready == null ? `${humanBytes(used)} used, ${humanBytes(free)} free` : `${humanBytes(used)} used, ${humanBytes(r)} of it ready to free, ${humanBytes(free)} free`;
   return (
     <div className="mt-3">
-      <div className="flex h-3 overflow-hidden rounded-full bg-ink-800" role="img" aria-label={`${humanBytes(used)} used, ${humanBytes(r)} of it ready to free, ${humanBytes(free)} free`}>
+      <div className="flex h-3 overflow-hidden rounded-full bg-ink-800" role="img" aria-label={label}>
         <span className="h-full bg-muted/45" style={{ width: pct(used - r) }} />
         <span className="review-ready h-full" style={{ width: pct(r) }} />
         <span className="h-full bg-ok/30" style={{ width: pct(free) }} />
       </div>
       <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[length:var(--fs-xs)] text-muted">
         <Key cls="bg-muted/45" label={`Used ${humanBytes(used)}`} />
-        <Key cls="review-ready" label={`Ready to free ${humanBytes(r)}`} />
+        {ready != null && <Key cls="review-ready" label={`Ready to free ${humanBytes(r)}`} />}
         <Key cls="bg-ok/30" label={`Free ${humanBytes(free)} of ${humanBytes(total)}`} />
       </div>
     </div>
@@ -78,7 +96,23 @@ function Key({ cls, label }: { cls: string; label: string }) {
   );
 }
 
-function ReviewHeader({ view, ready, title, onRun, running, error }: { view: Review; ready: number; title: string; onRun: () => void; running: boolean; error?: string | null }) {
+function ReviewHeader({
+  view,
+  ready,
+  title,
+  onRun,
+  running,
+  building,
+  error,
+}: {
+  view: Built;
+  ready: number;
+  title: string;
+  onRun: () => void;
+  running: boolean;
+  building?: boolean;
+  error?: string | null;
+}) {
   const now = useNow(30_000);
   const vol = useStore((s) => s.status?.volumes.find((v) => samePath(v.root, view.header.root)) ?? selectedVolume(s.status?.volumes));
   const lastRefresh = useStore((s) => s.status?.index.last_refresh_ms);
@@ -118,14 +152,45 @@ function ReviewHeader({ view, ready, title, onRun, running, error }: { view: Rev
         Built {humanAge(now - view.review.created_ms)}
         {lastRefresh ? ` · index from ${humanAge(now - lastRefresh)}` : ""}
       </div>
+      {building && (
+        <p role="status" className="mt-2 flex items-center gap-2 rounded-xl border border-line-soft bg-ink-900 px-3 py-1.5 text-[length:var(--fs-sm)] text-paper-dim">
+          <span className="shrink-0 text-brass">
+            <SpinnerIcon />
+          </span>
+          <span>
+            <span className="font-semibold text-paper">Building a newer review…</span> This one stays until it is ready.
+          </span>
+        </p>
+      )}
       {error && <p className="mt-1 text-[length:var(--fs-sm)] text-err">{error}</p>}
     </section>
   );
 }
 
-function Cards({ cards, view }: { cards: ReviewCardRef[]; view: Review }) {
+function BuildingHeader({ view, title }: { view: Review; title: string }) {
+  const vol = useStore((s) => s.status?.volumes.find((v) => samePath(v.root, view.header.root)));
+  const free = view.header.free_bytes ?? vol?.free_bytes ?? 0;
+  const used = view.header.used_bytes ?? (vol ? vol.total_bytes - vol.free_bytes : 0);
+  return (
+    <section aria-label={title} aria-busy="true" className="fade-up rounded-2xl border border-line bg-ink-850 p-4">
+      <div className="label truncate text-[length:var(--fs-xs)] uppercase">{title}</div>
+      <div className="mt-1 flex items-center gap-2.5">
+        <span className="shrink-0 text-brass">
+          <SpinnerIcon size={22} />
+        </span>
+        <span className="font-[family-name:var(--font-display)] text-[24px] font-extrabold leading-tight tracking-tight text-paper">Building your review…</span>
+      </div>
+      <p className="mt-1 text-[length:var(--fs-sm)] text-muted">
+        Hoardini is going over {drive(view.header.root)} for what can go and what is big but stays. Nothing is changed while it looks.
+      </p>
+      <SpaceBar used={used} free={free} ready={null} />
+    </section>
+  );
+}
+
+function Cards({ cards, view }: { cards: ReviewCardRef[]; view: Built }) {
   const proposals = useStore((s) => s.proposals);
-  const titles = useMemo(() => new Map(cards.map((c) => [c.proposal_id, c.title])), [cards]);
+  const refs = useMemo(() => new Map(cards.map((c) => [c.proposal_id, c])), [cards]);
   // Order once per review, so cards do not jump while ticks change or a job runs.
   const ordered = useRef<{ key: string; ids: string[] }>({ key: "", ids: [] });
   const key = `${view.review.id}|${cards.map((c) => c.proposal_id).join(",")}`;
@@ -133,7 +198,7 @@ function Cards({ cards, view }: { cards: ReviewCardRef[]; view: Review }) {
   return (
     <div>
       {ordered.current.ids.map((id) => (
-        <ProposalCard key={id} proposalId={id} title={titles.get(id)} />
+        <ProposalCard key={id} proposalId={id} title={refs.get(id)?.title} note={refs.get(id)?.carried ? "from the earlier review" : undefined} />
       ))}
     </div>
   );
@@ -168,12 +233,23 @@ function useShownCards(): ReviewCardRef[] {
 export const useDriveReady = () => useReady(useShownCards());
 
 function DriveReview() {
-  const { main, status, error, building, runNow } = useReview();
+  const { main, bare, status, error, running, runNow, markAsked } = useReview();
+  const building = useBuilding();
   const proposals = useStore((s) => s.proposals);
   const shown = useShownCards();
   const ready = useReady(shown);
 
   if (status === "no-index") return <Hello />;
+  if (!main && bare) {
+    const title = `Review of ${drive(bare.header.root)}`;
+    return (
+      <>
+        <BuildingHeader view={bare} title={title} />
+        <OnlineChecksConsent online={bare.online} onAnswered={markAsked} />
+        <RarelyUsedApps given={bare.apps} />
+      </>
+    );
+  }
   if (!main) {
     if (status === "error")
       return (
@@ -194,8 +270,8 @@ function DriveReview() {
   const live = shown.filter((c) => proposals[c.proposal_id]?.status !== "superseded");
   return (
     <>
-      <ReviewHeader view={main} ready={ready} title={`Review of ${where}`} onRun={() => void runNow()} running={building} error={error} />
-      <OnlineChecksConsent />
+      <ReviewHeader view={main} ready={ready} title={`Review of ${where}`} onRun={() => void runNow()} running={running} building={building} error={error} />
+      <OnlineChecksConsent online={main.online} onAnswered={markAsked} />
       <section aria-label="What can go">
         <SectionHead title="What can go" count={live.length}>
           Each card is approved on its own. Nothing happens until you approve it.
@@ -212,7 +288,7 @@ function DriveReview() {
 function FolderReview() {
   const folder = useReview((s) => s.folder)!;
   const main = useReview((s) => s.main);
-  const { cleanUp, closeFolder } = useReview.getState();
+  const { cleanUp, closeFolder, markAsked } = useReview.getState();
   const proposals = useStore((s) => s.proposals);
   const view = folder.view;
   const cards = view?.cards ?? [];
@@ -242,6 +318,7 @@ function FolderReview() {
       {view && (
         <>
           <ReviewHeader view={view} ready={ready} title="Clean up" onRun={() => void cleanUp(folder.path)} running={false} />
+          <OnlineChecksConsent online={view.online} onAnswered={markAsked} />
           <section aria-label="What can go">
             <SectionHead title="What can go" count={cards.length} />
             {cards.length === 0 && (
@@ -259,6 +336,7 @@ function FolderReview() {
               ))}
             </section>
           )}
+          <RarelyUsedApps given={view.apps ?? []} />
           <LargeAreas areas={view.areas} scope={folder.path} />
         </>
       )}
