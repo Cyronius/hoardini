@@ -191,13 +191,17 @@ pub fn node_by_path(conn: &Connection, path: &str) -> Result<Option<NodeInfo>> {
 
 pub fn children(conn: &Connection, node_id: i64) -> Result<Vec<NodeInfo>> {
     let base = path_of(conn, node_id)?.ok_or_else(|| anyhow!("node {node_id} not found"))?;
+    children_at(conn, node_id, &base)
+}
+
+pub(crate) fn children_at(conn: &Connection, node_id: i64, base: &str) -> Result<Vec<NodeInfo>> {
     let mut st = conn.prepare_cached(&format!(
         "SELECT {NODE_COLS} FROM node WHERE parent_id = ?1"
     ))?;
     let mut out = st
         .query_map([node_id], |r| {
             let name: String = r.get(2)?;
-            node_from_row(r, Some(join_path(&base, &name)))
+            node_from_row(r, Some(join_path(base, &name)))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     out.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
@@ -263,7 +267,7 @@ pub struct ExtMix {
     pub total_bytes: u64,
 }
 
-fn ext_of(name: &str) -> String {
+pub(crate) fn ext_of(name: &str) -> String {
     match name.rfind('.') {
         Some(i) if i > 0 => name[i + 1..].to_ascii_lowercase(),
         _ => String::new(),

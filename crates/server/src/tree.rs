@@ -12,7 +12,7 @@ use crate::state::{ApiError, ApiResult, AppState, blocking, parse};
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 1000;
 
-fn absolute(raw: Option<&str>) -> Result<String, ApiError> {
+pub(crate) fn absolute(raw: Option<&str>) -> Result<String, ApiError> {
     let raw = raw
         .map(str::trim)
         .filter(|p| !p.is_empty())

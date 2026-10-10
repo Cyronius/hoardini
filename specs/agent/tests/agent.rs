@@ -1073,6 +1073,39 @@ async fn each_biggest_folder_in_the_prompt_carries_its_location_tag() {
     assert!(sys.contains(r"- D:\code\other 6.0 GB (1 files)"), "{sys}");
 }
 
+// Traces: AGENT-PROMPT-CONTEXT
+#[tokio::test]
+async fn the_system_prompt_names_what_the_user_has_selected_in_explore() {
+    let h = Harness::new(Some(FAKE_PROFILE));
+    h.index_fake(
+        FAKE_PROFILE,
+        &[(r"C:\Users\zq_owner\code\big\x.bin", 2 * GIB)],
+    );
+    hoardini_core::explore::set_focus(&h.db.conn().unwrap(), Some(r"C:\Users\zq_owner\code\big"))
+        .unwrap();
+    let mock = MockLlm::start(vec![Turn::Text("a".into()), Turn::Text("b".into())]).await;
+    h.run(
+        h.provider(&mock.base_url),
+        user("t-explore", "u1", "what's this big one?"),
+    )
+    .await;
+    hoardini_core::explore::set_focus(&h.db.conn().unwrap(), None).unwrap();
+    h.run(h.provider(&mock.base_url), user("t-explore", "u2", "and?"))
+        .await;
+    let sys = |i: usize| {
+        mock.requests()[i].messages()[0]["content"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let first = sys(0);
+    assert!(
+        first.contains(r"The user is looking at ~\code\big in Explore."),
+        "{first}"
+    );
+    assert!(!sys(1).contains("in Explore"), "{}", sys(1));
+}
+
 // Traces: AGENT-MEMORY-NOTED
 #[tokio::test]
 async fn remember_emits_a_memory_noted_event_for_the_undo_chip() {
@@ -1216,6 +1249,7 @@ async fn card_tools_send_their_data_to_the_ui_and_never_to_the_model() {
     assert_eq!(folders["kind"], "folders");
     assert_eq!(folders["under"], "~");
     assert_eq!(folders["depth"], 1);
+    assert_eq!(folders["view"], "list");
     assert!(folders["as_of_ms"].as_i64().unwrap() > 0);
     assert_eq!(
         folders["items"][0],
@@ -1303,6 +1337,31 @@ async fn card_tools_send_their_data_to_the_ui_and_never_to_the_model() {
     );
 }
 
+// Traces: AGENT-TOOL-DATA
+#[test]
+fn top_dirs_carries_the_view_the_model_asked_for() {
+    let h = Harness::new(Some(FAKE_PROFILE));
+    h.index_fake(
+        FAKE_PROFILE,
+        &[(r"C:\Users\zq_owner\code\big\x.bin", 2 * GIB)],
+    );
+    let reg = Registry::full();
+    let view = |args: Value| {
+        let out = reg
+            .call(&ctx(&h, FAKE_PROFILE, "c1"), "top_dirs", &args.to_string())
+            .unwrap();
+        let Outcome::Text { content, data, .. } = out else {
+            panic!("top_dirs returned a proposal")
+        };
+        assert!(content.starts_with(r"Largest folders under C:\Users\zq_owner (depth 1;"));
+        data.expect("folders")["view"].clone()
+    };
+    assert_eq!(view(json!({"under": "~", "view": "map"})), "map");
+    assert_eq!(view(json!({"under": "~", "view": "MAP"})), "map");
+    assert_eq!(view(json!({"under": "~"})), "list");
+    assert_eq!(view(json!({"under": "~", "view": "chart"})), "list");
+}
+
 // Traces: AGENT-SUGGEST-NEXT
 #[test]
 fn suggest_next_keeps_at_most_three_pills_whose_paths_are_in_the_index() {
@@ -1319,11 +1378,12 @@ fn suggest_next_keeps_at_most_three_pills_whose_paths_are_in_the_index() {
         {"label": "What is in big?", "kind": "ask", "path": r"~\code\big"},
         {"label": "Clean up code", "kind": "clean_up", "path": r"~\code"},
         {"label": "Clean up gone", "kind": "clean_up", "path": r"~\gone"},
-        {"label": "Explore the cache", "kind": "explore", "path": r"~\.cache"},
+        {"label": "Explore it", "kind": "explore"},
+        {"label": "Open the review", "kind": "open_review", "path": r"~\code"},
         {"label": "Clean up code again", "kind": "clean_up", "path": r"~\CODE"},
         {"label": "Clean up somewhere", "kind": "clean_up"},
+        {"label": "Explore the cache", "kind": "explore", "path": r"~\.cache"},
         {"label": "Why so big?", "kind": "ask"},
-        {"label": "One too many", "kind": "ask"},
     ]});
     let out = reg
         .call(
@@ -1340,12 +1400,13 @@ fn suggest_next_keeps_at_most_three_pills_whose_paths_are_in_the_index() {
         json!({"v": 1, "kind": "pills", "items": [
             {"label": "What is in big?", "kind": "ask", "path": r"C:\Users\zq_owner\code\big"},
             {"label": "Clean up code", "kind": "clean_up", "path": r"C:\Users\zq_owner\code"},
-            {"label": "Why so big?", "kind": "ask"},
+            {"label": "Explore the cache", "kind": "explore", "path": r"C:\Users\zq_owner\.cache"},
         ]})
     );
     for why in [
         r"C:\Users\zq_owner\gone is not in the index",
-        r#"kind "explore" is not available"#,
+        "explore needs a path",
+        r#"kind "open_review" is not available"#,
         "a duplicate",
         "clean_up needs a path",
         "only 3 are shown",

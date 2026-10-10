@@ -149,6 +149,51 @@ Test: `specs/srv/tests/srv.rs`.
 
 Test: `specs/srv/tests/srv.rs`.
 
+### SRV-INDEX-MAP: A folder's treemap, pruned to the canvas
+**Applies to:** hoardini-server
+**Verification:** test
+
+`GET /api/index/map?path=<folder>&w=<px>&h=<px>` (`w` and `h` default 1200 and 800, clamped to 16–8192) shall return `{tree, ancestors, min_bytes, nodes, capped}` for an indexed folder, for the Explore treemap (UI-EXPLORE). A block of `size` bytes covers `size / root size` of the `w × h` canvas, so `min_bytes` is the smallest size that still gets 9 px² (rounded up). Each node is `{path, name, kind ("dir" | "file" | "link" | "small"), size, files, ext (files only, lower case, "" when none), children?, more?, tag}`. A folder is opened biggest first: its child rows and one `small` block for its folded small files (INDEX-SMALL-FOLD; `path` is the folder's, `name` "small files", `files` their count) are kept, biggest first (ties by name), while they are at least `min_bytes`, and the rest are merged into the folder's `more: {count, bytes}` (`count` is the rows plus the folded files it stands for). An opened folder always has `children` and `more`, and its `size` is the sum of its children's sizes plus `more.bytes`, so every level adds up to the root's size; a gap in the index is counted in `more.bytes`. The response holds at most 5,000 nodes: folders open largest first until the cap, then nothing more is opened, merged blocks go to `more`, and `capped` is true. `nodes` is the number of nodes returned. `ancestors` lists `{path, name}` from the drive root down to the folder's parent, for breadcrumbs. Paths follow SRV-INDEX-CHILDREN (`~` accepted and shown; 400 for a missing or non-absolute path or a file; 404 for a path not in the index).
+
+`tag` is `{state, label?, verdict?}`, decided by the nearest knowledge at or above the node, with no model call:
+1. **proposed:** the node is, or is under, a pending item of a pending proposal (a chat or review card); the label is the item's reason (else the card's summary) and the verdict the item's.
+2. Otherwise the deepest of: a protect note (`keep`, its text as label); a location row (MEM-LOCATION): category `system` or `protected` → `system`; `keep` in `photos`, `documents`, `user` or `user-data` → `user`; other `keep` → `keep`; `review`, `safe` or `redownload` → `review`; no verdict → `unknown` (its label kept); a catalog entry matching the node itself (EVID-CATALOG): `system` category → `system`, `keep` user data → `user`, `keep` → `keep`, else `review`, labelled with the entry's name. At one path a protect note beats a location row, which beats the catalog. Container rows and container entries (and POLICY-DENY's container areas such as the drive root) only label the node itself.
+3. Otherwise a Windows system area of POLICY-DENY → `system` (its label, verdict `keep`), else `unknown`.
+A `small` block has its folder's tag.
+
+**Acceptance criteria:**
+- `C:\data` holding `models\` (300 + 100 MiB `.gguf`), `big.iso` (200 MiB), `proj\node_modules\dep.bin` (60 MiB), `cache\c.bin` (20 MiB), `tiny\` (2 MiB `.bin` + 2 MiB `.jpg`) and two small files (12 KiB): at 16 × 16 px `min_bytes` is 25,215,408, `nodes` 8, the children are `models`, `big.iso`, `proj`, `more` is `{count: 4, bytes: 24 MiB + 12288}`, `a.gguf` has `ext` `gguf`, `ancestors` is `[{path: "C:\", name: "C:"}]`, and every level adds up to 684 MiB + 12288.
+- At 1000 × 1000 px nothing is merged and a `small` block of 12288 bytes and 2 files with path `C:\data` is listed.
+- With a pending card item `C:\data\cache` (reason "Rebuilds itself", `safe`), a declined one for `big.iso`, a `catalog` location row for `models` (LM Studio models, `redownload`) and the user's Keep for `tiny`: `cache` and `c.bin` are `proposed` with that label and verdict; `models` and `a.gguf` are `review` / LM Studio models / `redownload`; `node_modules` is `review` / node_modules / `redownload` while `proj` is `unknown`; `tiny` is `user` / yours / `keep`; `big.iso` is `unknown`; the small block has `C:\data`'s tag. At `C:\` the root is `unknown` labelled "the drive root" and `Windows` is `system` / the Windows folder / `keep`.
+- 5,100 files of 2 MiB in one folder at 8192 × 8192: `nodes` 5,000, `capped` true, 4,999 children from `f0000.bin`, `more` `{count: 101, bytes: 202 MiB}`, and the size still adds up.
+- A file is 400, a path not in the index 404, no path 400.
+
+Test: `specs/srv/tests/srv.rs`.
+
+### SRV-INDEX-TYPES: What a folder holds, by file type
+**Applies to:** hoardini-server
+**Verification:** test
+
+`GET /api/index/types?path=<folder>` shall return the folder's bytes by extension from INDEX-EXT-MIX, biggest first: `[{ext, bytes, files, label?, app?, use?, category?}]`. A type with a file-type row (MEM-FILETYPE) carries the row's text as `label` and its `app`, `use` and `category`; without a row, a photo or video, document or model-weight extension of the location classifier's lists (MEM-LOCATION) still gets that `category` (`photos`, `documents`, `model-weights`). Files under the row threshold have no type, so they are one entry `{ext: null, small: true, bytes, files}` placed by its size. At most 200 types are listed; the rest are one last entry `{ext: null, other: <number of types>, bytes, files}`. Paths are checked as in SRV-INDEX-MAP.
+
+**Acceptance criteria:**
+- On SRV-INDEX-MAP's `C:\data`, with a `user` file-type row for `gguf` (llama.cpp, model weights): `[gguf 400 MiB 2 files with label, app, use and category model-weights; iso 200 MiB; bin 82 MiB 3 files; jpg 2 MiB with category photos; {ext: null, small: true, bytes: 12288, files: 2}]`, exactly.
+- A file is 400 and a path not in the index 404.
+
+Test: `specs/srv/tests/srv.rs`.
+
+### SRV-EXPLORE-FOCUS: What the user has selected in Explore
+**Applies to:** hoardini-server
+**Verification:** test
+
+`PUT /api/explore/focus {path}` shall store the path the user selected in Explore (meta `explore_focus`, normalized, `~` expanded) and answer `{path}` with the profile shown as `~`; `{path: null}`, an empty path or no path clears it. A non-absolute path is 400 and changes nothing. A server start clears it, since a selection belongs to the window that made it. The system prompt names it (AGENT-PROMPT-CONTEXT).
+
+**Acceptance criteria:**
+- A focus left in the database is gone after the server starts.
+- `{path: "C:\data\models\"}` → `{path: "C:\data\models"}` and `explore::focus` returns it; `{path: null}` → `{path: null}` and clears it; `{path: "relative\x"}` → 400 and the focus stays cleared.
+
+Test: `specs/srv/tests/srv.rs`.
+
 ### SRV-THREAD: One conversation and its window
 **Applies to:** hoardini-server
 **Verification:** test
