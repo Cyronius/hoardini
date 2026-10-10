@@ -29,6 +29,13 @@ pub trait Cloud: Send + Sync {
     fn free(&self, path: &Path) -> std::io::Result<u64>;
 }
 
+// Shell metadata the sync engines never upload; it would otherwise keep every folder "not in sync".
+pub fn never_synced(name: &str) -> bool {
+    ["desktop.ini", "thumbs.db", ".ds_store"]
+        .iter()
+        .any(|n| name.eq_ignore_ascii_case(n))
+}
+
 pub fn root_for<'a>(roots: &'a [SyncRoot], path: &str) -> Option<&'a SyncRoot> {
     let p = normalize_path(path);
     roots

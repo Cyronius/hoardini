@@ -60,7 +60,7 @@ impl OnlineOnlyRunner {
             for e in hoardini_win::list_dir(&d)? {
                 cx.check_cancel()?;
                 let p = d.join(&e.name);
-                if e.is_link() {
+                if e.is_link() || crate::cloud::never_synced(&e.name) {
                     continue;
                 }
                 if e.is_dir() {

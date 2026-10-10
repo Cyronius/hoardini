@@ -41,7 +41,7 @@ pub fn folder_sync(cloud: &dyn Cloud, dir: &Path) -> FolderSync {
                 }
                 continue;
             }
-            if e.is_link() {
+            if e.is_link() || crate::cloud::never_synced(&e.name) {
                 continue;
             }
             out.files += 1;

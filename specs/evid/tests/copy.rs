@@ -834,6 +834,7 @@ fn the_sync_engines_in_sync_state_is_a_cloud_copy() {
     cloud.set(&a, true);
     cloud.set(&b, true);
     cloud.set(&outside, true);
+    std::fs::write(root.join(r"Pictures\desktop.ini"), b"[.ShellClassInfo]").unwrap();
     let mut env = fx.env();
     env.cloud = cloud.clone();
 

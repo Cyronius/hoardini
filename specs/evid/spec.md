@@ -198,14 +198,20 @@ one, and other providers), read from `HKLM\SOFTWARE\Microsoft\Windows\CurrentVer
 with the provider named from the registration id. A file is `identical` when the sync engine marks its placeholder in
 sync (`CfGetPlaceholderInfo`, opened for attributes with no recall), with the provider as the locator and the note
 "synced to <provider>". A folder is `identical` when every file in it (up to 20,000) is in sync, and is walked again on every pass, since
-a file inside can fall out of sync without the folder changing. Anything else is `none`
+a file inside can fall out of sync without the folder changing. Shell metadata the engines never upload (`desktop.ini`,
+`thumbs.db`, `.DS_Store`) is not counted. Anything else is `none`
 pending `sync`, so the next pass looks again. The Win32 calls sit behind the `Cloud` trait, and the decisions are tested
 against a fake one.
 
 **Acceptance criteria:**
 - With a fake root `<tmp>\OneDrive` (provider OneDrive): an in-sync file is `identical`, locator `OneDrive`, note "synced to OneDrive"; a file the fake reports as not in sync, and a plain file that is no placeholder, are `none` pending `sync`; a file outside the root gets no `sync` answer.
-- A folder whose two files are in sync is `identical`; with one of them not in sync it is `none` with "1 of 2 files not in sync".
+- A folder whose two files are in sync is `identical` although it also holds a `desktop.ini` that is no placeholder; with one of the two not in sync it is `none` with "1 of 2 files not in sync".
 - Provider names: `OneDrive!S-1-...!Personal|x` is OneDrive, `Dropbox!...` Dropbox, `iCloudDrive!...` iCloud Drive (`hoardini_win::provider_display_name`, in-crate test); an ordinary file is no placeholder (`placeholder_info` gives `None`).
+
+**Verification (manual, live provider, read-only):**
+1. On a PC with Dropbox or OneDrive, `cloud::system().roots()` lists the sync root with its provider name.
+2. For a synced file and a synced folder under it, `hoardini_win::placeholder_info` reports in sync, and `copycheck::sync_result` answers `identical` "synced to <provider>". Only metadata is opened (no recall), so nothing downloads and nothing is written.
+(2026-10-09: pass against `C:\Users\josha\SVI Dropbox` (provider Dropbox) for two documents and two folders. The first folder run counted the folder's `desktop.ini` as not in sync, which is why shell metadata files are now skipped.)
 
 ### EVID-COPY-GIT: Files a git remote holds
 **Applies to:** hoardini

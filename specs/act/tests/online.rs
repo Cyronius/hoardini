@@ -93,6 +93,7 @@ fn online_only_frees_in_sync_files_skips_the_rest_and_never_deletes() {
     let c = fx.file(r"OneDrive\album\c.jpg", &data(70 * 1024, 3));
     let d = fx.file(r"OneDrive\album\d.jpg", &data(60 * 1024, 4));
     let outside = fx.file("outside.bin", &data(50 * 1024, 5));
+    fx.file(r"OneDrive\album\desktop.ini", b"[.ShellClassInfo]");
     let album = root.join("album");
     for (p, ok) in [
         (&a, true),

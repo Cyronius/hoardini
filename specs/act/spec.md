@@ -292,7 +292,8 @@ usual in-use block. An item's verdict comes from the sync check run when the car
 when it, or every file in the folder, is in sync, else `review`; the model's verdict is ignored, and only unblocked,
 not-small `synced` items start ticked (POLICY-DEFAULT-TICK). At execution each file under an approved item is asked
 again: a file the sync engine marks in sync and that still has local data is freed; one that is not in sync, or is no
-placeholder, is skipped and counted; one already online-only is left alone. Nothing is ever deleted, moved, or read. A
+placeholder, is skipped and counted; one already online-only is left alone; shell metadata (`desktop.ini`, `thumbs.db`, `.DS_Store`) is skipped silently.
+Nothing is ever deleted, moved, or read. A
 file item that frees nothing fails ("nothing here is in sync with <provider> yet; nothing was changed"); a folder item
 is done when it freed or found at least one in-sync file, its detail saying how many were freed and how many were left on
 this PC. Each item is journaled per ACT-JOURNAL with undo `{"kind": "pin", "provider", "how"}`, `freed_bytes` is what
@@ -305,8 +306,9 @@ tested against a fake sync root.
 - Approving the in-sync file, the not-in-sync file, and the folder: the fake is asked to free exactly the two in-sync files; the in-sync file is `done` "1 file(s) now online-only in OneDrive"; the not-in-sync file is `failed` and untouched; the folder is `done` "1 file(s) now online-only in OneDrive; 1 not in sync were left on this PC"; the proposal is `partial`.
 - Every file, including the freed ones, still exists with its bytes; the job's freed bytes equal the two freed files' sizes; the two done items have `done` action rows with undo kind `pin` and provider OneDrive, the failed one a `failed` row; the freed files' index rows are still there.
 
-**Verification (manual, live sync engine):**
-1. With a scratch sync provider or a scratch folder inside OneDrive that holds only files you created for the test, wait until Explorer shows them as synced (green check).
-2. Ask for the scratch folder to be made online-only (`propose_online_only`), approve the card, and wait for the job.
-3. Explorer shows the files as online-only (cloud icon); `Get-Item` reports the same lengths, `fsutil file layout` or Properties shows "Size on disk" near 0, and opening one downloads it again with identical bytes (`Get-FileHash` before and after).
-4. A file modified just before approving (not yet synced) is reported as left on this PC.
+**Verification (manual, live cloud filter):**
+1. Build a throwaway provider: a program that registers an empty scratch folder as a sync root (`CfRegisterSyncRoot`, `CfConnectSyncRoot` with no callbacks), writes a few 2-3 MiB files into it, marks all but one in sync with `CfConvertToPlaceholder(MARK_IN_SYNC)`, and unregisters the root when it ends.
+2. `hoardini_win::placeholder_info` gives `None` for a plain file and, for an in-sync placeholder, in sync with all its bytes on disk. `free_up_space` on the placeholder that is not in sync fails and leaves its allocation; on an in-sync one it returns the bytes freed, the allocation drops to 0, the length stays, and the attributes carry unpinned and recall-on-data-access.
+3. Through `Executor::with_policy` with a `Cloud` whose root is the scratch folder and whose state and free are those real calls, an `online_only` proposal for a folder of two in-sync files and one not in sync, approved, ends `done` "2 file(s) now online-only in Scratch; 1 not in sync were left on this PC" with 4 MiB freed; the two files keep their length at allocation 0, the third is untouched, and the journal's undo is kind `pin`.
+4. With a real provider: on a scratch folder of your own files inside OneDrive (or Dropbox), wait for the green check, approve an online-only card for it, and see the cloud icons in Explorer, "Size on disk" near 0, the same lengths, and identical bytes (`Get-FileHash`) after opening a file downloads it again.
+(2026-10-09: steps 1-3 pass with a scratch provider on this machine's C:. Step 4 not run: there is no OneDrive here, and the Dropbox root holds the user's own files.)
