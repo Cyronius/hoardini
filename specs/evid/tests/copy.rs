@@ -976,6 +976,65 @@ fn git_copies_are_tracked_unchanged_and_pushed() {
     );
 }
 
+// Traces: EVID-COPY-GIT
+#[test]
+fn a_letter_case_or_skip_flag_the_index_disagrees_with_is_no_copy() {
+    let fx = Fx::new();
+    let remote = fx.root.join("remote.git");
+    let work = fx.data().join("proj");
+    std::fs::create_dir_all(&remote).unwrap();
+    git(&remote, &["init", "--bare", "-q"]);
+    git(&fx.data(), &["clone", "-q", &s(&remote), "proj"]);
+    git(&work, &["config", "core.ignorecase", "true"]);
+    std::fs::write(work.join("model.bin"), b"weights").unwrap();
+    std::fs::create_dir_all(work.join("sub")).unwrap();
+    std::fs::write(work.join(r"sub\a.bin"), b"aaa").unwrap();
+    std::fs::write(work.join("notes.txt"), b"notes").unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-q", "-m", "first"]);
+    git(&work, &["push", "-q", "origin", "HEAD"]);
+    git(
+        &work,
+        &[
+            "branch",
+            "-q",
+            "--set-upstream-to",
+            &format!("origin/{}", current_branch(&work)),
+        ],
+    );
+    let env = fx.env();
+    assert_eq!(
+        answer(&fx, &env, "git", &work.join("model.bin"))
+            .unwrap()
+            .confidence,
+        Confidence::Identical
+    );
+
+    std::fs::rename(work.join("model.bin"), work.join("tmp.bin")).unwrap();
+    std::fs::rename(work.join("tmp.bin"), work.join("Model.bin")).unwrap();
+    std::fs::write(work.join("Model.bin"), b"local edits never pushed").unwrap();
+    let r = answer(&fx, &env, "git", &work.join("Model.bin")).unwrap();
+    assert_eq!(r.confidence, Confidence::None, "{}", note(&r));
+    assert_eq!(note(&r), "tracked by git under another letter case");
+
+    std::fs::rename(work.join("sub"), work.join("tmp")).unwrap();
+    std::fs::rename(work.join("tmp"), work.join("Sub")).unwrap();
+    std::fs::write(work.join(r"Sub\a.bin"), b"changed").unwrap();
+    let r = answer(&fx, &env, "git", &work.join("Sub")).unwrap();
+    assert_eq!(r.confidence, Confidence::None, "{}", note(&r));
+
+    git(&work, &["update-index", "--assume-unchanged", "notes.txt"]);
+    std::fs::write(work.join("notes.txt"), b"rewritten").unwrap();
+    let r = answer(&fx, &env, "git", &work.join("notes.txt")).unwrap();
+    assert_eq!(
+        (r.confidence, note(&r).as_str()),
+        (
+            Confidence::None,
+            "git is told to skip changes to it (assume-unchanged or skip-worktree)"
+        )
+    );
+}
+
 fn current_branch(work: &Path) -> String {
     let out = std::process::Command::new("git")
         .arg("-C")

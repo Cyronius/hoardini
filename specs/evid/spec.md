@@ -234,8 +234,12 @@ against a fake one.
 **Verification:** test
 
 `git` applies inside a git work tree (a folder at or above the path holding `.git`). It runs the `git` CLI read-only
-(`status`, `rev-parse`, `rev-list`, `diff --no-ext-diff --no-textconv`, `config --get`) with `core.fsmonitor` off, so a
-repository's config cannot start a program. A file is `identical` when it is tracked, unchanged since the last commit,
+(`status`, `ls-files`, `rev-parse`, `rev-list`, `diff --no-ext-diff --no-textconv`, `config --get`) with
+`--no-optional-locks` and `core.fsmonitor` off, so a repository's config cannot start a program and `status` never
+writes the index; paths go as literal pathspecs. The index must list the path with the same letter case (`ls-files` with
+a case-blind pathspec: with `core.ignorecase`, `status` says nothing about `Model.bin` when the index holds `model.bin`)
+and with no assume-unchanged or skip-worktree flag, for a file and for everything a folder holds; otherwise the answer is
+`none` ("tracked by git under another letter case", "git is told to skip changes to it ..."). A file is `identical` when it is tracked, unchanged since the last commit,
 and the branch is not ahead of its upstream as of the last fetch, or is ahead only by commits that leave the file as the
 upstream has it; the locator is the upstream (`origin/main`) and the note names the remote URL with any credentials
 removed. A folder is `identical` when nothing under it is untracked, ignored, or changed and the same push rule holds; its
@@ -247,6 +251,7 @@ touching the file, so git answers are asked again on every pass.
 - After a commit pushed to a bare remote, a tracked file is `identical` with the clone's upstream as the locator, and the work tree folder is `identical`.
 - An untracked file is `none` "not tracked by git" and makes the folder `none`; an ignored file has no answer; a modified tracked file is `none` "changed since the last commit".
 - After a local commit that changes the file and is not pushed, the file is `none` naming the unpushed commit, while another tracked file the commit did not touch stays `identical`.
+- With `core.ignorecase` true, `model.bin` renamed on disk to `Model.bin` and rewritten is `none` "tracked by git under another letter case", and `sub` renamed to `Sub` with a file inside changed is `none`; a tracked `notes.txt` marked assume-unchanged and rewritten is `none` "git is told to skip changes to it (assume-unchanged or skip-worktree)".
 - `https://user:token@host/org/repo.git` shows as `host/org/repo` (in-crate test).
 
 ### EVID-COPY-MODELHUB: Model weights on Hugging Face, and Ollama blobs
