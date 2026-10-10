@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { Message } from "@ag-ui/client";
 import { routes } from "./api/client";
 import type { IndexSummary, Job, Proposal, Status, StatusEvent, ThreadDetail, ToolData } from "./api/types";
+import { loadPrefs, savePrefs } from "./shell/layout";
 import { saveThemePref, themePref } from "./theme";
 
 export type DrawerTab = "memory" | "destinations" | "providers" | "search" | "theme" | "settings";
@@ -15,6 +16,12 @@ interface NotedMemory {
 }
 
 export const THREAD_ID = "main";
+
+export type HomeTab = "review" | "explore";
+type Outbox = { text: string; lookCloser?: string; n: number };
+
+const prefs = loadPrefs();
+let outboxSeq = 0;
 
 export type ThreadMeta = Pick<ThreadDetail, "window_start_id" | "has_hidden" | "fresh" | "earlier" | "showing_all">;
 
@@ -47,6 +54,15 @@ interface State {
   drawer: DrawerTab | null;
   themePref: string;
 
+  home: HomeTab;
+  // Narrow windows only: the Chat tab is in front of the home tabs.
+  chatFront: boolean;
+  chatCollapsed: boolean;
+  chatWidth: number | null;
+  // Asked from outside the chat (Explore, Look closer); the chat sends it once it is idle.
+  outbox: Outbox | null;
+  exploreAt: { path: string; n: number } | null;
+
   // Bumped when the chat must remount from `seedMessages` (page load, cleared history).
   threadNonce: number;
   seedMessages: Message[] | null;
@@ -69,7 +85,15 @@ interface State {
   openDrawer(tab: DrawerTab | null): void;
   setThemePref(p: string): void;
   setChatBusy(b: boolean): void;
+  setHome(h: HomeTab): void;
+  showChat(): void;
+  setChatCollapsed(c: boolean): void;
+  setChatWidth(w: number): void;
+  askChat(text: string, lookCloser?: string): void;
+  takeOutbox(n: number): void;
+  openExplore(path: string): void;
   putProposal(p: Proposal): void;
+  putProposals(ps: Record<string, Proposal>): void;
   loadProposal(id: string): Promise<Proposal | null>;
   noteMemory(toolCallId: string, n: NotedMemory): void;
   markToolStart(id: string): void;
@@ -94,6 +118,13 @@ export const useStore = create<State>((set, get) => ({
 
   drawer: null,
   themePref: themePref(),
+
+  home: "review",
+  chatFront: false,
+  chatCollapsed: prefs.collapsed,
+  chatWidth: prefs.chatWidth,
+  outbox: null,
+  exploreAt: null,
 
   threadNonce: 0,
   seedMessages: null,
@@ -138,7 +169,27 @@ export const useStore = create<State>((set, get) => ({
     set({ themePref: p });
   },
   setChatBusy: (chatBusy) => set({ chatBusy }),
+  setHome: (home) => set({ home, chatFront: false }),
+  showChat() {
+    if (get().chatCollapsed) get().setChatCollapsed(false);
+    set({ chatFront: true });
+  },
+  setChatCollapsed(chatCollapsed) {
+    set({ chatCollapsed });
+    savePrefs({ chatWidth: get().chatWidth, collapsed: chatCollapsed });
+  },
+  setChatWidth(chatWidth) {
+    set({ chatWidth });
+    savePrefs({ chatWidth, collapsed: get().chatCollapsed });
+  },
+  askChat(text, lookCloser) {
+    set({ outbox: { text, lookCloser, n: ++outboxSeq } });
+    get().showChat();
+  },
+  takeOutbox: (n) => set((s) => (s.outbox?.n === n ? { outbox: null } : s)),
+  openExplore: (path) => set((s) => ({ home: "explore", chatFront: false, exploreAt: { path, n: (s.exploreAt?.n ?? 0) + 1 } })),
   putProposal: (p) => set((s) => ({ proposals: { ...s.proposals, [p.id]: p } })),
+  putProposals: (ps) => set((s) => ({ proposals: { ...s.proposals, ...ps } })),
   async loadProposal(id) {
     try {
       const p = await routes.proposal(id);

@@ -55,9 +55,17 @@ function handle(data: string): void {
   }
 }
 
+let reroute: { url: string; body: unknown } | null = null;
+// Look closer (REVIEW-LOOK-CLOSER) is a normal run the server starts from a path, so the chat reads its stream as usual.
+export const rerouteNextRun = (r: { url: string; body: unknown } | null) => {
+  reroute = r;
+};
+
 // lm-ag-ui does not surface CUSTOM events, so we read a tee of the same SSE body.
 export const requestHandler: RequestHandler = async (url, init) => {
-  const res = await fetch(url, init);
+  const r = reroute;
+  reroute = null;
+  const res = r ? await fetch(r.url, { ...init, method: "POST", body: JSON.stringify(r.body) }) : await fetch(url, init);
   if (!res.body || !(res.headers.get("content-type") ?? "").includes("text/event-stream")) return res;
   const [forClient, forUs] = res.body.tee();
   void readSse(forUs, handle).catch(() => {});

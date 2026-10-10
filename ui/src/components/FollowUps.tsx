@@ -1,11 +1,13 @@
 import type { CardData, PillKind, ToolData } from "../api/types";
 import { useExploreLink } from "../explore/context";
 import { fileName, humanBytes, isUnder, samePath } from "../format";
+import { useReview } from "../review/state";
 import { starter } from "./Greeting";
-import { askAbout, cleanUpIn, isCardData } from "./ToolCards";
+import { askAbout, cleanUpTitle, isCardData } from "./ToolCards";
 
 export const MAX_FOLLOW_UPS = 3;
 
+// `send` is the question an `ask` pill sends; for the other kinds it is only the tooltip.
 export type FollowUp = { label: string; kind: PillKind; path?: string; send: string };
 
 function fromCard(d: CardData): FollowUp[] {
@@ -14,7 +16,7 @@ function fromCard(d: CardData): FollowUp[] {
     const scope = d.under ?? top?.path;
     const out: FollowUp[] = [];
     if (top) out.push({ label: `What's inside ${fileName(top.path)} (${humanBytes(top.size)})?`, kind: "ask", path: top.path, send: `What's inside ${top.path}?` });
-    if (scope) out.push({ label: `Clean up ${scope.length > 24 ? fileName(scope) : scope}`, kind: "clean_up", path: scope, send: cleanUpIn(scope) });
+    if (scope) out.push({ label: `Clean up ${scope.length > 24 ? fileName(scope) : scope}`, kind: "clean_up", path: scope, send: cleanUpTitle(scope) });
     return out;
   }
   if (d.kind === "files") {
@@ -26,6 +28,14 @@ function fromCard(d: CardData): FollowUp[] {
     .filter((c) => !grew.some((o) => o !== c && isUnder(o.path, c.path)))
     .sort((a, b) => b.delta - a.delta)[0];
   return top ? [{ label: `Why did ${fileName(top.path)} grow (+${humanBytes(top.delta)})?`, kind: "ask", path: top.path, send: `What is ${top.path} and why did it grow?` }] : [];
+}
+
+function sendFor(kind: PillKind, label: string, path: string | undefined): string {
+  if (!path) return label;
+  if (kind === "clean_up") return cleanUpTitle(path);
+  if (kind === "explore") return `Open ${path} in Explore`;
+  if (kind === "what_is") return `Say what ${path} is`;
+  return label;
 }
 
 // The model's own suggestions lead; pills built from the turn's cards only fill what is left.
@@ -41,8 +51,9 @@ export function followUps(turn: ToolData[], can: { explore?: boolean } = {}): Fo
   for (const d of turn) {
     if (d.kind !== "pills") continue;
     for (const p of d.items) {
-      if (p.kind === "explore" && !(can.explore && p.path)) continue;
-      add({ ...p, send: p.kind === "clean_up" && p.path ? cleanUpIn(p.path) : p.kind === "explore" ? `Open ${p.path} in Explore` : p.label });
+      if (p.kind !== "ask" && !p.path) continue;
+      if (p.kind === "explore" && !can.explore) continue;
+      add({ ...p, send: sendFor(p.kind, p.label, p.path) });
     }
   }
   for (const d of turn) if (isCardData(d)) fromCard(d).forEach(add);
@@ -51,11 +62,19 @@ export function followUps(turn: ToolData[], can: { explore?: boolean } = {}): Fo
 
 export function FollowUps({ items, onAsk, disabled }: { items: FollowUp[]; onAsk: (text: string) => void; disabled?: boolean }) {
   const { onOpenExplore } = useExploreLink();
+  const cleanUp = useReview((s) => s.cleanUp);
+  const showWhatIs = useReview((s) => s.showWhatIs);
   if (items.length === 0) return null;
+  const run = (p: FollowUp) => {
+    if (p.kind === "explore" && p.path) onOpenExplore?.(p.path);
+    else if (p.kind === "clean_up" && p.path) void cleanUp(p.path);
+    else if (p.kind === "what_is" && p.path) showWhatIs(p.path);
+    else onAsk(p.send);
+  };
   return (
     <div className="fade-up flex flex-wrap gap-2" role="group" aria-label="Suggested next steps">
       {items.map((p) => (
-        <button key={`${p.kind}|${p.path ?? p.label}`} type="button" className={`${starter} disabled:opacity-40`} title={p.send} disabled={disabled} onClick={() => (p.kind === "explore" && p.path ? onOpenExplore?.(p.path) : onAsk(p.send))}>
+        <button key={`${p.kind}|${p.path ?? p.label}`} type="button" className={`${starter} disabled:opacity-40`} title={p.send} disabled={disabled} onClick={() => run(p)}>
           {p.label}
         </button>
       ))}
