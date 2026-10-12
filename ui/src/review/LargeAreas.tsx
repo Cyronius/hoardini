@@ -13,7 +13,10 @@ const ANSWERS: { a: LocationAnswer; label: string; title: string }[] = [
   { a: "move-elsewhere", label: "Move elsewhere", title: "Keep it, but on another drive: the next review may propose sending it to a destination" },
 ];
 
-const lookCloserText = (path: string) => `What is ${path}? Look inside and tell me whether to keep it, delete it, or move it elsewhere.`;
+// The server's wording for the no-destination hint (REVIEW-AREAS); only this one hint has somewhere to go.
+const ADD_DESTINATION = "Add a destination";
+
+const lookCloserText =(path: string) => `What is ${path}? Look inside and tell me whether to keep it, delete it, or move it elsewhere.`;
 
 // Areas carry no kind; a name with a known file extension has nothing inside to list.
 const FILE_RE = /\.(sys|vhdx?|vmdk|vdi|qcow2|img|iso|dmp|gguf|safetensors|onnx|bin|pt|ckpt|q4nx|zip|7z|rar|tar|gz|zst|cab|wim|esd|msi|exe|pack|pst|ost|mp4|mkv|mov|db|sqlite|log|etl)$/i;
@@ -106,6 +109,7 @@ export function WhatIsButtons({ path, onAnswered }: { path: string; onAnswered?:
 function AreaRow({ area, max }: { area: ReviewArea; max: number }) {
   const [open, setOpen] = useState(false);
   const askChat = useStore((s) => s.askChat);
+  const openDrawer = useStore((s) => s.openDrawer);
   const cleanUp = useReview((s) => s.cleanUp);
   const name = fileName(area.path) || area.path;
   const file = looksLikeFile(area.path);
@@ -160,7 +164,14 @@ function AreaRow({ area, max }: { area: ReviewArea; max: number }) {
           </div>
           <p className="text-[length:var(--fs-sm)] text-paper-dim">
             {area.why_not}
-            {area.hint && <span className="ml-1.5 font-semibold text-info">→ {area.hint}</span>}
+            {area.hint &&
+              (area.hint.startsWith(ADD_DESTINATION) ? (
+                <button type="button" className="ml-1.5 font-semibold text-info underline underline-offset-2 hover:no-underline" onClick={() => openDrawer("destinations")}>
+                  → {area.hint}
+                </button>
+              ) : (
+                <span className="ml-1.5 font-semibold text-info">→ {area.hint}</span>
+              ))}
           </p>
           {onlyCopy && (
             <p className="text-[length:var(--fs-xs)] text-muted">
@@ -196,7 +207,8 @@ export function LargeAreas({ areas, scope }: { areas: ReviewArea[]; scope: strin
     <section aria-label="Large areas" className="@container">
       <SectionHead title="Large areas" count={areas.length}>
         Big things in {scope} that Hoardini does not propose, and why.
-        {unknown > 0 && ` ${unknown} ${unknown === 1 ? "is" : "are"} not identified yet: say what ${unknown === 1 ? "it is" : "they are"}.`}
+        {unknown > 0 &&
+          ` ${unknown} ${unknown === 1 ? "is" : "are"} not identified yet. Choose Keep, Disposable or Move elsewhere for ${unknown === 1 ? "it" : "each"}, or press Look closer to have the AI look inside first.`}
       </SectionHead>
       <ul className="divide-y divide-line-soft rounded-2xl border border-line bg-ink-850 px-3">
         {shown.map((a) => (

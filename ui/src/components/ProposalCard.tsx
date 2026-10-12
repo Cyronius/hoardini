@@ -11,8 +11,11 @@ const VERDICT_LABEL: Record<Verdict, string> = {
   safe: "safe",
   redownload: "re-download",
   synced: "synced",
-  review: "review",
+  review: "your call",
   keep: "keep",
+};
+const VERDICT_TITLE: Partial<Record<Verdict, string>> = {
+  review: "Not ticked for you. Look it over and tick it if you want it included.",
 };
 const VERDICT_STYLE: Record<Verdict, string> = {
   safe: "bg-ok/15 text-ok border-ok/30",
@@ -23,6 +26,23 @@ const VERDICT_STYLE: Record<Verdict, string> = {
 };
 
 const HOLD_MS = 1200;
+
+const ALREADY: Record<string, string> = {
+  approved: "Already approved. It is running in the background.",
+  running: "Already approved. It is running in the background.",
+  done: "Already finished.",
+  partial: "Already finished, with some items skipped or failed.",
+  failed: "Already ran, and failed.",
+  declined: "Already declined.",
+  superseded: "Replaced by a newer review.",
+};
+
+// The server answers a second approve with "proposal <id> is <status>, not pending".
+function approveError(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  const m = /is (\w+), not pending/.exec(msg);
+  return (m && ALREADY[m[1]]) || msg;
+}
 
 export function HoldButton({ label, onConfirm, disabled }: { label: string; onConfirm: () => void; disabled?: boolean }) {
   const [progress, setProgress] = useState(0);
@@ -134,7 +154,7 @@ function ItemRow({
             <span className="ml-auto shrink-0 tabular-nums text-muted">{humanBytes(item.alloc)}</span>
             {item.small && <span className="shrink-0 rounded-full border border-line px-2 py-px text-[length:var(--fs-xs)] text-faint">small</span>}
             {verdict && (
-              <span className={`shrink-0 rounded-full border px-2 py-px text-[length:var(--fs-xs)] font-bold ${VERDICT_STYLE[verdict]}`}>
+              <span title={VERDICT_TITLE[verdict]} className={`shrink-0 rounded-full border px-2 py-px text-[length:var(--fs-xs)] font-bold ${VERDICT_STYLE[verdict]}`}>
                 {VERDICT_LABEL[verdict]}
               </span>
             )}
@@ -369,7 +389,8 @@ function ProposalBody({ proposalId, title, note }: { proposalId: string; title?:
       void loadProposal(proposalId);
       if (!proposal.parent_id && !proposal.review_id) settle(proposalId, res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(approveError(e));
+      void loadProposal(proposalId);
     } finally {
       setBusy(false);
     }
@@ -546,6 +567,11 @@ function ProposalBody({ proposalId, title, note }: { proposalId: string; title?:
       )}
 
       {running && (job ? <JobProgress job={job} /> : <div className="mt-2 text-[length:var(--fs-sm)] text-muted pulse-soft">Working...</div>)}
+      {running && (proposal.format === "lzx" || proposal.format === "lznt1") && (
+        <div className="mt-1 text-[length:var(--fs-xs)] text-muted">
+          Approved. Windows is compressing this in the background. The bar moves when each item finishes, so it can sit at 0 for a long while.
+        </div>
+      )}
       {outcome && <div className={`mt-2 text-[length:var(--fs-sm)] font-semibold ${outcome.tone}`}>{outcome.text}</div>}
       {error && <div className="mt-2 text-[length:var(--fs-sm)] text-err">{error}</div>}
       </div>

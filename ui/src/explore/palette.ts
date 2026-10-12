@@ -22,7 +22,7 @@ export type ExplorePalette = {
 export const STATES: TagState[] = ["proposed", "review", "keep", "system", "user", "unknown"];
 export const STATE_LABEL: Record<TagState, string> = {
   proposed: "Proposed",
-  review: "Review",
+  review: "Your call",
   keep: "Keep",
   system: "System",
   user: "Your data",

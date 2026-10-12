@@ -141,22 +141,24 @@ const settings: T.Settings = {
 };
 let onlineWaiting = 4;
 
-type Thread = { updated_ms: number; messages: ({ id: string } & Record<string, unknown>)[]; proposals: Record<string, T.Proposal>; windowStart: number };
-const thread: Thread = { updated_ms: 0, messages: [], proposals: {}, windowStart: 0 };
+type Thread = { updated_ms: number; messages: ({ id: string } & Record<string, unknown>)[]; proposals: Record<string, T.Proposal>; windowStart: number; screenStart: number };
+const thread: Thread = { updated_ms: 0, messages: [], proposals: {}, windowStart: 0, screenStart: 0 };
 const SESSION_GAP_MS = 6 * 3_600_000;
 const proposals = new Map<string, T.Proposal>();
 const cancelled = new Set<string>();
 
-function threadDetail() {
+function threadDetail(all = false) {
   const last = thread.messages.length ? thread.updated_ms : null;
   const start = thread.messages[thread.windowStart]?.id ?? null;
   return {
     id: "main",
-    messages: thread.messages,
+    messages: all ? thread.messages : thread.messages.slice(thread.screenStart),
     proposals: thread.proposals,
     window_start_id: start,
     has_hidden: thread.windowStart > 0,
     fresh: last == null || now() - last > SESSION_GAP_MS || start == null,
+    earlier: thread.screenStart,
+    showing_all: all,
   };
 }
 
@@ -1474,15 +1476,17 @@ async function route(req: Request): Promise<Response> {
     case "thread":
       if (seg[1] === "fresh" && method === "POST") {
         thread.windowStart = thread.messages.length;
+        thread.screenStart = thread.messages.length;
         return json({ ok: true });
       }
       if (method === "DELETE") {
         if (status.running_runs > 0) return err("a chat run is in progress; stop it first", 409);
         thread.messages = [];
         thread.windowStart = 0;
+        thread.screenStart = 0;
         return json({ ok: true });
       }
-      return json(threadDetail());
+      return json(threadDetail(url.searchParams.get("all") === "1"));
     case "proposals": {
       const p = proposals.get(seg[1]!);
       if (!p) return err("proposal not found", 404);

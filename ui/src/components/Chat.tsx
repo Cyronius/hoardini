@@ -417,7 +417,7 @@ function Chat({ limits }: { limits: { stallMs: number; maxSteps: number } }) {
           <IconButton
             title="Clear the chat: Hoardini starts fresh, and earlier messages stay saved"
             aria-label="Clear chat"
-            className="!h-11 !w-11 !rounded-full text-muted hover:text-paper"
+            className="!h-11 !w-11 !rounded-full bg-brass text-on-accent hover:!bg-brass hover:opacity-90"
             disabled={isStreaming || !connected}
             onClick={() => void clearScreen().catch(() => {})}
           >
