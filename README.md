@@ -20,7 +20,7 @@ cd ui; bun run build; cd ..
 cargo run -p hoardini-app
 ```
 
-The same thing is in [start.ps1](start.ps1) if you have it locally. `cargo build` builds the default members (`win`, `core`, `agent`, `server`, `cli`) without the desktop shell.
+`cargo build` builds the default members (`win`, `core`, `agent`, `server`, `cli`) without the desktop shell.
 
 ### CLI
 
