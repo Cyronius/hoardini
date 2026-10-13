@@ -7,6 +7,7 @@ import { ExploreLinkContext } from "../explore/context";
 import { ExploreView } from "../explore/ExploreView";
 import { humanBytes } from "../format";
 import { ReviewView, useDriveReady } from "../review/ReviewView";
+import { lookCloserText } from "../review/LargeAreas";
 import { useReview } from "../review/state";
 import { useStore, type HomeTab } from "../store";
 import { CHAT_DEFAULT_PX, CHAT_MIN_PX, chatWidthFor, isWide } from "./layout";
@@ -215,11 +216,12 @@ export function Shell() {
   const exploreAt = useStore((s) => s.exploreAt);
   const openExplore = useStore((s) => s.openExplore);
   const askChat = useStore((s) => s.askChat);
+  const chatBusy = useStore((s) => s.chatBusy);
   const [live, setLive] = useState<number | null>(null);
 
   const link = useMemo(() => ({ onOpenExplore: openExplore }), [openExplore]);
   const onCleanUp = useCallback((path: string) => void useReview.getState().cleanUp(path), []);
-  const onWhatIsThis = useCallback((path: string) => useReview.getState().showWhatIs(path), []);
+  const onWhatIsThis = useCallback((path: string) => askChat(lookCloserText(path), path), [askChat]);
   const onAsk = useCallback((text: string) => askChat(text), [askChat]);
 
   const panel = live ?? chatWidthFor(width, want);
@@ -239,7 +241,7 @@ export function Shell() {
             {home === "explore" && root && (
               <HomeBoundary name="Explore">
                 <div className="flex min-h-0 flex-1 flex-col">
-                  <ExploreView key={exploreAt?.n ?? 0} root={root} focus={exploreAt?.path} onAsk={onAsk} onCleanUp={onCleanUp} onWhatIsThis={onWhatIsThis} />
+                  <ExploreView key={exploreAt?.n ?? 0} root={root} focus={exploreAt?.path} chatBusy={chatBusy} onAsk={onAsk} onCleanUp={onCleanUp} onWhatIsThis={onWhatIsThis} />
                 </div>
               </HomeBoundary>
             )}

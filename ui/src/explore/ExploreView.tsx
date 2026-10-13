@@ -3,7 +3,7 @@ import { ApiError, routes } from "../api/client";
 import type { ChildRow, IndexMap, MapNode, MapTag, More, TypeRow } from "../api/types";
 import { ItemTree, RevealButton, SizeBar, actionBtn } from "../components/ItemTree";
 import { digits, humanBytes, isRootFolder, samePath } from "../format";
-import { STATES, STATE_LABEL, TYPE_SLOTS, useExplorePalette, type ExplorePalette, type Swatch } from "./palette";
+import { STATES, STATE_LABEL, useExplorePalette, type ExplorePalette, type Swatch } from "./palette";
 import { TreemapCanvas, type BlockLabel } from "./TreemapCanvas";
 
 export type ExploreViewProps = {
@@ -11,17 +11,16 @@ export type ExploreViewProps = {
   onAsk(text: string): void;
   onCleanUp(path: string): void;
   onWhatIsThis?(path: string): void;
+  chatBusy?: boolean;
   focus?: string;
 };
 
 type Kind = MapNode["kind"] | "more";
 type VNode = { key: string; size: number; kind: Kind; node: MapNode; more?: More; children?: VNode[]; parent: VNode | null };
 type Selection = { key: string; path: string; name: string; kind: Kind; size: number; files: number; ext?: string; tag?: MapTag; more?: More };
-type ColorMode = "knowledge" | "type";
 
 const FOCUS_DEBOUNCE_MS = 600;
 const CANVAS_STEP = 64;
-const MODE_KEY = "hoardini.explore.color";
 const SMALL = "*small";
 
 const lower = (p: string) => p.replace(/\\+$/, "").toLowerCase();
@@ -56,22 +55,6 @@ function selectionOf(v: VNode): Selection {
   const n = v.node;
   if (v.kind === "more") return { key: v.key, path: n.path, name: `${digits(v.more!.count)} more`, kind: "more", size: v.size, files: v.more!.count, tag: n.tag, more: v.more };
   return { key: v.key, path: n.path, name: v.kind === "small" ? "small files" : n.name, kind: v.kind, size: v.size, files: n.files, ext: n.ext, tag: n.tag };
-}
-
-function readMode(): ColorMode {
-  try {
-    return localStorage.getItem(MODE_KEY) === "type" ? "type" : "knowledge";
-  } catch {
-    return "knowledge";
-  }
-}
-
-function saveMode(m: ColorMode) {
-  try {
-    localStorage.setItem(MODE_KEY, m);
-  } catch {
-    // storage disabled; the choice lasts for this view only
-  }
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -125,16 +108,14 @@ const btn =
 const primary =
   "inline-flex items-center whitespace-nowrap rounded-full bg-brass px-2.5 py-0.5 text-[length:var(--fs-xs)] font-bold text-on-accent hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brass";
 
-export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: ExploreViewProps) {
+export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, chatBusy, focus }: ExploreViewProps) {
   const { palette, font } = useExplorePalette();
   const [view, setView] = useState(focus ?? root);
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   const [data, setData] = useState<{ map?: IndexMap; err?: string; loading: boolean }>({ loading: true });
   const [selected, setSelected] = useState<Selection | null>(null);
-  const [mode, setMode] = useState<ColorMode>(readMode);
   const [typeSel, setTypeSel] = useState<string | null>(null);
   const [types, setTypes] = useState<{ path: string; rows?: TypeRow[]; err?: string } | null>(null);
-  const [rootTypes, setRootTypes] = useState<TypeRow[]>([]);
   const want = useRef<string | null>(focus ?? null);
   const [retry, setRetry] = useState(0);
 
@@ -175,17 +156,6 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
       live = false;
     };
   }, [view, dims, retry]);
-
-  useEffect(() => {
-    let live = true;
-    routes
-      .types(root)
-      .then((rows) => live && setRootTypes(rows))
-      .catch(() => live && setRootTypes([]));
-    return () => {
-      live = false;
-    };
-  }, [root]);
 
   const map = data.map;
   // Types follow the folder the map resolved to, so a file focus never asks for a file's types.
@@ -247,28 +217,8 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
     setDims((d) => (d && d.w === step(w) && d.h === step(h) ? d : { w: step(w), h: step(h) }));
   }, []);
 
-  const slots = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const t of rootTypes) {
-      if (m.size >= TYPE_SLOTS) break;
-      if (t.ext != null && !t.small && !t.other) m.set(t.ext, m.size);
-    }
-    return m;
-  }, [rootTypes]);
-  const typeSwatch = useCallback((ext: string | null | undefined): Swatch => {
-    const i = ext == null ? undefined : slots.get(ext);
-    return i == null ? palette.other : palette.types[i]!;
-  }, [slots, palette]);
-
-  const paint = useCallback(
-    (v: VNode): Swatch => {
-      if (v.kind === "more") return palette.more;
-      if (mode === "type") return v.kind === "file" ? typeSwatch(v.node.ext) : v.kind === "small" ? palette.more : palette.other;
-      return palette.states[v.node.tag.state];
-    },
-    [palette, mode, typeSwatch],
-  );
-  const frame = useCallback((v: VNode): Swatch => (mode === "type" ? palette.frame : palette.frames[v.node.tag.state]), [palette, mode]);
+  const paint = useCallback((v: VNode): Swatch => (v.kind === "more" ? palette.more : palette.states[v.node.tag.state]), [palette]);
+  const frame = useCallback((v: VNode): Swatch => palette.frames[v.node.tag.state], [palette]);
   const label = useCallback((v: VNode): BlockLabel => {
     if (v.kind === "more") return { name: `${digits(v.more!.count)} more`, size: humanBytes(v.size) };
     return { name: v.kind === "small" ? "small files" : v.node.name, size: humanBytes(v.size) };
@@ -350,11 +300,6 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
     [index, tagOf],
   );
 
-  const setColor = (m: ColorMode) => {
-    setMode(m);
-    saveMode(m);
-  };
-
   const crumbs = map ? [...map.ancestors, { path: map.tree.path, name: map.tree.name }] : [];
   const trail = useMemo(() => {
     const out: string[] = [];
@@ -390,55 +335,7 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
             </span>
           ))}
         </nav>
-        <div
-          role="radiogroup"
-          aria-label="Color blocks by"
-          className="flex rounded-full border border-line bg-ink-850 p-0.5 text-[length:var(--fs-xs)] font-bold"
-          onKeyDown={(e) => {
-            if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
-            e.preventDefault();
-            const to = mode === "knowledge" ? "type" : "knowledge";
-            setColor(to);
-            (e.currentTarget.querySelector(`[data-mode="${to}"]`) as HTMLElement | null)?.focus();
-          }}
-        >
-          {(["knowledge", "type"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              role="radio"
-              data-mode={m}
-              tabIndex={mode === m ? 0 : -1}
-              aria-checked={mode === m}
-              className={`rounded-full px-2.5 py-0.5 ${mode === m ? "bg-brass text-on-accent" : "text-muted hover:text-paper"}`}
-              onClick={() => setColor(m)}
-            >
-              {m === "knowledge" ? "What Hoardini knows" : "File type"}
-            </button>
-          ))}
-        </div>
       </header>
-
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[length:var(--fs-xs)] text-muted">
-        {mode === "knowledge"
-          ? STATES.map((s) => (
-              <Chip key={s} swatch={palette.states[s]}>
-                {STATE_LABEL[s]}
-              </Chip>
-            ))
-          : [...slots.entries()].map(([ext, i]) => (
-              <Chip key={ext} swatch={palette.types[i]!}>
-                .{ext || "(none)"}
-              </Chip>
-            ))}
-        {mode === "type" && <Chip swatch={palette.other}>other</Chip>}
-        <Chip swatch={palette.more}>merged</Chip>
-        {map && (
-          <span className="ml-auto tabular-nums text-faint">
-            {humanBytes(map.tree.size)} · {map.capped ? `the ${digits(map.nodes)} biggest blocks` : `${digits(map.nodes)} blocks`}, smaller than {humanBytes(map.min_bytes)} merged
-          </span>
-        )}
-      </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-line bg-ink-850 px-3 py-2" aria-live="polite">
         {sel ? (
@@ -466,7 +363,7 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
                 </button>
               )}
               {onWhatIsThis && sel.kind !== "more" && sel.kind !== "small" && !isRootFolder(sel.path) && (
-                <button type="button" className={btn} onClick={() => onWhatIsThis(sel.path)}>
+                <button type="button" className={btn} disabled={chatBusy} title="Hoardini looks inside with the AI and answers in the chat" onClick={() => onWhatIsThis(sel.path)}>
                   What is this?
                 </button>
               )}
@@ -493,7 +390,20 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 @3xl:grid-cols-[minmax(0,1fr)_17rem] @3xl:grid-rows-[minmax(6rem,32%)_minmax(0,1fr)]">
-        <section aria-label="Treemap" className="relative order-1 h-[22rem] min-h-0 rounded-xl border border-line bg-ink-900 p-1 @3xl:order-none @3xl:col-start-1 @3xl:row-start-2 @3xl:h-auto">
+        <section aria-label="Treemap" className="relative order-1 flex h-[26rem] min-h-0 flex-col rounded-xl border border-line bg-ink-900 p-1 @3xl:order-none @3xl:col-start-1 @3xl:row-start-2 @3xl:h-auto">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1.5 pb-1 pt-0.5 text-[length:var(--fs-xs)] text-muted">
+            {STATES.map((s) => (
+              <Chip key={s} swatch={palette.states[s]}>
+                {STATE_LABEL[s]}
+              </Chip>
+            ))}
+            <Chip swatch={palette.more}>merged</Chip>
+            {map && (
+              <span className="ml-auto tabular-nums text-faint">
+                {humanBytes(map.tree.size)} · {map.capped ? `the ${digits(map.nodes)} biggest blocks` : `${digits(map.nodes)} blocks`}, smaller than {humanBytes(map.min_bytes)} merged
+              </span>
+            )}
+          </div>
           <TreemapCanvas
             root={vroot}
             kids={kidsOf}
@@ -513,7 +423,7 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
             onResize={onResize}
             tooltip={tooltip}
             ariaLabel={`Treemap of ${view}: click a block to select it, double-click or Enter to zoom in, Backspace to zoom out, arrow keys to move between neighbors.`}
-            className="h-full w-full"
+            className="min-h-0 w-full flex-1"
           />
           {data.loading && (
             <div className="pointer-events-none absolute inset-0 grid place-items-center">
@@ -571,7 +481,6 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
               const on = k != null && typeSel === k;
               const current = k != null && selType === k;
               const id = typeIdentity(t);
-              const sw = t.small ? palette.more : typeSwatch(t.ext);
               return (
                 <li key={`${t.ext}|${t.small ? "s" : t.other ? "o" : ""}`}>
                   <div
@@ -586,11 +495,10 @@ export function ExploreView({ root, onAsk, onCleanUp, onWhatIsThis, focus }: Exp
                       title={k == null ? undefined : on ? "Show every block again" : `Highlight ${typeName(t)} in the map`}
                       onClick={() => setTypeSel(on ? null : k)}
                     >
-                      <SwatchBox swatch={sw} />
                       <span className="min-w-0 flex-1 truncate font-mono text-[length:var(--fs-xs)] font-bold text-paper">{typeName(t)}</span>
                       <span className="shrink-0 tabular-nums text-paper">{humanBytes(t.bytes)}</span>
                     </button>
-                    <div className="mt-0.5 flex items-center gap-2 pl-[18px]">
+                    <div className="mt-0.5 flex items-center gap-2">
                       <span className="min-w-0 flex-1 truncate text-[length:var(--fs-xs)] text-faint" title={id ?? undefined}>
                         {id ?? `${digits(t.files)} files`}
                       </span>

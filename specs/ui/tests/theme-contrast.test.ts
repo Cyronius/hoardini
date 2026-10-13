@@ -35,7 +35,7 @@ describe("UI-THEME-CONTRAST", () => {
   for (const t of THEMES) {
     it(`${t.id} labels every Explore block at 4.5:1`, () => {
       const p = explorePalette(t.tokens);
-      const swatches = [...STATES.map((s) => p.states[s]), ...STATES.map((s) => p.frames[s]), ...p.types, p.other, p.more, p.plain, p.frame];
+      const swatches = [...STATES.map((s) => p.states[s]), ...STATES.map((s) => p.frames[s]), p.more, p.plain, p.frame];
       for (const s of swatches) expect(contrast(s.ink, s.fill)).toBeGreaterThanOrEqual(4.5);
       expect(p.dark).toBe(t.mode === "dark");
     });

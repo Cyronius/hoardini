@@ -13,8 +13,6 @@ export type ExplorePalette = {
   frame: Swatch;
   states: Record<TagState, Swatch>;
   frames: Record<TagState, Swatch>;
-  types: Swatch[];
-  other: Swatch;
   more: Swatch;
   plain: Swatch;
 };
@@ -28,11 +26,6 @@ export const STATE_LABEL: Record<TagState, string> = {
   user: "Your data",
   unknown: "Unknown",
 };
-
-// Slot order keeps neighboring colors apart for color-blind readers (dataviz palette); do not reorder.
-const TYPE_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
-const TYPE_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
-export const TYPE_SLOTS = TYPE_LIGHT.length;
 
 function rgb(hex: string): [number, number, number] | null {
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
@@ -80,7 +73,6 @@ export function explorePalette(t: ThemeTokens): ExplorePalette {
     states[s] = s === "unknown" ? sw(fill, { pattern: "stripes", mark: mix(t.faint, fill, 0.5) }) : sw(fill);
     frames[s] = sw(mix(s === "unknown" ? t.faint : base[s], t.bg2, 0.22));
   }
-  const types = (dark ? TYPE_DARK : TYPE_LIGHT).map((c) => sw(mix(c, surface, 0.85)));
   const more = t.bg2;
   return {
     dark,
@@ -90,8 +82,6 @@ export function explorePalette(t: ThemeTokens): ExplorePalette {
     frame: sw(t.bg2),
     states,
     frames,
-    types,
-    other: sw(mix(t.faint, surface, 0.4)),
     more: sw(more, { pattern: "dots", mark: mix(t.faint, more, 0.6) }),
     plain: sw(mix(t.accent, surface, 0.3)),
   };

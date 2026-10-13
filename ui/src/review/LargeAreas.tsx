@@ -16,7 +16,7 @@ const ANSWERS: { a: LocationAnswer; label: string; title: string }[] = [
 // The server's wording for the no-destination hint (REVIEW-AREAS); only this one hint has somewhere to go.
 const ADD_DESTINATION = "Add a destination";
 
-const lookCloserText =(path: string) => `What is ${path}? Look inside and tell me whether to keep it, delete it, or move it elsewhere.`;
+export const lookCloserText = (path: string) => `What is ${path}? Look inside and tell me whether to keep it, delete it, or move it elsewhere.`;
 
 // Areas carry no kind; a name with a known file extension has nothing inside to list.
 const FILE_RE = /\.(sys|vhdx?|vmdk|vdi|qcow2|img|iso|dmp|gguf|safetensors|onnx|bin|pt|ckpt|q4nx|zip|7z|rar|tar|gz|zst|cab|wim|esd|msi|exe|pack|pst|ost|mp4|mkv|mov|db|sqlite|log|etl)$/i;
