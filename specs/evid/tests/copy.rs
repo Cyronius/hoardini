@@ -691,6 +691,7 @@ fn online_checks_wait_for_consent_and_never_send_local_hashes() {
         "offline checks still run"
     );
     let conn = fx.db.conn().unwrap();
+    copycheck::consent::save(&conn, &OnlineConsent::default()).unwrap();
     assert!(
         !copycheck::only_copy(&conn, &s(&f)),
         "waiting on consent is not 'only copy'"

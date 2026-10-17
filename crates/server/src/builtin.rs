@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use futures::future::BoxFuture;
 use hoardini_agent::provider::ProviderConfig;
 use hoardini_core::actions::{Job, JobProgress};
-use hoardini_core::runtime::{self, LLAMA_SERVER, MODELS, Pinned};
+use hoardini_core::runtime::{self, LLAMA_SERVER, LLAMA_SERVER_VULKAN, MODELS, Pinned};
 use hoardini_core::store::{get_meta, now_ms, set_meta};
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -20,8 +20,10 @@ pub const PROVIDER_ID: &str = "builtin";
 pub const BASE_PLACEHOLDER: &str = "builtin://llama-server/v1";
 // The longest eval prompt was ~2.7k tokens plus 1024 output; 8k keeps 3x headroom and halves KV RAM.
 pub const CONTEXT: u32 = 8_192;
-// Decided by the M6 eval (.claude/plans/m6-eval-results.md); None keeps the built-in option hidden.
-pub const RECOMMENDED: Option<&str> = None;
+// The sweep in .claude/plans/local-model-sweep-results.md picked Qwen3.5 9B (GPU) and Granite 4.1 3B (any PC); Granite is the default.
+pub const RECOMMENDED: Option<&str> = Some("granite-4.1-3b");
+// A model id of this form is a GGUF the user pointed at; nothing about it is pinned.
+pub const CUSTOM_PREFIX: &str = "file:";
 const MODEL_META: &str = "builtin_model";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 pub const WATCHDOG_TICK: Duration = Duration::from_secs(15);
@@ -29,16 +31,14 @@ pub const WATCHDOG_TICK: Duration = Duration::from_secs(15);
 pub struct ModelInfo {
     pub name: &'static str,
     pub license: &'static str,
+    pub needs_gpu: bool,
 }
 
 pub fn model_info(id: &str) -> ModelInfo {
-    let (name, license) = match id {
-        "lfm2.5-1.2b-instruct" => ("LFM2.5 1.2B Instruct", "LFM Open License v1.0"),
-        "lfm2.5-2.6b" => ("LFM2.5 2.6B", "LFM Open License v1.0"),
-        "qwen3-4b-instruct-2507" => ("Qwen3 4B Instruct 2507", "Apache-2.0"),
-        "granite-4.0-micro" => ("Granite 4.0 Micro", "Apache-2.0"),
-        "minicpm5-2b" => ("MiniCPM5 2B", "Apache-2.0"),
-        _ => ("", ""),
+    let (name, license, needs_gpu) = match id {
+        "qwen3.5-9b" => ("Qwen3.5 9B", "Apache-2.0", true),
+        "granite-4.1-3b" => ("Granite 4.1 3B", "Apache-2.0", false),
+        _ => ("", "", false),
     };
     ModelInfo {
         name: if name.is_empty() {
@@ -51,6 +51,31 @@ pub fn model_info(id: &str) -> ModelInfo {
         } else {
             license
         },
+        needs_gpu,
+    }
+}
+
+pub fn custom_path(id: &str) -> Option<PathBuf> {
+    id.strip_prefix(CUSTOM_PREFIX).map(PathBuf::from)
+}
+
+pub fn needs_gpu(id: &str) -> bool {
+    custom_path(id).is_some() || model_info(id).needs_gpu
+}
+
+// The Vulkan build also carries the CPU backends, so a user's own file runs on it with or without a GPU.
+pub fn runtime_for(id: &str) -> &'static Pinned {
+    if needs_gpu(id) {
+        &LLAMA_SERVER_VULKAN
+    } else {
+        &LLAMA_SERVER
+    }
+}
+
+fn model_ready(id: &str, root: &Path) -> bool {
+    match custom_path(id) {
+        Some(p) => p.is_file(),
+        None => model_pin(id).is_some_and(|p| runtime::is_installed(p, root)),
     }
 }
 
@@ -83,10 +108,11 @@ pub struct LaunchSpec {
     pub port: u16,
     pub threads: usize,
     pub ctx: u32,
+    pub gpu: bool,
 }
 
 pub fn args(spec: &LaunchSpec) -> Vec<String> {
-    [
+    let mut a: Vec<String> = [
         "-m",
         &spec.model.to_string_lossy(),
         "--host",
@@ -103,18 +129,26 @@ pub fn args(spec: &LaunchSpec) -> Vec<String> {
         "1",
         "--cache-ram",
         "0",
-        "--cache-type-k",
-        "q8_0",
-        "--cache-type-v",
-        "q8_0",
-        "-ngl",
-        "0",
-        "-a",
-        &spec.model_id,
     ]
     .iter()
     .map(|s| s.to_string())
-    .collect()
+    .collect();
+    // The CPU runs were measured with a q8_0 KV cache; the GPU runs were measured with llama.cpp's default.
+    let backend: &[&str] = if spec.gpu {
+        &["-ngl", "99"]
+    } else {
+        &[
+            "--cache-type-k",
+            "q8_0",
+            "--cache-type-v",
+            "q8_0",
+            "-ngl",
+            "0",
+        ]
+    };
+    a.extend(backend.iter().map(|s| s.to_string()));
+    a.extend(["-a".to_string(), spec.model_id.clone()]);
+    a
 }
 
 pub trait ChildProc: Send {
@@ -190,12 +224,25 @@ fn spawn_llama(root: &Path, model_id: &str, ctx: u32) -> Result<Launched> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const NORMAL_PRIORITY_CLASS: u32 = 0x0000_0020;
-    let pin = model_pin(model_id).with_context(|| format!("{model_id} is not a built-in model"))?;
-    let exe = runtime::entry_path(&LLAMA_SERVER, root);
-    let model = runtime::entry_path(pin, root);
-    // Every launch re-checks both files against the pins (RUNTIME-PINNED-HASH).
-    runtime::verify_before_run(&exe, &LLAMA_SERVER)?;
-    runtime::verify_before_run(&model, pin)?;
+    let rt = runtime_for(model_id);
+    let exe = runtime::entry_path(rt, root);
+    // Every launch re-checks the runtime and a pinned model against the pins (RUNTIME-PINNED-HASH); a user's own file has no pin.
+    runtime::verify_before_run(&exe, rt)?;
+    let model = match custom_path(model_id) {
+        Some(path) => {
+            if !path.is_file() {
+                bail!("{} is not a file", path.display());
+            }
+            path
+        }
+        None => {
+            let pin = model_pin(model_id)
+                .with_context(|| format!("{model_id} is not a built-in model"))?;
+            let model = runtime::entry_path(pin, root);
+            runtime::verify_before_run(&model, pin)?;
+            model
+        }
+    };
     let spec = LaunchSpec {
         exe,
         model,
@@ -203,6 +250,7 @@ fn spawn_llama(root: &Path, model_id: &str, ctx: u32) -> Result<Launched> {
         port: free_port()?,
         threads: threads(),
         ctx,
+        gpu: needs_gpu(model_id),
     };
     let log = log_path(root);
     if let Some(dir) = log.parent() {
@@ -232,6 +280,7 @@ fn spawn_llama(root: &Path, model_id: &str, ctx: u32) -> Result<Launched> {
         model = model_id,
         port = spec.port,
         threads = spec.threads,
+        gpu = spec.gpu,
         "llama-server started"
     );
     Ok(Launched {
@@ -551,13 +600,25 @@ pub fn free_bytes(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-fn chosen_model(conn: &rusqlite::Connection, root: &Path) -> Option<&'static Pinned> {
+fn chosen_model(conn: &rusqlite::Connection, root: &Path) -> Option<String> {
     let wanted = get_meta(conn, MODEL_META).ok().flatten();
-    let installed = |p: &&'static Pinned| runtime::is_installed(p, root);
-    wanted
-        .and_then(|w| model_pin(&w))
-        .filter(installed)
-        .or_else(|| MODELS.iter().find(installed))
+    wanted.filter(|w| model_ready(w, root)).or_else(|| {
+        MODELS
+            .iter()
+            .find(|p| runtime::is_installed(p, root))
+            .map(|p| p.id.to_string())
+    })
+}
+
+fn runtime_json(p: &Pinned, root: &Path) -> Value {
+    json!({
+        "id": p.id,
+        "version": p.version,
+        "size": p.size,
+        "installed": runtime::is_installed(p, root),
+        "license": "MIT",
+        "license_url": p.license_url,
+    })
 }
 
 fn pin_json(p: &Pinned, root: &Path) -> Value {
@@ -570,14 +631,36 @@ fn pin_json(p: &Pinned, root: &Path) -> Value {
         "license_url": p.license_url,
         "installed": runtime::is_installed(p, root),
         "recommended": RECOMMENDED == Some(p.id),
+        "needs_gpu": info.needs_gpu,
+        "runtime": runtime_json(runtime_for(p.id), root),
     })
+}
+
+fn model_json(id: &str, root: &Path) -> Option<Value> {
+    match custom_path(id) {
+        Some(path) => Some(json!({
+            "id": id,
+            "name": path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            "size": std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+            "license": "your file",
+            "license_url": null,
+            "installed": path.is_file(),
+            "recommended": false,
+            "needs_gpu": false,
+            "custom": true,
+            "path": path.to_string_lossy(),
+            "runtime": runtime_json(&LLAMA_SERVER_VULKAN, root),
+        })),
+        None => model_pin(id).map(|p| pin_json(p, root)),
+    }
 }
 
 pub fn view(s: &AppState) -> Result<Value> {
     let root = data_root(s);
     let conn = s.db.conn()?;
     let model = chosen_model(&conn, &root);
-    let runtime_ok = runtime::is_installed(&LLAMA_SERVER, &root);
+    let rt = runtime_for(model.as_deref().unwrap_or(RECOMMENDED.unwrap_or("")));
+    let runtime_ok = runtime::is_installed(rt, &root);
     let has_row: bool = conn.query_row(
         "SELECT COUNT(*) FROM provider WHERE id = ?1",
         [PROVIDER_ID],
@@ -586,14 +669,9 @@ pub fn view(s: &AppState) -> Result<Value> {
     Ok(json!({
         "installed": runtime_ok && model.is_some(),
         "running": s.builtin.is_running(),
-        "runtime": {
-            "version": LLAMA_SERVER.version,
-            "size": LLAMA_SERVER.size,
-            "installed": runtime_ok,
-            "license": "MIT",
-            "license_url": LLAMA_SERVER.license_url,
-        },
-        "model": model.map(|p| pin_json(p, &root)),
+        "runtime": runtime_json(rt, &root),
+        "custom_runtime": runtime_json(&LLAMA_SERVER_VULKAN, &root),
+        "model": model.as_deref().and_then(|m| model_json(m, &root)),
         "candidates": MODELS.iter().map(|p| pin_json(p, &root)).collect::<Vec<_>>(),
         "free_bytes": free_bytes(&root),
         "recommended": RECOMMENDED,
@@ -634,8 +712,14 @@ fn upsert_row(conn: &rusqlite::Connection, model_id: &str) -> Result<()> {
 }
 
 pub async fn start_install(s: &AppState, model_id: &str) -> Result<Job, ApiError> {
-    let pin = model_pin(model_id)
-        .ok_or_else(|| ApiError::bad(format!("{model_id} is not a built-in model")))?;
+    let pin = model_pin(model_id);
+    if let Some(path) = custom_path(model_id) {
+        if !path.is_file() {
+            return Err(ApiError::bad(format!("{} is not a file", path.display())));
+        }
+    } else if pin.is_none() {
+        return Err(ApiError::bad(format!("{model_id} is not a built-in model")));
+    }
     if s.builtin.install.busy() {
         return Err(ApiError::new(
             axum::http::StatusCode::CONFLICT,
@@ -643,8 +727,8 @@ pub async fn start_install(s: &AppState, model_id: &str) -> Result<Job, ApiError
         ));
     }
     let root = data_root(s);
-    let pins: Vec<&'static Pinned> = [&LLAMA_SERVER, pin]
-        .into_iter()
+    let pins: Vec<&'static Pinned> = std::iter::once(runtime_for(model_id))
+        .chain(pin)
         .filter(|p| !runtime::is_installed(p, &root))
         .collect();
     let total: u64 = pins.iter().map(|p| p.size).sum();
@@ -721,6 +805,8 @@ pub async fn start_install(s: &AppState, model_id: &str) -> Result<Job, ApiError
 fn label(p: &Pinned) -> String {
     if p.id == LLAMA_SERVER.id {
         format!("llama.cpp {}", p.version)
+    } else if p.id == LLAMA_SERVER_VULKAN.id {
+        format!("llama.cpp {} (GPU)", p.version)
     } else {
         model_info(p.id).name.to_string()
     }
@@ -767,7 +853,10 @@ pub async fn remove(s: &AppState) -> Result<Value, ApiError> {
     let freed = blocking(move || {
         let root = data_root(&st);
         let mut freed = 0u64;
-        for pin in std::iter::once(&LLAMA_SERVER).chain(MODELS.iter()) {
+        for pin in [&LLAMA_SERVER, &LLAMA_SERVER_VULKAN]
+            .into_iter()
+            .chain(MODELS.iter())
+        {
             let entry = runtime::entry_path(pin, &root);
             if entry.exists() {
                 freed += match pin.kind {
@@ -813,14 +902,9 @@ pub async fn resolve(
     let model = cfg
         .model
         .clone()
-        .filter(|m| model_pin(m).is_some_and(|p| runtime::is_installed(p, &root)))
-        .or_else(|| {
-            s.db.conn()
-                .ok()
-                .and_then(|c| chosen_model(&c, &root))
-                .map(|p| p.id.to_string())
-        });
-    let Some(model) = model.filter(|_| runtime::is_installed(&LLAMA_SERVER, &root)) else {
+        .filter(|m| model_ready(m, &root))
+        .or_else(|| s.db.conn().ok().and_then(|c| chosen_model(&c, &root)));
+    let Some(model) = model.filter(|m| runtime::is_installed(runtime_for(m), &root)) else {
         return Err(
             "The built-in model is not installed. Download it in Settings, AI, or pick another provider."
                 .into(),
@@ -861,6 +945,7 @@ mod tests {
             port: 4321,
             threads: 10,
             ctx: 8192,
+            gpu: false,
         });
         let s = a.join(" ");
         assert!(s.contains(
@@ -876,8 +961,37 @@ mod tests {
     }
 
     #[test]
+    fn a_gpu_model_offloads_every_layer_and_leaves_the_kv_cache_alone() {
+        let spec = LaunchSpec {
+            exe: PathBuf::from(r"C:\rt\llama-server.exe"),
+            model: PathBuf::from(r"C:\m\x.gguf"),
+            model_id: "x".into(),
+            port: 4321,
+            threads: 10,
+            ctx: 8192,
+            gpu: true,
+        };
+        let s = args(&spec).join(" ");
+        assert!(s.contains("-ngl 99"));
+        assert!(!s.contains("cache-type") && !s.contains("-ngl 0"));
+        assert!(s.ends_with("-a x"));
+    }
+
+    #[test]
+    fn the_gpu_model_uses_the_vulkan_runtime_and_a_user_file_does_too() {
+        assert_eq!(runtime_for("qwen3.5-9b").id, LLAMA_SERVER_VULKAN.id);
+        assert_eq!(runtime_for("granite-4.1-3b").id, LLAMA_SERVER.id);
+        assert_eq!(runtime_for(r"file:D:\m\x.gguf").id, LLAMA_SERVER_VULKAN.id);
+        assert_eq!(
+            custom_path(r"file:D:\m\x.gguf"),
+            Some(PathBuf::from(r"D:\m\x.gguf"))
+        );
+        assert_eq!(custom_path("granite-4.1-3b"), None);
+    }
+
+    #[test]
     fn profile_is_small() {
-        let p = profile("granite-4.0-micro");
+        let p = profile("granite-4.1-3b");
         assert!(p.small);
         assert_eq!(p.id.as_deref(), Some(PROVIDER_ID));
         assert_eq!(p.context_window, CONTEXT);

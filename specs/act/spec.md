@@ -7,7 +7,7 @@ Code: `crates/core/src/{actions,destinations,compress}`. Tests: `specs/act/tests
 
 `Executor::approve(proposal_id, item_ids)` is the only call that changes the filesystem. It accepts a `pending`
 proposal and a subset of its selectable item ids, revalidates them (POLICY-REVALIDATE), marks the proposal `approved`,
-starts a job on its own thread, and returns `{approved, items, job_id}`. Jobs run one at a time (`queued` → `running` →
+starts a job on its own thread, and returns `{approved, items, job_id}`. `approve_deferred` (used by `POST /api/proposals/{id}/approve` for review cards, whose result no agent reads) skips the early revalidation and returns the chosen ids as `items`; the job revalidates each item before acting either way. Jobs run one at a time (`queued` → `running` →
 `done` | `failed` | `cancelled`); progress (bytes, items, current path) goes to `Executor::subscribe()` and the `job`
 table; cancel takes effect between files and between 1 MiB copy chunks. Kinds: delete, archive (local folder,
 SMB UNC path), compress, dedupe, online-only, system_cleanup (operations Windows' own tools carry out; ACT-WINDOWS-CLEANUP).
@@ -31,7 +31,7 @@ SMB UNC path), compress, dedupe, online-only, system_cleanup (operations Windows
   (`compact /c /exe:lzx`, for data that is not written to again) and `lznt1` (`compact /c`) run `compact.exe` in place with
   no console window (undo = `compact /u`); a folder holding a link, reparse point, or cloud-only file fails up front too,
   because `compact /s` would follow the link. Freed bytes = allocation before minus after (WOF files measured by handle).
-  One card may hold several files or folders (`propose_compress` takes `paths`); each item runs and is journaled on its own.
+  One card may hold several files or folders (a compress proposal takes `paths`); each item runs and is journaled on its own.
 - **Dedupe**: items are the extra copies; `keep` (from the proposal) is never listed, opened for write, or changed.
   `hardlink` (same volume only) hashes keep and extra in full at execution, creates the link under a temp name beside
   the extra, then renames it over the extra; `delete` removes the extra. Candidates come from `core::dupes`: same
@@ -114,12 +114,12 @@ own confirmation. Hoardini never deletes an app's folder or files itself, and th
 
 **Verification (manual):**
 1. Install a small throwaway app that registers an uninstaller (e.g. an Inno Setup or NSIS installer) into `D:\scratch\app`, then pad its folder past 2 GiB: `fsutil file createnew D:\scratch\app\pad.bin 2147483648`.
-2. With `D:\scratch` indexed (`hoardini index --volume D:\` or a watched folder) and the app never started, `GET /api/apps/rarely-used` lists it with `last_run_ms: null`.
+2. With `D:\scratch` indexed (`hoardini index --volume D:\` or a watched folder) and the app never started, the review of `D:\` (`POST /api/review/run`) lists it in `apps` with `last_run_ms: null`.
 3. `POST /api/apps/<its id>/uninstall`: the app's own uninstaller window opens (with a UAC prompt first if it needs admin). Cancel it: the folder and `pad.bin` are unchanged.
 4. Repeat and confirm: the uninstaller removes what it installed; `pad.bin`, which it did not install, is still there, so Hoardini removed nothing itself.
-5. For a Steam game listed by the same route, the POST opens Steam's own "Uninstall <game>?" dialog.
+5. For a Steam game listed the same way, the POST opens Steam's own "Uninstall <game>?" dialog.
 6. `POST /api/apps/reg-0000000000000000/uninstall` answers 404 and opens nothing.
-(2026-10-09, partial: `hoardini serve --no-refresh` on a copy of this PC's index, real registry, UserAssist and Steam: `GET /api/apps/rarely-used` listed Visual Studio Community 2022, HIP SDK Core, Visual Studio Build Tools 2022 and LLVM, each with no recorded run; step 6 answered 404. Steps 1 and 3–5 were not run: they install and uninstall software.)
+(2026-10-09, partial: `hoardini serve --no-refresh` on a copy of this PC's index, real registry, UserAssist and Steam: the since-removed `GET /api/apps/rarely-used` listed Visual Studio Community 2022, HIP SDK Core, Visual Studio Build Tools 2022 and LLVM, each with no recorded run; step 6 answered 404. Steps 1 and 3–5 were not run: they install and uninstall software.)
 
 ### ACT-WINDOWS-CLEANUP-DETECT: Cleanups only Windows can do are detected without elevation
 **Applies to:** hoardini
@@ -144,8 +144,7 @@ estimate (0 when unknown), the verdict `safe` (component store, hibernation, com
 Recycle Bin), so ticks follow POLICY-DEFAULT-TICK with nothing counted small, and each item's JSON carries `op`
 (`{op, volume?|path?, label, explain, elevated, irreversible, estimate_known, size}`). A `compact_vhdx` whose path is
 not an existing `.vhdx` file, or a `restore_points` whose volume is not a drive letter, goes to `dropped`; a request
-with nothing left fails. `syscleanup::propose(db, facts, wanted, ...)` keeps the wanted operation names (all when
-empty) and lists a wanted one that was not detected in `dropped`. A `system_cleanup` request through
+with nothing left fails. A `system_cleanup` request through
 `proposals::create` (paths) is refused.
 
 The review (REVIEW-BUILD) adds one more operation, `leftovers`: `syscleanup::leftover_targets(windows_dir, program_data)`
@@ -155,13 +154,13 @@ CrashDumps and WER folders are cleared as the user in the `temp` card), and `sys
 the operation from the parts the review found there: target the biggest part, estimate and size their sum, verdict
 `safe`, elevated, not irreversible, undo none, and `parts: [{path, size}]` in its op view (shown only).
 `proposals::create_system_cleanup_card(db, req, card)` stores a system cleanup with the review's `review_id` and `card`.
-The model's `propose_system_cleanup` does not offer `leftovers`. Tests: `specs/act/tests/system.rs`.
+Tests: `specs/act/tests/system.rs`.
 
 **Acceptance criteria:**
 - On a fake `C:\` with a 6 GiB WinSxS, a 25 GiB `hiberfil.sys`, a 60 GiB Ubuntu disk, a 40 GiB `docker_data.vhdx`, a 1 GiB Docker `ext4.vhdx`, and over 2 GiB unaccounted, with 64 GiB RAM, hibernation on, and 3 GiB in 12 Recycle Bin items: the candidates are, in order, component store (size 6 GiB), restore points on `C:` (size = the gap), hibernation (estimate 25 GiB − 12.8 GiB), the Ubuntu disk, the Docker data disk, and the Recycle Bin (3 GiB, note starting "12 items").
-- With a 1 GiB WinSxS, a gap under 2 GiB, 128 GiB RAM, a 500 MiB Recycle Bin, and no WSL or Docker disks there are none, also with 16 GiB RAM and hibernation off; with hibernation unknown, the 25 GiB file is offered at 25 − 3.2 GiB. `propose` then fails with "nothing Windows can clean up".
+- With a 1 GiB WinSxS, a gap under 2 GiB, 128 GiB RAM, a 500 MiB Recycle Bin, and no WSL or Docker disks there are none, also with 16 GiB RAM and hibernation off; with hibernation unknown, the 25 GiB file is offered at 25 − 3.2 GiB. A system cleanup made from none of them fails with "nothing Windows can clean up".
 - `leftover_targets(X:\Windows, X:\ProgramData)` is exactly `Temp`, `SoftwareDistribution\Download`, the two Delivery Optimization caches, `ProgramData\Microsoft\Windows\WER`, `Minidump`, `MEMORY.DMP`, `LiveKernelReports`, `Logs\CBS`, `Logs\DISM` and `Panther`, in catalog order; `leftovers` is elevated, not irreversible, and serializes as `{op: "leftovers"}`. Two parts of 2 and 3 GiB make an operation with target the 3 GiB part and estimate 5 GiB; stored as a review card it is one ticked item whose op view lists both parts.
-- Proposing restore points, hibernation, Recycle Bin, and compaction gives three items in that order with ticks off, on, off, the irreversible flag on restore points and the Recycle Bin, `elevated` off only for the Recycle Bin, `estimate_known` off only for restore points, `small` off, `total_alloc` = the two estimates, and both vhdx files (absent on disk) in `dropped`. The JSON has `kind: "system_cleanup"` and `op: {op: "restore_points", volume: "C:", explain: "...cannot be brought back."}`.
+- A system cleanup (`create_system_cleanup_card`) of the detected restore points, hibernation, Recycle Bin, and compaction gives three items in that order with ticks off, on, off, the irreversible flag on restore points and the Recycle Bin, `elevated` off only for the Recycle Bin, `estimate_known` off only for restore points, `small` off, `total_alloc` = the two estimates, and both vhdx files (absent on disk) in `dropped`. The JSON has `kind: "system_cleanup"` and `op: {op: "restore_points", volume: "C:", explain: "...cannot be brought back."}`.
 
 ### ACT-WINDOWS-CLEANUP-RUN: One administrator prompt per job, each operation journaled
 **Applies to:** hoardini
@@ -232,12 +231,12 @@ catalog's machine-wide temp, update download, Delivery Optimization, crash dump 
 Disk Cleanup's own handlers are not scriptable per folder); WSL and Docker disks, `wsl --shutdown` as the user, then `diskpart`
 (`select vdisk`, `attach vdisk readonly`, `compact vdisk`, and always a separate `detach vdisk`), which needs no Hyper-V
 module, chosen over `wsl --manage --set-sparse`, which WSL itself flags as experimental and which only frees space as
-Linux trims it later; the Recycle Bin, `SHEmptyRecycleBinW` as the user. Child tools run without a console window. The
-card (UI-SYSTEM-CLEANUP-CARD) says what each operation does and, on the approve step, that deleted restore points
-cannot be brought back. The freed bytes reported are the volume's free space after minus before.
+Linux trims it later; the Recycle Bin, `SHEmptyRecycleBinW` as the user. Child tools run without a console window. Home
+lists each operation in Junk you won't miss with one plain line on what it does (UI-HOME); the hold-to-confirm warning
+covers everything in the group being gone for good. The freed bytes reported are the volume's free space after minus before.
 
 **Verification (manual):**
-1. On a test PC (or VM) with an index of `C:` and some restore points, a WSL distro, and a few GB in the Recycle Bin, ask "what can Windows clean up?"; the model calls `propose_system_cleanup` and the card lists the detected operations with their notes.
+1. On a test PC (or VM) with an index of `C:` and some restore points, a WSL distro, and a few GB in the Recycle Bin, open Home: Junk you won't miss lists the detected operations with their notes.
 2. Tick everything and hold to clean up: exactly one UAC prompt appears (for `hoardini.exe system-cleanup ...`). Decline it: every operation except the Recycle Bin fails with "The administrator prompt was declined; nothing ran", and the Recycle Bin is empty.
 3. Ask again, approve and accept the prompt: WSL stops (`wsl -l -v` shows every distro Stopped), DISM runs (Task Manager), and the job ends with each item done or failed with the tool's message.
 4. `vssadmin list shadows /for=C:` (as admin) shows one shadow copy left; `powercfg /a` shows hibernation unavailable with Fast Startup available and `hiberfil.sys` at about a fifth of RAM; the vhdx file is smaller and the distro starts with its files intact.
@@ -292,7 +291,7 @@ format, summary, verdicts, and reasons carry over, and so do a review card's `re
 the follow-up has no `tool_call_id`. Nothing is created when no item
 is left, and dedupe and system_cleanup jobs get no follow-up. The follow-up row is committed before the job's terminal update is broadcast
 (`Executor::subscribe`, so the status stream's `job` frame too). Proposal JSON (`GET /api/proposals/{id}` and the
-`proposals` map of `GET /api/thread`) carries `parent_id` and `follow_up_id` (the newest proposal whose `parent_id` is
+review's `proposals`) carries `parent_id` and `follow_up_id` (the newest proposal whose `parent_id` is
 this one), both null when absent. A job interrupted by a restart (marked failed at startup) gets no follow-up. Tests:
 `specs/act/tests/follow_up.rs`; the JSON and stream order are also checked in `specs/srv/tests/srv.rs`, a review card's follow-up in `specs/review/tests/build.rs`, and an online-only one in `specs/act/tests/online.rs`.
 
@@ -301,7 +300,7 @@ this one), both null when absent. A job interrupted by a restart (marked failed 
 - A job where every item is done, and one whose only item not done was deleted, leave `follow_up_id` null and no child row. A delete dedupe whose second copy fails leaves none either.
 - An archive whose copy fails verification gets a follow-up of kind `archive` with the same destination and the item ticked. An archive cancelled during its first copy ends `cancelled` with the second item ticked and `pending` in the follow-up. An `lzx` compress that fails up front gets a follow-up of kind `compress`, format `lzx`, item ticked.
 - An online-only job that freed an in-sync file and failed on one not in sync, with a file outside every sync root blocked on the card, gets a pending follow-up of kind `online-only` named by the parent's `follow_up_id`, with `parent_id` the parent, holding the failed file ticked and the outside file unticked and `blocked`.
-- Through the server: a two-item delete with one approved streams its terminal `job` frame after `GET /api/proposals/{id}` already shows `follow_up_id`; the follow-up's `parent_id` names the parent, it holds the unapproved item unticked with its memory note, and `GET /api/thread` shows both links.
+- Through the server: a two-item delete with one approved streams its terminal `job` frame after `GET /api/proposals/{id}` already shows `follow_up_id`; the follow-up's `parent_id` names the parent, and it holds the unapproved item unticked with its memory note.
 
 ### ACT-RESTORE: Restore puts back the original path and content
 **Applies to:** hoardini
@@ -505,7 +504,7 @@ restored byte-identical, no `rclone.exe` left running.
 **Applies to:** hoardini
 **Verification:** test
 
-An `online_only` proposal (from `propose_online_only` or the review) shall block an item that is not under a registered
+An `online_only` proposal (from Home or the review) shall block an item that is not under a registered
 sync root ("Not in a cloud-synced folder ...") or that has nothing stored on this PC ("Already online-only"), plus the
 usual in-use block. An item's verdict comes from the sync check run when the card is made (EVID-COPY-SYNC): `synced`
 when it, or every file in the folder, is in sync, else `review`; the model's verdict is ignored, and only unblocked,

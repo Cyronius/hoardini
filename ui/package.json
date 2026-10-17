@@ -9,8 +9,6 @@
     "mock": "bun run mock/server.ts"
   },
   "dependencies": {
-    "@ag-ui/client": "0.0.47",
-    "@ag-ui/core": "0.0.47",
     "@fontsource-variable/azeret-mono": "^5.3.0",
     "@fontsource-variable/baloo-2": "^5.3.0",
     "@fontsource-variable/eczar": "^5.3.0",
@@ -46,7 +44,6 @@
     "@fontsource/spectral": "^5.3.0",
     "@fontsource/zen-maru-gothic": "^5.3.0",
     "@fontsource/zilla-slab": "^5.3.0",
-    "@itkennel/lm-ag-ui": "file:./vendor/lm-ag-ui",
     "@streamdown/code": "^1.1.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -62,8 +59,5 @@
     "tailwindcss": "^4.0.0",
     "typescript": "^5.6.0",
     "vite": "^6.0.0"
-  },
-  "trustedDependencies": [
-    "@itkennel/lm-ag-ui"
-  ]
+  }
 }

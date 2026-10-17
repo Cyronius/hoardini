@@ -73,23 +73,15 @@ export const routes = {
   summary: () => api<T.IndexSummary>("/api/index/summary"),
   volumes: () => api<T.VolumeView[]>("/api/volumes"),
   putVolumes: (c: T.VolumeChoice) => put<T.VolumeView[]>("/api/volumes", c),
-  cancelRun: (runId: string) => api<{ ok: true }>(`/api/agent/runs/${enc(runId)}/cancel`, { method: "POST", body: {} }),
-
-  thread: (all = false) => api<T.ThreadDetail>(`/api/thread${all ? "?all=1" : ""}`),
-  startFresh: () => api<{ ok: true }>("/api/thread/fresh", { body: {} }),
-  clearHistory: () => del("/api/thread"),
 
   proposal: (id: string) => api<T.Proposal>(`/api/proposals/${enc(id)}`),
   approve: (id: string, item_ids: number[]) =>
     api<T.ApproveResponse>(`/api/proposals/${enc(id)}/approve`, { body: { item_ids } }),
-  decline: (id: string) => api<T.DeclineResponse>(`/api/proposals/${enc(id)}/decline`, { body: {} }),
-  rarelyUsedApps: () => api<T.RarelyUsedApp[]>("/api/apps/rarely-used"),
   uninstallApp: (id: string) =>
     api<{ started: true; id: string; name: string }>(`/api/apps/${enc(id)}/uninstall`, { method: "POST", body: {} }),
-  undoLearned: (id: string, memoryId: number) => del(`/api/proposals/${enc(id)}/learned/${memoryId}`),
   selectItems: (id: string, item_ids: number[]) => put<T.Proposal>(`/api/proposals/${enc(id)}/selection`, { item_ids }),
   reviewOpen: () => api<T.ReviewView>("/api/review/open", { body: {} }),
-  reviewRun: (path?: string) => api<T.ReviewView>("/api/review/run", { body: path ? { path } : {} }),
+  reviewRun: () => api<T.ReviewView>("/api/review/run", { body: {} }),
   review: (id?: string) => api<T.ReviewView>(`/api/review${id ? `?id=${enc(id)}` : ""}`),
   answerLocation: (path: string, answer: T.LocationAnswer) => api<T.Memory>("/api/locations/answer", { body: { path, answer } }),
   jobs: () => api<T.Job[]>("/api/jobs"),
@@ -99,9 +91,7 @@ export const routes = {
   addMemory: (m: Required<Omit<T.MemoryInput, "pinned">>) => api<T.Memory>("/api/memory", { body: m }),
   updateMemory: (id: number, m: T.MemoryInput) => put<T.Memory>(`/api/memory/${id}`, m),
   deleteMemory: (id: number) => del(`/api/memory/${id}`),
-  undoWebLearned: (l: T.Learned) => api(`/api/learned/web/${l.memory_id}`, { method: "DELETE", body: { key: l.key, text: l.text } }),
   restoreMemory: (id: number) => api<T.Memory>(`/api/memory/${id}/restore`, { body: {} }),
-  confirmMemory: (id: number) => api<T.Memory>(`/api/memory/${id}/confirm`, { body: {} }),
   memoryLimit: () => api<{ limit: number }>("/api/memory/limit"),
   setMemoryLimit: (limit: number) => put<{ limit: number }>("/api/memory/limit", { limit }),
 
@@ -126,6 +116,7 @@ export const routes = {
   installRclone: () => api<T.Job>("/api/runtime/rclone/install", { body: {} }),
   authorizeRclone: (b: T.RcloneAuthorizeInput) => api<{ token_ref: string }>("/api/destinations/rclone/authorize", { body: b }),
   pickFolder: () => api<{ path: string | null }>("/api/dialog/pick-folder", { body: {} }),
+  pickModel: () => api<{ path: string | null }>("/api/dialog/pick-model", { body: {} }),
   archive: (q?: string) => api<T.ArchiveEntry[]>(`/api/archive${q ? `?q=${enc(q)}` : ""}`),
   restoreArchive: (id: number) => api<{ job_id: string }>(`/api/archive/${id}/restore`, { body: {} }),
 
@@ -138,22 +129,12 @@ export const routes = {
   installBuiltin: (model_id: string) => api<T.Job>("/api/builtin/install", { body: { model_id } }),
   removeBuiltin: () => del<{ ok: true; freed_bytes: number }>("/api/builtin"),
 
-  history: (since_ms?: number, until_ms?: number, volume?: string) => {
-    const q = new URLSearchParams();
-    if (since_ms != null) q.set("since_ms", String(since_ms));
-    if (until_ms != null) q.set("until_ms", String(until_ms));
-    if (volume) q.set("volume", volume);
-    return api<T.HistoryPoint[]>(`/api/history${q.size ? `?${q}` : ""}`);
-  },
   children: (path: string, limit = 50) => api<T.Children>(`/api/index/children?path=${enc(path)}&limit=${limit}`),
-  reveal: (path: string) => api<{ ok: true }>("/api/reveal", { body: { path } }),
-  map: (path: string, w: number, h: number) => api<T.IndexMap>(`/api/index/map?path=${enc(path)}&w=${w}&h=${h}`),
   types: (path: string) => api<T.TypeRow[]>(`/api/index/types?path=${enc(path)}`),
-  exploreFocus: (path: string | null) => put<{ path: string | null }>("/api/explore/focus", { path }),
+  forgetAnswer: (path: string) => api<{ forgot: number }>("/api/locations/forget", { body: { path } }),
+  act: (kind: T.ActKind, paths: string[], destination_id?: string) => api<T.ActResult>("/api/act", { body: { kind, paths, ...(destination_id ? { destination_id } : {}) } }),
   settings: () => api<T.Settings>("/api/settings"),
   putSettings: (s: T.SettingsPatch) => put<T.Settings>("/api/settings", s),
-  copyChecks: (path: string) => api<T.CopyChecks>(`/api/copy-checks?path=${enc(path)}`),
-  copyChecksWaiting: () => api<{ online_waiting: number }>("/api/copy-checks/waiting"),
 };
 
 // EventSource cannot send headers; fetch streaming keeps the token out of the URL.

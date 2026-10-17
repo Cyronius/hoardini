@@ -42,6 +42,9 @@ pub struct Area {
     pub actions: Vec<Action>,
     #[serde(default)]
     pub only_copy: bool,
+    // The verdict is the user's own answer, so Home lists it under Things you kept, not Your call.
+    #[serde(default)]
+    pub user: bool,
 }
 
 pub struct Left<'a> {
@@ -77,7 +80,6 @@ pub fn collect<'a>(
     cx: &'a Cx,
     left: &[Left<'a>],
     all: &[Unit],
-    root: &str,
     volume: &str,
 ) -> anyhow::Result<Vec<Area>> {
     let mut rows: Vec<Row<'a>> = Vec::new();
@@ -127,7 +129,7 @@ pub fn collect<'a>(
                 .iter()
                 .filter(|(p, m)| {
                     same_or_under(p, &u.path)
-                        && same_or_under(root, p)
+                        && same_or_under(volume, p)
                         && !p.eq_ignore_ascii_case(volume)
                         && m.detail.as_ref().is_some_and(|d| d.category != "container")
                 })
@@ -152,7 +154,7 @@ pub fn collect<'a>(
         let (path, loc, entry) = match project.or(deepest) {
             Some((p, m)) => (p.clone(), Some(m), None),
             None if !own_row && u.why == Why::Leaf => {
-                match project_folder(cx, root, &u.path, &mut projects) {
+                match project_folder(cx, volume, &u.path, &mut projects) {
                     Some(p) => (p, None, None),
                     None => (u.path.clone(), cx.location_at(&u.path), l.entry),
                 }
@@ -291,6 +293,7 @@ fn describe(cx: &Cx, r: &Row, volume: &str) -> anyhow::Result<Area> {
         unknown,
         actions,
         only_copy: r.only_copy,
+        user: told.is_some_and(|(m, _)| m.source == "user"),
     })
 }
 

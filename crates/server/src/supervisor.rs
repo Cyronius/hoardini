@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 use hoardini_agent::run::IndexControl;
 use hoardini_core::index;
 use hoardini_core::store::{Db, get_meta};
-use rusqlite::Connection;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -25,7 +24,7 @@ struct State {
     progress: Option<Value>,
     quiet_since: Option<Instant>,
     // A user refresh asked for during a quiet run; it starts when that run ends.
-    queued: Option<&'static str>,
+    queued: bool,
     // The volume whose child runs now, and the volumes this pass has already taken.
     current: Option<String>,
     done: Vec<String>,
@@ -53,7 +52,6 @@ pub struct Supervisor {
     db: Db,
     exe: PathBuf,
     state: Mutex<State>,
-    want_fast: AtomicBool,
     switch: Notify,
     change: Arc<watch::Sender<u64>>,
     rt: tokio::runtime::Handle,
@@ -74,40 +72,18 @@ pub struct Supervisor {
 
 enum ChildEnd {
     Finished,
-    SwitchedToFast,
     Dropped,
     NeedsFull(String),
 }
 
 enum Next {
     Volume(String),
-    Again(&'static str),
+    Again,
     Finished { launch: bool },
 }
 
 fn same(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
-}
-
-fn norm_mode(mode: &str) -> Option<&'static str> {
-    match mode {
-        "background" => Some("background"),
-        "fast" => Some("fast"),
-        _ => None,
-    }
-}
-
-// The Fast / Lean switch; Lean runs the indexer in background mode.
-pub fn index_speed(conn: &Connection) -> &'static str {
-    match get_meta(conn, "index_speed")
-        .ok()
-        .flatten()
-        .as_deref()
-        .map(str::trim)
-    {
-        Some("fast") => "fast",
-        _ => "lean",
-    }
 }
 
 // Time until the next journal refresh is due; an index that never completed is due now.
@@ -151,7 +127,6 @@ impl Supervisor {
             db,
             exe,
             state: Mutex::new(State::default()),
-            want_fast: AtomicBool::new(false),
             switch: Notify::new(),
             change,
             rt,
@@ -205,7 +180,6 @@ impl Supervisor {
     }
 
     fn spawn_run(&self, mode: &'static str, kind: &'static str) -> anyhow::Result<()> {
-        self.want_fast.store(false, Ordering::SeqCst);
         let Some(me) = self.me.upgrade() else {
             anyhow::bail!("supervisor is shutting down");
         };
@@ -216,58 +190,12 @@ impl Supervisor {
         Ok(())
     }
 
-    // The very first full scan always runs fast; after that the Fast / Lean switch decides.
-    pub fn auto_mode(&self) -> &'static str {
-        let Ok(conn) = self.db.conn() else {
-            return "background";
-        };
-        let never = index::index_status(&conn, None)
-            .ok()
-            .flatten()
-            .is_none_or(|s| s.last_refresh_ms.is_none());
-        if never || index_speed(&conn) == "fast" {
-            "fast"
-        } else {
-            "background"
-        }
+    pub fn start_refresh(&self) -> anyhow::Result<bool> {
+        self.start(false)
     }
 
-    // Fast takes over a Lean refresh; Lean during a Fast one lets it finish.
-    pub fn speed_changed(&self, speed: &str) -> bool {
-        if speed != "fast" {
-            return false;
-        }
-        let Ok(mut st) = self.state.lock() else {
-            return false;
-        };
-        if !st.refreshing {
-            return false;
-        }
-        if st.queued.is_some() {
-            st.queued = Some("fast");
-            st.mode = Some("fast");
-            drop(st);
-            self.bump();
-            return true;
-        }
-        // Killing a journal refresh would force the next one to be full; it is short, so it finishes.
-        if st.quiet_since.is_some() || st.mode != Some("background") {
-            return false;
-        }
-        st.mode = Some("fast");
-        drop(st);
-        self.want_fast.store(true, Ordering::SeqCst);
-        self.switch.notify_one();
-        self.bump();
-        true
-    }
-
-    pub fn start_refresh(&self, mode: &str) -> anyhow::Result<bool> {
-        self.start(mode, false)
-    }
-
-    pub fn start_launch_refresh(&self, mode: &str) -> anyhow::Result<bool> {
-        self.start(mode, true)
+    pub fn start_launch_refresh(&self) -> anyhow::Result<bool> {
+        self.start(true)
     }
 
     pub fn on_launch_refreshed(&self, f: Arc<dyn Fn() + Send + Sync>) {
@@ -276,50 +204,37 @@ impl Supervisor {
         }
     }
 
-    fn start(&self, mode: &str, launch: bool) -> anyhow::Result<bool> {
-        let Some(mode) = norm_mode(mode) else {
-            anyhow::bail!("mode must be \"background\" or \"fast\"");
-        };
+    // Someone waits on these, so they run fast: a full walk takes seconds instead of minutes.
+    fn start(&self, launch: bool) -> anyhow::Result<bool> {
         let Ok(mut st) = self.state.lock() else {
             anyhow::bail!("indexer state unavailable");
         };
         if !st.refreshing {
             *st = State {
                 refreshing: true,
-                mode: Some(mode),
+                mode: Some("fast"),
                 launch,
                 ..State::default()
             };
             drop(st);
-            self.spawn_run(mode, "auto")?;
+            self.spawn_run("fast", "auto")?;
             self.bump();
             return Ok(true);
         }
         // Killing a journal refresh would force the next one to be full, so the request waits for it.
-        if st.quiet_since.is_some() || st.queued.is_some() {
-            if st.queued == Some(mode) || st.queued == Some("fast") {
-                return Ok(false);
-            }
-            st.queued = Some(mode);
-            st.quiet_since = None;
-            st.mode = Some(mode);
-            drop(st);
-            self.bump();
-            return Ok(true);
+        if st.quiet_since.is_none() || st.queued {
+            return Ok(false);
         }
-        if mode == "fast" && st.mode == Some("background") {
-            st.mode = Some("fast");
-            drop(st);
-            self.want_fast.store(true, Ordering::SeqCst);
-            self.switch.notify_one();
-            self.bump();
-            return Ok(true);
-        }
-        Ok(false)
+        st.queued = true;
+        st.quiet_since = None;
+        st.mode = Some("fast");
+        drop(st);
+        self.bump();
+        Ok(true)
     }
 
+    // The timer's journal refresh is the only background run; its fallback to a full walk runs fast.
     fn start_quiet_journal(&self) {
-        let mode = self.auto_mode();
         let Ok(mut st) = self.state.lock() else {
             return;
         };
@@ -328,12 +243,12 @@ impl Supervisor {
         }
         *st = State {
             refreshing: true,
-            mode: Some(mode),
+            mode: Some("background"),
             quiet_since: Some(Instant::now()),
             ..State::default()
         };
         drop(st);
-        if let Err(e) = self.spawn_run(mode, "journal") {
+        if let Err(e) = self.spawn_run("background", "journal") {
             tracing::warn!(error = %e, "journal refresh did not start");
         }
     }
@@ -456,18 +371,15 @@ impl Supervisor {
             return Next::Volume(v);
         }
         st.current = None;
-        match st.queued.take() {
-            Some(m) => {
-                st.progress = None;
-                st.done.clear();
-                st.only = None;
-                Next::Again(m)
-            }
-            None => {
-                let launch = st.launch;
-                *st = State::default();
-                Next::Finished { launch }
-            }
+        if std::mem::take(&mut st.queued) {
+            st.progress = None;
+            st.done.clear();
+            st.only = None;
+            Next::Again
+        } else {
+            let launch = st.launch;
+            *st = State::default();
+            Next::Finished { launch }
         }
     }
 
@@ -477,18 +389,12 @@ impl Supervisor {
             .is_ok_and(|st| st.dropping.iter().any(|d| same(d, volume)))
     }
 
-    fn child_mode(&self, volume: &str, mode: &'static str) -> &'static str {
-        let first = self
-            .db
-            .conn()
-            .is_ok_and(|c| index::never_indexed(&c, volume));
-        let m = if first { "fast" } else { mode };
+    fn show_mode(&self, mode: &'static str) {
         if let Ok(mut st) = self.state.lock()
-            && st.queued.is_none()
+            && !st.queued
         {
-            st.mode = Some(m);
+            st.mode = Some(mode);
         }
-        m
     }
 
     async fn run(self: Arc<Self>, first_mode: &'static str, first_kind: &'static str) {
@@ -496,8 +402,8 @@ impl Supervisor {
         loop {
             let volume = match self.next_step() {
                 Next::Volume(v) => v,
-                Next::Again(m) => {
-                    (mode, kind) = (m, "auto");
+                Next::Again => {
+                    (mode, kind) = ("fast", "auto");
                     self.bump();
                     continue;
                 }
@@ -516,24 +422,20 @@ impl Supervisor {
                 tracing::info!(volume, "volume not connected; skipped");
                 continue;
             }
-            let mut k = kind;
+            let (mut m, mut k) = (mode, kind);
             loop {
                 if self.dropping(&volume) {
                     break;
                 }
-                if self.want_fast.swap(false, Ordering::SeqCst) {
-                    mode = "fast";
-                }
-                let m = self.child_mode(&volume, mode);
+                self.show_mode(m);
                 match self.run_child(&volume, m, k).await {
-                    Ok(ChildEnd::SwitchedToFast) => continue,
                     Ok(ChildEnd::NeedsFull(reason)) if k != "full" => {
                         tracing::info!(
                             volume,
                             reason,
                             "journal refresh not possible; running a full refresh"
                         );
-                        k = "full";
+                        (m, k) = ("fast", "full");
                         continue;
                     }
                     Ok(_) => {}
@@ -647,10 +549,6 @@ impl Supervisor {
                         let _ = child.kill().await;
                         return Ok(ChildEnd::Dropped);
                     }
-                    if self.want_fast.load(Ordering::SeqCst) && mode != "fast" {
-                        let _ = child.kill().await;
-                        return Ok(ChildEnd::SwitchedToFast);
-                    }
                 }
             }
         }
@@ -708,7 +606,7 @@ impl IndexControl for Supervisor {
     fn status(&self) -> Value {
         self.snapshot()
     }
-    fn refresh(&self, mode: &str) -> anyhow::Result<bool> {
-        self.start_refresh(mode)
+    fn refresh(&self) -> anyhow::Result<bool> {
+        self.start_refresh()
     }
 }

@@ -12,7 +12,7 @@ Tavily (default), Brave, Exa, Serper and SearXNG shall each return normalized re
 1. Open the drawer, Search tab. For each of Tavily, Brave, Exa and Serper paste a key and press Test: the row shows OK with a latency. For SearXNG enter the base URL and press Test.
 2. Point SearXNG at an instance without `json` in `search.formats`: Test shows the message naming `settings.yml`.
 3. Press Test with a wrong key: the row shows the provider's HTTP error and the key does not appear in it.
-4. Activate a provider, enable web search in Settings, and ask the agent about an unfamiliar folder name. The chat shows a search tool chip and an answer citing a source URL.
+4. Activate a provider, enable web search in Settings, and ask about an unfamiliar folder in its Ask box. The box says "Looking inside…" while the agent searches, and the answer cites a source URL.
 (2026-10-08: SearXNG only, against a local stand-in serving `fixtures/searxng.json`: Test shows "Works · 6 ms", and with a scripted model step 4 shows a "web search" chip and the cited URL; the stand-in received only the sanitized query. Tavily, Brave, Exa and Serper not run: no keys on this machine.)
 
 Parsing of each provider's response shape is covered by the recorded fixtures in `specs/srch/fixtures/` (see `specs/srch/tests/srch.rs`); that is a regression net, not the verification of this requirement.

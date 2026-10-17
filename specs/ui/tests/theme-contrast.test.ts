@@ -1,7 +1,6 @@
 // Traces: UI-THEME-CONTRAST
 import { describe, expect, it } from "vitest";
 import { THEMES, contrast, groupOf, onAccent, themeVars } from "@ui/theme";
-import { STATES, explorePalette } from "@ui/explore/palette";
 
 describe("UI-THEME-CONTRAST", () => {
   it("ships the midtone group and Tater Dog", () => {
@@ -31,13 +30,4 @@ describe("UI-THEME-CONTRAST", () => {
     expect(contrast("#000000", "#ffffff")).toBeCloseTo(21, 5);
     expect(contrast("#777777", "#777777")).toBeCloseTo(1, 5);
   });
-
-  for (const t of THEMES) {
-    it(`${t.id} labels every Explore block at 4.5:1`, () => {
-      const p = explorePalette(t.tokens);
-      const swatches = [...STATES.map((s) => p.states[s]), ...STATES.map((s) => p.frames[s]), p.more, p.plain, p.frame];
-      for (const s of swatches) expect(contrast(s.ink, s.fill)).toBeGreaterThanOrEqual(4.5);
-      expect(p.dark).toBe(t.mode === "dark");
-    });
-  }
 });

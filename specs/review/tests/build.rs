@@ -14,7 +14,7 @@ use hoardini_core::memory::location::{Answer, answer};
 use hoardini_core::memory::{Detail, Kind, Knowledge, Scope as MemScope};
 use hoardini_core::policy::{PolicyEnv, Verdict};
 use hoardini_core::proposals::{self, NewItem, NewProposal, Proposal, ProposalKind};
-use hoardini_core::review::{self, Builds, Opened, Review, Scope};
+use hoardini_core::review::{self, Builds, Opened, Review};
 use hoardini_core::store::Db;
 use hoardini_core::syscleanup::{self, SystemFacts};
 use hoardini_core::vault::DpapiVault;
@@ -105,8 +105,8 @@ impl Disk {
             .unwrap()
     }
 
-    pub fn review(&self, scope: Scope, now: i64) -> Review {
-        review::build(&self.db, &self.env, &self.fs, scope, now).unwrap()
+    pub fn review(&self, vid: i64, now: i64) -> Review {
+        review::build(&self.db, &self.env, &self.fs, vid, now).unwrap()
     }
 
     pub fn card(&self, r: &Review, card: &str) -> Option<Proposal> {
@@ -116,18 +116,18 @@ impl Disk {
             .map(|c| proposals::get(&self.db, &c.proposal_id).unwrap().unwrap())
     }
 
-    pub fn chat_card(&self, paths: &[&str]) -> Proposal {
+    pub fn outside_card(&self, paths: &[&str]) -> Proposal {
         proposals::create_with(
             &self.db,
             &self.env,
             NewProposal {
-                conversation_id: Some("main".into()),
+                conversation_id: Some("home".into()),
                 tool_call_id: None,
                 kind: ProposalKind::Delete,
                 destination_id: None,
                 format: None,
                 dedupe: None,
-                summary: "chat".into(),
+                summary: "chosen on Home".into(),
                 items: paths
                     .iter()
                     .map(|p| NewItem {
@@ -199,7 +199,7 @@ fn each_unit_lands_in_its_card_with_its_tick_and_reason() {
     d.nas();
     let vid = d.index();
 
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     let mut cards: Vec<&str> = r.cards.iter().map(|c| c.card.as_str()).collect();
     cards.sort();
     assert_eq!(cards, ["archive", "build", "caches", "downloads", "temp"]);
@@ -261,20 +261,20 @@ fn each_unit_lands_in_its_card_with_its_tick_and_reason() {
 
 // Traces: REVIEW-BUILD
 #[test]
-fn pending_and_recently_declined_items_stay_out_and_small_cards_only_show_for_a_folder() {
+fn pending_and_recently_declined_items_stay_out_and_small_cards_do_not_show() {
     let d = Disk::new();
-    let kept_for_chat = d.folder(r"code\a\node_modules", "x.js", 1200 * MIB);
+    let kept_elsewhere = d.folder(r"code\a\node_modules", "x.js", 1200 * MIB);
     let declined = d.folder(r"code\b\node_modules", "x.js", 1100 * MIB);
     let long_ago = d.folder(r"code\c\node_modules", "x.js", 1000 * MIB);
     let fresh = d.folder(r"code\d\node_modules", "x.js", 1300 * MIB);
-    let pip = d.folder(r"~\AppData\Local\pip\cache", "wheel.whl", 300 * MIB);
+    d.folder(r"~\AppData\Local\pip\cache", "wheel.whl", 300 * MIB);
     d.folder(r"~\Documents", "big.dat", 2 * GIB);
     let vid = d.index();
 
-    d.chat_card(&[&kept_for_chat]);
-    let no = d.chat_card(&[&declined]);
+    d.outside_card(&[&kept_elsewhere]);
+    let no = d.outside_card(&[&declined]);
     proposals::decline(&d.db, &no.id).unwrap();
-    let old = d.chat_card(&[&long_ago]);
+    let old = d.outside_card(&[&long_ago]);
     proposals::decline(&d.db, &old.id).unwrap();
     d.db.conn()
         .unwrap()
@@ -284,25 +284,15 @@ fn pending_and_recently_declined_items_stay_out_and_small_cards_only_show_for_a_
         )
         .unwrap();
 
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     let b = d.card(&r, "build").unwrap();
     assert_eq!(items(&b), [(long_ago.clone(), true), (fresh.clone(), true)]);
     assert!(
         d.card(&r, "caches").is_none(),
         "300 MiB is under the 500 MiB a card needs"
     );
-    assert!(!r.areas.iter().any(|a| a.path == kept_for_chat));
+    assert!(!r.areas.iter().any(|a| a.path == kept_elsewhere));
     assert!(!r.areas.iter().any(|a| a.path == declined));
-
-    let folder = d.review(Scope::Folder(d.path(r"~\AppData\Local\pip")), NOW);
-    assert_eq!(
-        folder.scope_path.as_deref(),
-        Some(d.path(r"~\AppData\Local\pip").as_str())
-    );
-    let c = d
-        .card(&folder, "caches")
-        .expect("a folder review shows any card");
-    assert_eq!(items(&c), [(pip.clone(), true)]);
 }
 
 // Traces: REVIEW-BUILD, REVIEW-UNITS
@@ -321,7 +311,7 @@ fn old_scratch_folders_beside_a_live_one_still_count_and_big_cards_list_fifty() 
         );
     }
     let vid = d.index();
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     let t = d.card(&r, "temp").unwrap();
     assert_eq!(t.items.len(), 50);
     assert_eq!(t.items[0].path, gone);
@@ -344,7 +334,7 @@ fn a_new_review_replaces_untouched_cards_and_keeps_touched_ones() {
     let modules = d.folder(r"code\web\node_modules", "x.js", 2 * GIB);
     let vid = d.index();
 
-    let first = d.review(Scope::Volume(vid), NOW);
+    let first = d.review(vid, NOW);
     let t1 = d.card(&first, "temp").unwrap();
     let b1 = d.card(&first, "build").unwrap();
     assert!(!t1.touched && !b1.touched);
@@ -362,15 +352,7 @@ fn a_new_review_replaces_untouched_cards_and_keeps_touched_ones() {
     );
     assert!(!review::untouched(&d.db.conn().unwrap(), &first.id).unwrap());
 
-    let folder = d.review(Scope::Folder(d.path("code")), NOW);
-    assert!(folder.cards.is_empty(), "its items are in a pending card");
-    assert_eq!(
-        d.status(&t1.id),
-        "pending",
-        "a folder review replaces nothing"
-    );
-
-    let second = d.review(Scope::Volume(vid), NOW + HOUR);
+    let second = d.review(vid, NOW + HOUR);
     assert_eq!(d.status(&t1.id), "superseded");
     assert_eq!(d.status(&b1.id), "pending");
     let t2 = d.card(&second, "temp").unwrap();
@@ -407,7 +389,7 @@ fn a_new_review_replaces_untouched_cards_and_keeps_touched_ones() {
     );
     let declined = proposals::decline(&d.db, &t2.id).unwrap();
     assert!(declined.touched);
-    let third = d.review(Scope::Volume(vid), NOW + 2 * HOUR);
+    let third = d.review(vid, NOW + 2 * HOUR);
     assert!(
         third
             .cards
@@ -426,7 +408,7 @@ fn a_new_review_replaces_untouched_cards_and_keeps_touched_ones() {
     );
 
     proposals::decline(&d.db, &b1.id).unwrap();
-    let fourth = d.review(Scope::Volume(vid), NOW + 3 * HOUR);
+    let fourth = d.review(vid, NOW + 3 * HOUR);
     assert!(
         !fourth.cards.iter().any(|c| c.proposal_id == b1.id),
         "a declined card is no longer live"
@@ -491,7 +473,7 @@ fn approving_a_review_card_touches_it_and_its_follow_up_stays_in_the_review() {
             .unwrap();
     }
     let vid = d.index();
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     let t = d.card(&r, "temp").unwrap();
     assert_eq!(items(&t), [(a.clone(), true), (b.clone(), true)]);
     let ex = d.executor();
@@ -640,7 +622,7 @@ fn verified_copies_disposable_answers_and_learned_entries_shape_the_cards() {
         },
     );
 
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     let re = d.card(&r, "redownload").expect("a verified card");
     assert_eq!(re.kind, ProposalKind::Delete);
     assert_eq!(items(&re), [(tool.clone(), true)]);
@@ -705,7 +687,7 @@ fn cold_synced_files_go_online_only_and_never_to_a_delete_card() {
     }
     let vid = d.index();
 
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     let o = d.card(&r, "online_only").expect("an online-only card");
     assert_eq!(o.kind, ProposalKind::OnlineOnly);
     assert_eq!(items(&o), [(old.clone(), true)]);
@@ -751,7 +733,7 @@ fn a_folder_worth_compressing_is_a_compress_card_once_its_estimate_is_in() {
     let d = Disk::new();
     let corpus = compress_fixture(&d);
     let vid = d.index();
-    let first = d.review(Scope::Volume(vid), NOW);
+    let first = d.review(vid, NOW);
     assert!(d.card(&first, "compress").is_none(), "no estimate yet");
 
     let conn = d.db.conn().unwrap();
@@ -769,7 +751,7 @@ fn a_folder_worth_compressing_is_a_compress_card_once_its_estimate_is_in() {
         ],
     )
     .unwrap();
-    let r = d.review(Scope::Volume(vid), NOW + HOUR);
+    let r = d.review(vid, NOW + HOUR);
     let k = d.card(&r, "compress").expect("a compress card");
     assert_eq!(k.kind, ProposalKind::Compress);
     assert_eq!(k.format.as_deref(), Some("lzx"));
@@ -808,7 +790,7 @@ fn estimates_that_make_a_folder_worth_compressing_rebuild_an_untouched_review() 
         sparse(&format!(r"{corpus}\part{i}.txt"), GIB);
     }
     let vid = d.index();
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     assert!(d.card(&r, "compress").is_none());
 
     assert!(
@@ -876,7 +858,7 @@ fn open_answers_at_once_while_one_build_runs_in_the_background() {
         move |now: i64| -> anyhow::Result<()> {
             started.fetch_add(1, Ordering::SeqCst);
             gate.lock().unwrap().recv()?;
-            review::build(&db, &env, &WinLister, Scope::Volume(vid), now)?;
+            review::build(&db, &env, &WinLister, vid, now)?;
             Ok(())
         }
     };
@@ -979,7 +961,7 @@ fn a_big_file_every_check_missed_is_an_only_copy_area_of_its_own() {
             "no other file of this size on the indexed drives",
         );
     }
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     let a = r
         .areas
         .iter()
@@ -1042,7 +1024,7 @@ fn the_windows_card_holds_the_leftovers_and_what_only_windows_tools_free() {
             .collect()
     };
 
-    let first = review::build(&db, &env, &fs, Scope::Volume(vid), NOW).unwrap();
+    let first = review::build(&db, &env, &fs, vid, NOW).unwrap();
     assert_eq!(
         ops(&first),
         ["leftovers", "component_store", "hibernation"],
@@ -1054,12 +1036,28 @@ fn the_windows_card_holds_the_leftovers_and_what_only_windows_tools_free() {
     assert_eq!(p.review_id.as_deref(), Some(first.id.as_str()));
     assert_eq!(p.conversation_id.as_deref(), Some("review"));
 
-    syscleanup::propose(&db, &facts, &["hibernation"], Some("main".into()), None).unwrap();
-    let second = review::build(&db, &env, &fs, Scope::Volume(vid), NOW + HOUR).unwrap();
+    let hibernation = syscleanup::candidates(&db.conn().unwrap(), &facts)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.op.name() == "hibernation")
+        .collect();
+    proposals::create_system_cleanup_card(
+        &db,
+        proposals::NewSystemCleanup {
+            conversation_id: Some("home".into()),
+            tool_call_id: None,
+            summary: "Cleanups only Windows can do".into(),
+            ops: hibernation,
+            dropped: Vec::new(),
+        },
+        None,
+    )
+    .unwrap();
+    let second = review::build(&db, &env, &fs, vid, NOW + HOUR).unwrap();
     assert_eq!(
         ops(&second),
         ["leftovers", "component_store"],
-        "a pending chat card already holds hibernation"
+        "another pending card already holds hibernation"
     );
     let status: String = db
         .conn()
@@ -1072,7 +1070,7 @@ fn the_windows_card_holds_the_leftovers_and_what_only_windows_tools_free() {
 
     let w = second.cards.iter().find(|c| c.card == "windows").unwrap();
     proposals::decline(&db, &w.proposal_id).unwrap();
-    let third = review::build(&db, &env, &fs, Scope::Volume(vid), NOW + 2 * HOUR).unwrap();
+    let third = review::build(&db, &env, &fs, vid, NOW + 2 * HOUR).unwrap();
     assert!(ops(&third).is_empty(), "declined in the last 30 days");
     assert!(
         !third
@@ -1112,12 +1110,12 @@ fn race_fixture() -> (Disk, i64, String) {
 #[test]
 fn a_card_decided_or_ticked_while_a_review_builds_keeps_its_items_out_of_the_new_one() {
     let (d, vid, _) = race_fixture();
-    let t1 = d.card(&d.review(Scope::Volume(vid), NOW), "temp").unwrap();
+    let t1 = d.card(&d.review(vid, NOW), "temp").unwrap();
     let (db, id) = (d.db.clone(), t1.id.clone());
     let fired = during_build(&d, move || {
         proposals::decline(&db, &id).unwrap();
     });
-    let second = d.review(Scope::Volume(vid), NOW + HOUR);
+    let second = d.review(vid, NOW + HOUR);
     d.fs.clear_hook();
     assert!(fired.load(Ordering::SeqCst));
     assert_eq!(d.status(&t1.id), "declined");
@@ -1127,13 +1125,13 @@ fn a_card_decided_or_ticked_while_a_review_builds_keeps_its_items_out_of_the_new
     );
 
     let (d, vid, temp) = race_fixture();
-    let t3 = d.card(&d.review(Scope::Volume(vid), NOW), "temp").unwrap();
+    let t3 = d.card(&d.review(vid, NOW), "temp").unwrap();
     let ids: Vec<i64> = t3.items.iter().map(|i| i.id).collect();
     let (db, id) = (d.db.clone(), t3.id.clone());
     during_build(&d, move || {
         proposals::select(&db, &id, &ids).unwrap();
     });
-    let fourth = d.review(Scope::Volume(vid), NOW + HOUR);
+    let fourth = d.review(vid, NOW + HOUR);
     d.fs.clear_hook();
     assert_eq!(d.status(&t3.id), "pending");
     let holding: Vec<(String, bool)> = fourth
@@ -1166,7 +1164,7 @@ fn a_review_shows_as_latest_only_once_all_its_cards_are_in() {
     d.file(r"code\proj\Cargo.toml", 1024);
     d.folder(r"code\web\node_modules", "big.js", 1536 * MIB);
     let vid = d.index();
-    let first = d.review(Scope::Volume(vid), NOW);
+    let first = d.review(vid, NOW);
     let old: Vec<String> = first.cards.iter().map(|c| c.proposal_id.clone()).collect();
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -1176,7 +1174,7 @@ fn a_review_shows_as_latest_only_once_all_its_cards_are_in() {
         std::thread::spawn(move || {
             let c = db.conn().unwrap();
             while !stop.load(Ordering::SeqCst) {
-                if let Ok(Some(r)) = review::latest(&c, vid, None) {
+                if let Ok(Some(r)) = review::latest(&c, vid) {
                     let pending_old = old
                         .iter()
                         .filter(|id| {
@@ -1193,7 +1191,7 @@ fn a_review_shows_as_latest_only_once_all_its_cards_are_in() {
             }
         })
     };
-    let second = d.review(Scope::Volume(vid), NOW + 7 * HOUR);
+    let second = d.review(vid, NOW + 7 * HOUR);
     stop.store(true, Ordering::SeqCst);
     poller.join().unwrap();
     let seen = seen.lock().unwrap();
@@ -1208,50 +1206,15 @@ fn a_review_shows_as_latest_only_once_all_its_cards_are_in() {
     }
 }
 
-// Traces: REVIEW-SUPERSEDE
-#[test]
-fn a_volume_review_replaces_a_folder_reviews_untouched_cards_and_carries_its_touched_ones() {
-    let d = Disk::new();
-    let target = d.folder(r"code\proj\target", "app.exe", 3 * GIB);
-    d.file(r"code\proj\Cargo.toml", 1024);
-    let temp = d.folder(r"~\AppData\Local\Temp\old", "x.bin", 2 * GIB);
-    let vid = d.index();
-    let tf = d
-        .card(&d.review(Scope::Folder(d.path("~")), NOW), "temp")
-        .unwrap();
-    assert_eq!(paths(&tf), std::slice::from_ref(&temp));
-    proposals::select(&d.db, &tf.id, &[]).unwrap();
-    let folder = d.review(Scope::Folder(d.path("code")), NOW);
-    let fb = d.card(&folder, "build").unwrap();
-    let again = d.review(Scope::Volume(vid), NOW + HOUR);
-    assert_eq!(d.status(&fb.id), "superseded");
-    let b = d
-        .card(&again, "build")
-        .expect("the volume review proposes it");
-    assert_eq!(paths(&b), std::slice::from_ref(&target));
-    assert_eq!(d.status(&tf.id), "pending");
-    let listed = again
-        .cards
-        .iter()
-        .find(|c| c.proposal_id == tf.id)
-        .expect("the folder review's touched card is listed");
-    assert!(listed.carried);
-    assert_eq!(
-        again.cards.iter().filter(|c| c.card == "temp").count(),
-        1,
-        "and not proposed again"
-    );
-}
-
 // Traces: REVIEW-BUILD
 #[test]
-fn one_temp_part_in_a_chat_card_leaves_the_other_parts_in_the_temp_card() {
+fn one_temp_part_in_another_card_leaves_the_other_parts_in_the_temp_card() {
     let d = Disk::new();
     let a = d.folder(r"~\AppData\Local\Temp\old-a", "x.bin", 2 * GIB);
     let b = d.folder(r"~\AppData\Local\Temp\old-b", "y.bin", 2 * GIB);
     let vid = d.index();
-    d.chat_card(&[&a]);
-    let r = d.review(Scope::Volume(vid), NOW);
+    d.outside_card(&[&a]);
+    let r = d.review(vid, NOW);
     let t = d.card(&r, "temp").expect("a temp card");
     assert_eq!(paths(&t), std::slice::from_ref(&b));
 }
@@ -1295,7 +1258,7 @@ fn a_protected_temp_part_is_a_kept_unit_of_its_own() {
         .find(|u| u.parts.iter().any(|p| p.path == b))
         .unwrap();
     assert!(!temp.parts.iter().any(|p| p.path == a));
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     assert_eq!(
         paths(&d.card(&r, "temp").unwrap()),
         std::slice::from_ref(&b)
@@ -1334,9 +1297,9 @@ fn estimates_report_no_rebuild_for_a_folder_the_review_leaves_out() {
     }
     let vid = d.index();
     store_estimate(&d, &corpus);
-    d.chat_card(&[&corpus]);
-    let r = d.review(Scope::Volume(vid), NOW);
-    assert!(d.card(&r, "compress").is_none(), "a chat card holds it");
+    d.outside_card(&[&corpus]);
+    let r = d.review(vid, NOW);
+    assert!(d.card(&r, "compress").is_none(), "another card holds it");
     assert!(
         !review::compress_estimates(&d.db, &d.env, &r, NOW).unwrap(),
         "nothing the review could hold became proposable"
@@ -1359,7 +1322,7 @@ fn a_compress_folder_holding_a_redownload_item_is_left_out() {
         r"archived copy at D:\arch\part0.txt (verified when archived)",
     );
     store_estimate(&d, &corpus);
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     assert_eq!(
         paths(&d.card(&r, "redownload").unwrap()),
         std::slice::from_ref(&part0)
@@ -1385,7 +1348,7 @@ fn an_open_queued_behind_an_exclusive_build_builds_nothing_once_that_review_is_f
             b.exclusive(|now| {
                 in_ex.send(()).unwrap();
                 gate.recv().unwrap();
-                review::build(&db, &env, &WinLister, Scope::Volume(vid), now).unwrap();
+                review::build(&db, &env, &WinLister, vid, now).unwrap();
             })
         })
     };
@@ -1444,7 +1407,7 @@ fn a_disposable_answer_stops_counting_once_the_folder_grows_by_half() {
 
     d.fs.file(&format!(r"{junk}\more.dat"), 900 * MIB);
     let vid = d.index();
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     let dis = d
         .card(&r, "disposable")
         .expect("grown by under half, still asked for");
@@ -1453,7 +1416,7 @@ fn a_disposable_answer_stops_counting_once_the_folder_grows_by_half() {
 
     d.fs.file(&format!(r"{junk}\new.dat"), 200 * MIB);
     let vid = d.index();
-    let r = d.review(Scope::Volume(vid), NOW + HOUR);
+    let r = d.review(vid, NOW + HOUR);
     assert!(
         d.card(&r, "disposable")
             .is_none_or(|p| p.items.iter().all(|i| i.path != junk)),
@@ -1468,6 +1431,38 @@ fn a_disposable_answer_stops_counting_once_the_folder_grows_by_half() {
     assert_eq!(cap(&d), Some(Verdict::Review));
 }
 
+// Traces: REVIEW-AREAS
+#[test]
+fn an_area_says_when_its_verdict_is_the_users_own_answer() {
+    let d = Disk::new();
+    let kept = d.folder("kept", "old.bin", 6 * GIB);
+    let other = d.folder("other", "x.bin", 3 * GIB);
+    let vid = d.index();
+    let conn = d.db.conn().unwrap();
+    let area = |r: &Review, p: &str| {
+        r.areas
+            .iter()
+            .find(|a| a.path == p || a.path.starts_with(&format!("{p}\\")))
+            .cloned()
+            .unwrap_or_else(|| panic!("{p} in {:?}", r.areas))
+    };
+    let r = d.review(vid, NOW);
+    assert!(!area(&r, &kept).user && !area(&r, &other).user);
+
+    let at = area(&r, &kept).path;
+    let m = answer(&conn, &d.env, &at, Answer::Keep, NOW).unwrap();
+    review::apply_answer(&conn, &at, &m).unwrap();
+    let stored = review::get(&conn, &r.id).unwrap().unwrap();
+    assert!(
+        area(&stored, &at).user,
+        "the stored review shows the answer at once"
+    );
+    assert!(!area(&stored, &other).user);
+    let r = d.review(vid, NOW + HOUR);
+    assert!(area(&r, &at).user, "a rebuilt review keeps it");
+    assert!(!area(&r, &other).user);
+}
+
 // Traces: REVIEW-BUILD
 #[test]
 fn a_move_elsewhere_answer_sends_the_whole_folder_once_there_is_a_destination() {
@@ -1480,14 +1475,14 @@ fn a_move_elsewhere_answer_sends_the_whole_folder_once_there_is_a_destination() 
     answer(&conn, &d.env, &renders, Answer::MoveElsewhere, NOW - HOUR).unwrap();
     answer(&conn, &d.env, &kept, Answer::Keep, NOW - HOUR).unwrap();
 
-    let r = d.review(Scope::Volume(vid), NOW);
+    let r = d.review(vid, NOW);
     assert!(
         d.card(&r, "archive").is_none(),
         "no destination to send it to"
     );
 
     d.nas();
-    let r = d.review(Scope::Volume(vid), NOW + HOUR);
+    let r = d.review(vid, NOW + HOUR);
     let a = d.card(&r, "archive").expect("the answer is enough");
     assert_eq!(a.destination.as_ref().map(|x| x.name.as_str()), Some("NAS"));
     assert_eq!(

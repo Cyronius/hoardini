@@ -20,9 +20,8 @@ use serde_json::json;
 use tokio::sync::watch;
 
 pub mod builtin;
-mod copychecks;
 mod copywork;
-mod explore;
+mod filetypes;
 mod providers;
 mod rclone;
 mod review;
@@ -46,6 +45,7 @@ const BODY_LIMIT: usize = 2 * 1024 * 1024;
 // The Tauri shell implements this with native dialogs; headless serve has none (routes return 501).
 pub trait DialogProvider: Send + Sync {
     fn pick_folder(&self) -> BoxFuture<'static, Option<PathBuf>>;
+    fn pick_file(&self, label: &str, extensions: &[&str]) -> BoxFuture<'static, Option<PathBuf>>;
 }
 
 pub struct ServerOptions {
@@ -231,8 +231,6 @@ pub async fn start_with_launcher(
     launcher: Option<Arc<dyn builtin::Launcher>>,
 ) -> anyhow::Result<ServerHandle> {
     let db = Db::open(&opts.db_path)?;
-    // What the user looked at in Explore belongs to the last session's window, not this one.
-    hoardini_core::explore::set_focus(&db.conn()?, None)?;
     let db_for_forget = db.clone();
     let data_root = opts
         .db_path
@@ -345,7 +343,7 @@ pub async fn start_with_launcher(
     }));
     // --no-refresh also keeps the periodic journal refresh off: the index is left alone.
     if opts.refresh_on_start {
-        if let Err(e) = supervisor.start_launch_refresh(supervisor.auto_mode()) {
+        if let Err(e) = supervisor.start_launch_refresh() {
             tracing::warn!(error = %e, "refresh on start failed");
         }
         supervisor.enable_journal();

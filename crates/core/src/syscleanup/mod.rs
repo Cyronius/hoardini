@@ -302,38 +302,6 @@ fn join(dir: &str, name: &str) -> String {
     format!("{}\\{name}", dir.trim_end_matches('\\'))
 }
 
-pub fn propose(
-    db: &crate::store::Db,
-    facts: &SystemFacts,
-    wanted: &[&str],
-    conversation_id: Option<String>,
-    tool_call_id: Option<String>,
-) -> anyhow::Result<crate::proposals::Proposal> {
-    let found = candidates(&db.conn()?, facts)?;
-    let ops: Vec<CleanupCandidate> = found
-        .into_iter()
-        .filter(|c| wanted.is_empty() || wanted.contains(&c.op.name()))
-        .collect();
-    let dropped = wanted
-        .iter()
-        .filter(|w| !ops.iter().any(|c| c.op.name() == **w))
-        .map(|w| crate::proposals::DroppedItem {
-            path: (*w).to_string(),
-            reason: "not detected on this PC: nothing big enough for Windows to clean up".into(),
-        })
-        .collect();
-    crate::proposals::create_system_cleanup(
-        db,
-        crate::proposals::NewSystemCleanup {
-            conversation_id,
-            tool_call_id,
-            summary: "Cleanups only Windows can do".into(),
-            ops,
-            dropped,
-        },
-    )
-}
-
 // Fixed order on the card; sizes come from the index wherever it can tell.
 pub fn candidates(conn: &Connection, facts: &SystemFacts) -> anyhow::Result<Vec<CleanupCandidate>> {
     let mut out = Vec::new();

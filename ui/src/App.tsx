@@ -79,10 +79,6 @@ function useLiveStatus() {
 export function App() {
   useThemeSync();
   useLiveStatus();
-  const loadThread = useStore((s) => s.loadThread);
-  useEffect(() => {
-    void loadThread();
-  }, [loadThread]);
   return (
     <div className="flex h-full flex-col bg-ink-900 text-paper">
       <Header />

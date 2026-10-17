@@ -165,11 +165,22 @@ fn nothing_is_offered_below_the_thresholds_or_when_windows_says_no() {
         "unknown registry state falls back to the file"
     );
     assert_eq!(hib[0].estimate, Some(25 * GIB - 16 * GIB / 5));
-    let err = syscleanup::propose(&db, &facts, &[], None, None).unwrap_err();
+    let ops = syscleanup::candidates(&conn, &facts).unwrap();
+    let err = proposals::create_system_cleanup_card(&db, cleanup(ops), None).unwrap_err();
     assert!(
         err.to_string().contains("nothing Windows can clean up"),
         "{err}"
     );
+}
+
+fn cleanup(ops: Vec<CleanupCandidate>) -> NewSystemCleanup {
+    NewSystemCleanup {
+        conversation_id: Some("review".into()),
+        tool_call_id: None,
+        summary: "Cleanups only Windows can do".into(),
+        ops,
+        dropped: Vec::new(),
+    }
 }
 
 // Traces: ACT-WINDOWS-CLEANUP-DETECT
@@ -178,19 +189,18 @@ fn a_proposal_holds_the_wanted_operations_with_their_views_and_ticks() {
     let tmp = tempfile::tempdir().unwrap();
     let db = Db::open(tmp.path().join("h.db")).unwrap();
     indexed(&db, true);
-    let p = syscleanup::propose(
-        &db,
-        &busy_facts(),
-        &[
-            "recycle_bin",
-            "hibernation",
-            "restore_points",
-            "compact_vhdx",
-        ],
-        Some("main".into()),
-        Some("call-1".into()),
-    )
-    .unwrap();
+    let wanted = [
+        "recycle_bin",
+        "hibernation",
+        "restore_points",
+        "compact_vhdx",
+    ];
+    let ops = syscleanup::candidates(&db.conn().unwrap(), &busy_facts())
+        .unwrap()
+        .into_iter()
+        .filter(|c| wanted.contains(&c.op.name()))
+        .collect();
+    let p = proposals::create_system_cleanup_card(&db, cleanup(ops), None).unwrap();
     assert_eq!(p.kind, ProposalKind::SystemCleanup);
     let items: Vec<(&str, i64, bool, bool, &str)> = p
         .items
@@ -328,10 +338,10 @@ fn five_ops(fx: &Fx) -> (proposals::Proposal, PathBuf) {
         note: String::new(),
         parts: Vec::new(),
     };
-    let p = proposals::create_system_cleanup(
+    let p = proposals::create_system_cleanup_card(
         &fx.db,
         NewSystemCleanup {
-            conversation_id: Some("main".into()),
+            conversation_id: Some("review".into()),
             tool_call_id: None,
             summary: "Cleanups only Windows can do".into(),
             ops: vec![
@@ -349,6 +359,7 @@ fn five_ops(fx: &Fx) -> (proposals::Proposal, PathBuf) {
             ],
             dropped: Vec::new(),
         },
+        None,
     )
     .unwrap();
     (p, vhdx)

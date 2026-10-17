@@ -7,7 +7,7 @@ use support::*;
 
 // Traces: AGENT-APPROVAL-KEYED
 #[test]
-fn approving_one_proposal_never_changes_another_and_both_survive_a_reload() {
+fn approving_one_proposal_never_changes_another_and_both_survive_a_reopen() {
     let fx = Fx::new();
     let f1 = fx.file("one.bin", &data(10_000, 1));
     let f2 = fx.file("two.bin", &data(10_000, 2));
@@ -27,17 +27,13 @@ fn approving_one_proposal_never_changes_another_and_both_survive_a_reload() {
 
     let path = fx.db.path().to_path_buf();
     let db = Db::open(&path).unwrap();
-    let thread = proposals::list_for_conversation(&db, "conv-1").unwrap();
-    assert_eq!(thread.len(), 2);
-    let (a, b) = (&thread[0], &thread[1]);
-    assert_eq!((a.id.as_str(), a.status.as_str()), (p1.id.as_str(), "done"));
+    let a = proposals::get(&db, &p1.id).unwrap().unwrap();
+    let b = proposals::get(&db, &p2.id).unwrap().unwrap();
+    assert_eq!(a.status, "done");
     assert_eq!(a.job_id.as_deref(), Some(r.job_id.as_str()));
     assert_eq!(a.items[0].status, "done");
-    assert_eq!(
-        (b.id.as_str(), b.status.as_str()),
-        (p2.id.as_str(), "pending")
-    );
-    assert_eq!(serde_json::to_value(b).unwrap(), p2_before);
+    assert_eq!(b.status, "pending");
+    assert_eq!(serde_json::to_value(&b).unwrap(), p2_before);
 
     let declined = proposals::decline(&db, &p2.id).unwrap();
     assert_eq!(declined.status, "declined");

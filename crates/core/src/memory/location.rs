@@ -339,7 +339,7 @@ pub fn classify(
     })
 }
 
-pub(crate) fn expanded(env: &PolicyEnv, key: &str) -> String {
+pub fn expanded(env: &PolicyEnv, key: &str) -> String {
     normalize_path(&paths::expand_with(key, &env.profile))
 }
 
@@ -801,7 +801,8 @@ pub fn keep_block(
     action: Action,
 ) -> anyhow::Result<Option<String>> {
     let p = normalize_path(path);
-    for m in locations(conn)? {
+    // Only the user's own keep answer holds an action back; Hoardini's guesses never outrank the user (POLICY-LOCATION-KEEP).
+    for m in locations(conn)?.into_iter().filter(|m| m.source == "user") {
         let Some(d) = &m.detail else {
             continue;
         };

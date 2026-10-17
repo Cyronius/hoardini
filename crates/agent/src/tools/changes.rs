@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::util::{conn, failed, limit, opt_string, opt_u64, parse};
-use super::{DATA_VERSION, Outcome, Tool, ToolCtx, ToolError};
+use super::{Outcome, Tool, ToolCtx, ToolError};
 
 pub struct Changes;
 
@@ -119,24 +119,6 @@ impl Tool for Changes {
         if let Some(line) = free_summary(&range).map(|f| f.line()) {
             let _ = writeln!(out, "{line}");
         }
-        let _ = writeln!(out, "range_ms: {}..{} {}", ch.from.finished_ms, ch.to.finished_ms, ch.volume);
-        let data = json!({
-            "v": DATA_VERSION,
-            "kind": "changes",
-            "volume": ch.volume,
-            "from": {"id": ch.from.id, "ms": ch.from.finished_ms},
-            "to": {"id": ch.to.id, "ms": ch.to.finished_ms},
-            "free_delta": ch.free_delta,
-            "indexed_delta": ch.indexed_delta,
-            "free_before": ch.from.free_bytes,
-            "free_after": ch.to.free_bytes,
-            "grew": ch.grew,
-            "new": ch.new,
-            "shrank": ch.shrank,
-            "removed": ch.removed,
-            "omitted": ch.omitted,
-            "range_ms": [ch.from.finished_ms, ch.to.finished_ms],
-        });
-        Ok(Outcome::text(out).with_data(data))
+        Ok(Outcome::text(out))
     }
 }

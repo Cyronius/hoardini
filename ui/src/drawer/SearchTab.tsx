@@ -28,6 +28,7 @@ function Row({ meta, view, onChanged }: { meta: (typeof KINDS)[number]; view: Se
       }
       if (meta.needsUrl) body.base_url = url.trim() || null;
       await routes.putSearchProvider(meta.kind, body);
+      if (body.api_key || (meta.needsUrl && url.trim())) await routes.activateSearchProvider(meta.kind);
       setKey("");
       setError(null);
       onChanged();
@@ -103,7 +104,7 @@ export function SearchTab() {
   useEffect(load, [load]);
   return (
     <div className="space-y-3">
-      <p className="text-muted">Web search fills gaps the local evidence cannot. Queries are redacted first. Turn it on in Settings.</p>
+      <p className="text-muted">Web search fills gaps the local evidence cannot. Queries are redacted first. Saving a key turns it on with that provider.</p>
       <ErrorLine error={error} />
       <ul className="space-y-2">
         {KINDS.map((m) => (

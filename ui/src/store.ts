@@ -1,26 +1,11 @@
 import { create } from "zustand";
-import type { Message } from "@ag-ui/client";
 import { routes } from "./api/client";
-import type { IndexSummary, Job, Proposal, Status, StatusEvent, ThreadDetail, ToolData } from "./api/types";
-import { loadPrefs, savePrefs } from "./shell/layout";
+import type { IndexSummary, Job, Proposal, Status, StatusEvent } from "./api/types";
 import { saveThemePref, themePref } from "./theme";
 
-export type DrawerTab = "memory" | "destinations" | "providers" | "search" | "theme" | "settings";
+export type DrawerTab = "main" | "memory" | "destinations" | "providers" | "search" | "settings";
 
 export const TADA_MS = 5000;
-
-interface NotedMemory {
-  memoryId: number;
-  text: string;
-  pinned: boolean;
-}
-
-export const THREAD_ID = "main";
-
-export type HomeTab = "review" | "explore";
-type Outbox = { text: string; lookCloser?: string; n: number };
-
-const prefs = loadPrefs();
 
 // A review refetch can land between a tick and its PUT's reply; the tick on screen must not flip back.
 const held = new Map<string, Set<number>>();
@@ -33,26 +18,6 @@ const withHeld = (p: Proposal): Proposal => {
   const h = held.get(p.id);
   return h && p.status === "pending" ? { ...p, items: p.items.map((i) => (i.status === "pending" ? { ...i, selected: h.has(i.id) } : i)) } : p;
 };
-let outboxSeq = 0;
-
-export type ThreadMeta = Pick<ThreadDetail, "window_start_id" | "has_hidden" | "fresh" | "earlier" | "showing_all">;
-
-// Card payloads ride on stored tool messages (AGENT-TOOL-DATA); live ones arrive as `tool_data` events.
-const dataOf = (messages: unknown[]): Record<string, ToolData> => {
-  const out: Record<string, ToolData> = {};
-  for (const m of messages as { role?: string; toolCallId?: string; data?: ToolData }[]) {
-    if (m.role === "tool" && m.toolCallId && m.data) out[m.toolCallId] = m.data;
-  }
-  return out;
-};
-
-const metaOf = (d: ThreadDetail): ThreadMeta => ({
-  window_start_id: d.window_start_id,
-  has_hidden: d.has_hidden,
-  fresh: d.fresh,
-  earlier: d.earlier ?? 0,
-  showing_all: d.showing_all ?? false,
-});
 
 interface State {
   status: Status | null;
@@ -61,35 +26,21 @@ interface State {
   jobs: Record<string, Job>;
   tadaUntil: number;
   mascotAway: boolean;
+  approving: string | null;
+  // A hold-to-confirm button is being held; Hoardini carries the box meanwhile.
+  holding: boolean;
+  setHolding(h: boolean): void;
+  // Home has nothing to show, so Hoardini naps.
+  homeClean: boolean;
   setMascotAway(away: boolean): void;
+  setApproving(proposalId: string | null): void;
 
   drawer: DrawerTab | null;
   themePref: string;
-
-  home: HomeTab;
-  chatFront: boolean;
-  chatCollapsed: boolean;
-  chatWidth: number | null;
-  outbox: Outbox | null;
-  // The chat remounts when its thread reloads (Look closer, Clear chat); the draft outlives it.
-  chatDraft: string;
-  exploreAt: { path: string; n: number } | null;
-
-  // Bumped when the chat must remount from `seedMessages` (page load, cleared history).
-  threadNonce: number;
-  seedMessages: Message[] | null;
-  threadMeta: ThreadMeta | null;
+  // An item question is being answered (AGENT-ASK); Hoardini stomps while he thinks.
   chatBusy: boolean;
-  runStats: Record<string, { elapsed_ms: number; steps: number }>;
-  // The last run ended at the tool-step cap (run_stats.limit_reached), so "keep going" is offered.
-  limitHit: boolean;
 
   proposals: Record<string, Proposal>;
-  noted: Record<string, NotedMemory>;
-  toolTimes: Record<string, { start: number; end?: number }>;
-  toolData: Record<string, ToolData>;
-  // lm-ag-ui folds a text-less tool round into the next text message; these calls came before that text.
-  callsBefore: Record<string, string[]>;
 
   applyStatusEvent(e: StatusEvent): void;
   setConnected(c: boolean): void;
@@ -97,27 +48,9 @@ interface State {
   openDrawer(tab: DrawerTab | null): void;
   setThemePref(p: string): void;
   setChatBusy(b: boolean): void;
-  setHome(h: HomeTab): void;
-  showChat(): void;
-  setChatCollapsed(c: boolean): void;
-  setChatWidth(w: number): void;
-  askChat(text: string, lookCloser?: string): void;
-  setChatDraft(text: string): void;
-  takeOutbox(n: number): void;
-  openExplore(path: string): void;
   putProposal(p: Proposal): void;
   putProposals(ps: Record<string, Proposal>): void;
   loadProposal(id: string): Promise<Proposal | null>;
-  noteMemory(toolCallId: string, n: NotedMemory): void;
-  markToolStart(id: string): void;
-  markToolEnd(id: string): void;
-  setToolData(toolCallId: string, data: ToolData): void;
-  markCallsBefore(messageId: string, callIds: string[]): void;
-  loadThread(all?: boolean): Promise<void>;
-  refreshThreadMeta(): Promise<void>;
-  markAsked(messageId: string, hadMessages: boolean): void;
-  clearScreen(): Promise<void>;
-  clearHistory(): Promise<void>;
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -127,31 +60,18 @@ export const useStore = create<State>((set, get) => ({
   jobs: {},
   tadaUntil: 0,
   mascotAway: false,
+  approving: null,
+  holding: false,
+  setHolding: (holding) => set({ holding }),
+  homeClean: false,
+  setApproving: (approving) => set({ approving }),
   setMascotAway: (mascotAway) => set({ mascotAway }),
 
   drawer: null,
   themePref: themePref(),
-
-  home: "review",
-  chatFront: false,
-  chatCollapsed: prefs.collapsed,
-  chatWidth: prefs.chatWidth,
-  outbox: null,
-  chatDraft: "",
-  exploreAt: null,
-
-  threadNonce: 0,
-  seedMessages: null,
-  threadMeta: null,
   chatBusy: false,
-  runStats: {},
-  limitHit: false,
 
   proposals: {},
-  noted: {},
-  toolTimes: {},
-  toolData: {},
-  callsBefore: {},
 
   applyStatusEvent(e) {
     if (e.type === "status") {
@@ -183,26 +103,6 @@ export const useStore = create<State>((set, get) => ({
     set({ themePref: p });
   },
   setChatBusy: (chatBusy) => set({ chatBusy }),
-  setHome: (home) => set({ home, chatFront: false }),
-  showChat() {
-    if (get().chatCollapsed) get().setChatCollapsed(false);
-    set({ chatFront: true });
-  },
-  setChatCollapsed(chatCollapsed) {
-    set({ chatCollapsed });
-    savePrefs({ chatWidth: get().chatWidth, collapsed: chatCollapsed });
-  },
-  setChatWidth(chatWidth) {
-    set({ chatWidth });
-    savePrefs({ chatWidth, collapsed: get().chatCollapsed });
-  },
-  askChat(text, lookCloser) {
-    set({ outbox: { text, lookCloser, n: ++outboxSeq } });
-    get().showChat();
-  },
-  setChatDraft: (chatDraft) => set({ chatDraft }),
-  takeOutbox: (n) => set((s) => (s.outbox?.n === n ? { outbox: null } : s)),
-  openExplore: (path) => set((s) => ({ home: "explore", chatFront: false, exploreAt: { path, n: (s.exploreAt?.n ?? 0) + 1 } })),
   putProposal: (p) => set((s) => ({ proposals: { ...s.proposals, [p.id]: withHeld(p) } })),
   putProposals: (ps) => set((s) => ({ proposals: { ...s.proposals, ...Object.fromEntries(Object.entries(ps).map(([k, p]) => [k, withHeld(p)])) } })),
   async loadProposal(id) {
@@ -213,53 +113,5 @@ export const useStore = create<State>((set, get) => ({
     } catch {
       return null;
     }
-  },
-  noteMemory: (toolCallId, n) => set((s) => ({ noted: { ...s.noted, [toolCallId]: n } })),
-  markToolStart: (id) => set((s) => ({ toolTimes: { ...s.toolTimes, [id]: { start: Date.now() } } })),
-  markToolEnd: (id) =>
-    set((s) => {
-      const t = s.toolTimes[id];
-      return t && !t.end ? { toolTimes: { ...s.toolTimes, [id]: { ...t, end: Date.now() } } } : s;
-    }),
-  setToolData: (toolCallId, data) => set((s) => ({ toolData: { ...s.toolData, [toolCallId]: data } })),
-  markCallsBefore: (messageId, callIds) => set((s) => ({ callsBefore: { ...s.callsBefore, [messageId]: callIds } })),
-  async loadThread(all = false) {
-    try {
-      const d = await routes.thread(all);
-      set((s) => ({
-        threadNonce: s.threadNonce + 1,
-        limitHit: false,
-        seedMessages: d.messages as Message[],
-        threadMeta: metaOf(d),
-        proposals: { ...s.proposals, ...d.proposals },
-        toolData: { ...s.toolData, ...dataOf(d.messages) },
-      }));
-    } catch {
-      // Offline: still open an empty chat so the composer works once the server is back.
-      set((s) => ({ threadNonce: s.threadNonce + 1, seedMessages: null, threadMeta: null }));
-    }
-  },
-  async refreshThreadMeta() {
-    try {
-      const d = await routes.thread(get().threadMeta?.showing_all ?? false);
-      set((s) => ({ threadMeta: metaOf(d), proposals: { ...s.proposals, ...d.proposals } }));
-    } catch {
-      // keep the last known boundary
-    }
-  },
-  // A question asked while fresh opens the new window; mirror that until the run's refetch.
-  markAsked: (messageId, hadMessages) =>
-    set((s) =>
-      s.threadMeta?.fresh
-        ? { threadMeta: { ...s.threadMeta, window_start_id: messageId, has_hidden: s.threadMeta.has_hidden || hadMessages, fresh: false } }
-        : s,
-    ),
-  async clearScreen() {
-    await routes.startFresh();
-    await get().loadThread(false);
-  },
-  async clearHistory() {
-    await routes.clearHistory();
-    await get().loadThread();
   },
 }));

@@ -26,14 +26,14 @@ impl Tool for Remember {
     }
 
     fn description(&self) -> &'static str {
-        "Save a note for later chats: a user preference, a fact about a folder, a verdict, or a folder the user wants protected. The user sees a \"noted\" chip and can undo it."
+        "Save a note for later questions: a user preference, a fact about a folder, a verdict, or a folder the user wants protected. The user can see and remove it in Settings."
     }
 
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
             "scope": {"type": "string", "description": "A path (~\\.lmstudio\\models), a pattern (~\\code\\**\\target), or \"global\" for a general preference"},
             "kind": {"type": "string", "enum": ["fact", "preference", "protect", "verdict"],
-                     "description": "protect = never propose removing anything under scope"},
+                     "description": "protect = nothing under scope may be removed"},
             "text": {"type": "string", "description": "The note, one sentence"},
             "user_asked": {"type": "boolean", "description": "true only if the user explicitly asked you to remember this"}
         }, "required": ["scope", "kind", "text"]})
@@ -74,18 +74,9 @@ impl Tool for Remember {
             &ctx.profile,
         )
         .map_err(failed)?;
-        let content = format!(
-            "Noted as memory #{} ({}, {}): {}. The user can undo it from the chip.",
+        Ok(Outcome::text(format!(
+            "Noted as memory #{} ({}, {}): {}. The user can change or remove it in Settings.",
             m.id, a.kind, m.key, m.text
-        );
-        Ok(Outcome::Text {
-            content,
-            custom: vec![(
-                "memory_noted".into(),
-                json!({"memory_id": m.id, "text": m.text, "tool_call_id": ctx.tool_call_id, "pinned": m.pinned}),
-            )],
-            data: None,
-            learn: None,
-        })
+        )))
     }
 }

@@ -36,7 +36,7 @@ impl Db {
 
     pub fn conn(&self) -> anyhow::Result<Connection> {
         let conn = Connection::open(&self.path)?;
-        conn.busy_timeout(std::time::Duration::from_secs(10))?;
+        conn.busy_timeout(std::time::Duration::from_secs(120))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA cache_size=-16000;",
         )?;

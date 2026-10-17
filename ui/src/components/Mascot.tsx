@@ -16,7 +16,16 @@ const CHEEK = "#ff9f95";
 const SIDE_L = { "--side": 1 } as CSSProperties;
 const SIDE_R = { "--side": -1 } as CSSProperties;
 
-const ACTION: Record<MascotState, string> = { idle: "relaxing", shuffle: "doing his pre-bout ritual", think: "stomping while he thinks", tada: "celebrating" };
+const ACTION: Record<MascotState, string> = {
+  idle: "relaxing",
+  shuffle: "doing his pre-bout ritual",
+  think: "stomping while he thinks",
+  tada: "celebrating",
+  look: "looking around with his magnifying glass",
+  carry: "carrying a box",
+  worry: "worried that the drive is nearly full",
+  nap: "napping because everything is clean",
+};
 
 const star = (x: number, y: number, r: number) =>
   `M${x} ${y - r}L${x + r * 0.28} ${y - r * 0.28}L${x + r} ${y}L${x + r * 0.28} ${y + r * 0.28}L${x} ${y + r}L${x - r * 0.28} ${y + r * 0.28}L${x - r} ${y}L${x - r * 0.28} ${y - r * 0.28}Z`;
@@ -66,6 +75,13 @@ export function SumoSvg({ act, volume, className = "", label }: { act: Act; volu
     <g className="s-pos" style={{ transform: `translateX(${side === "l" ? -armOff : armOff}px)` }}>
       <g className={`s-arm s-arm-${side}`} style={side === "l" ? SIDE_L : SIDE_R}>
         <ellipse cx="32" cy="39" rx="4.2" ry="8" fill={SKIN} {...stroke} />
+        {side === "r" && (
+          <g className="s-lens">
+            <path d="M32 46.2v3" stroke={INK} strokeWidth="1.8" strokeLinecap="round" />
+            <circle cx="32" cy="52.6" r="3.6" fill="#9fdcff" fillOpacity="0.55" {...stroke} />
+            <path d="M30.4 51.4a2 2 0 0 1 1.6 -1.2" stroke="#fffdf8" strokeWidth="0.8" fill="none" strokeLinecap="round" />
+          </g>
+        )}
       </g>
     </g>
   );
@@ -79,6 +95,7 @@ export function SumoSvg({ act, volume, className = "", label }: { act: Act; volu
       {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
     >
       {label && <title>{label}</title>}
+      <ellipse className="s-shadow" cx="32" cy="61.2" rx={rx + 4} ry="1.7" fill={INK} opacity="0.13" />
       <g className="s-body">
         {leg("l")}
         {leg("r")}
@@ -86,7 +103,19 @@ export function SumoSvg({ act, volume, className = "", label }: { act: Act; volu
           <g className="s-pos" style={{ transform: `scaleX(${scale})`, transformOrigin: "32px 38px", transformBox: "view-box" }}>
             <ellipse cx="32" cy="37" rx={GIRTH_MIN} ry="15" fill={SKIN} {...stroke} vectorEffect="non-scaling-stroke" />
             <path d="M23.4 42.6 Q32 46.2 40.6 42.6 L38.4 48.4 Q32 52.2 25.6 48.4 Z" fill="var(--color-brass)" stroke={INK} strokeWidth="1" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-            <circle cx="32" cy="38.4" r="0.9" fill={INK} opacity="0.55" />
+            <path d="M25.2 39.6 Q32 43.6 38.8 39.6" stroke={SKIN_SHADE} strokeWidth="1.3" strokeLinecap="round" fill="none" vectorEffect="non-scaling-stroke" />
+            <circle cx="32" cy="35.6" r="0.9" fill={INK} opacity="0.55" />
+          </g>
+          <path d="M29.5 48.6 L30.1 53.4 H33.9 L34.5 48.6" fill="var(--color-brass)" stroke={INK} strokeWidth="1" strokeLinejoin="round" />
+          <g className="s-sagari" fill="none" strokeWidth="1" strokeLinecap="round" style={{ stroke: "color-mix(in srgb, var(--color-brass) 62%, #000)" }}>
+            {[-3, -1.5, 0, 1.5, 3].map((d) => (
+              <path key={d} d={`M${32 + d} 49.4 q${d * 0.12} 2.6 ${d * 0.2} 5.2`} />
+            ))}
+          </g>
+          <g className="s-box">
+            <path d="M24.6 36.4h14.8l-1 9.8H25.6z" fill="#e8c48f" {...stroke} />
+            <path d="M24.6 36.4l1.6 -2.4h11.6l1.6 2.4" fill="#d6a965" {...stroke} />
+            <path d="M32 36.4v9.8" stroke={INK} strokeWidth="0.6" opacity="0.4" />
           </g>
           {arm("l")}
           {arm("r")}
@@ -105,6 +134,12 @@ export function SumoSvg({ act, volume, className = "", label }: { act: Act; volu
             <g className="s-eyes" fill={INK}>
               <ellipse cx="28" cy="20.4" rx="1.3" ry="1.7" />
               <ellipse cx="36" cy="20.4" rx="1.3" ry="1.7" />
+              <circle cx="28.45" cy="19.75" r="0.42" fill="#fffdf8" />
+              <circle cx="36.45" cy="19.75" r="0.42" fill="#fffdf8" />
+            </g>
+            <g className="s-brows-calm" fill="none" stroke={INK} strokeWidth="1.3" strokeLinecap="round">
+              <path d="M26.2 17.2 q1.8 -1.1 3.6 0" />
+              <path d="M34.2 17.2 q1.8 -1.1 3.6 0" />
             </g>
             <g fill="none" stroke={INK} strokeWidth="1.3" strokeLinecap="round">
               <g className="s-eyes-happy">
@@ -128,8 +163,8 @@ export function SumoSvg({ act, volume, className = "", label }: { act: Act; volu
                 <path d="M34 16.6 q2 -1.4 4 0" />
               </g>
             </g>
-            <circle cx="24.6" cy="23.8" r="2.1" fill={CHEEK} opacity="0.75" />
-            <circle cx="39.4" cy="23.8" r="2.1" fill={CHEEK} opacity="0.75" />
+            <circle cx="24.6" cy="23.6" r="2.4" fill={CHEEK} opacity="0.72" />
+            <circle cx="39.4" cy="23.6" r="2.4" fill={CHEEK} opacity="0.72" />
             <path className="s-smile" d="M29.8 25.2 q2.2 2 4.4 0" stroke={INK} strokeWidth="1.2" strokeLinecap="round" fill="none" />
             <path className="s-grin" d="M29.4 24.6 q2.6 4 5.2 0 z" fill={INK} stroke={INK} strokeWidth="0.8" strokeLinejoin="round" />
             <path className="s-frown" d="M29.9 26.9 q2.1 -1.9 4.2 0" stroke={INK} strokeWidth="1.2" strokeLinecap="round" fill="none" />
@@ -149,6 +184,11 @@ export function SumoSvg({ act, volume, className = "", label }: { act: Act; volu
             </g>
           </g>
         </g>
+      </g>
+      <g className="s-zzz" fill={INK} fontFamily="var(--font-sans)" fontWeight="800">
+        <text className="s-z s-z-1" x="43" y="14" fontSize="5.5">z</text>
+        <text className="s-z s-z-2" x="47.5" y="9.5" fontSize="4.4">z</text>
+        <text className="s-z s-z-3" x="51" y="5.5" fontSize="3.4">z</text>
       </g>
       <g className="s-salt" fill="#fffdf8" stroke={INK} strokeWidth="0.5">
         <circle className="s-grain s-grain-1" cx="50" cy="20" r="1.2" />

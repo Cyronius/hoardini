@@ -9,6 +9,17 @@
   color: var(--foreground);
 }
 
+/* Long paths and URLs in answers wrap inside their column instead of pushing it past the window edge. */
+.md {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.md pre,
+.md table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 :root {
   --background: #fff8f0;
   --foreground: #4a3a3f;

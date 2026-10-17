@@ -291,9 +291,8 @@ volume space is unknown.
 In background mode the indexer shall run with process background mode (low CPU, very low I/O and memory priority) and
 EcoQoS, with 2 workers. Fast mode runs at normal priority with one lister per two logical CPUs, at most 12: a single
 writer applies every listing, and more listers only add kernel contention. `--workers` overrides the count for testing.
-The Settings tab's Fast / Lean switch (`index_speed`) picks the mode for the launch refresh, timer-driven journal
-refreshes, and Rescan now: Lean is background mode, Fast is fast mode, and the very first full scan is always fast
-(SRV-ONE-REFRESH). If the OS calls fail, the refresh logs a warning and continues.
+The app runs every full walk in fast mode and only its timer-driven journal refreshes in background mode
+(SRV-ONE-REFRESH); there is no setting. If the OS calls fail, the refresh logs a warning and continues.
 
 **Verification (manual):**
 1. Start `hoardini index --db %TEMP%\h-polite.db --volume C:\ --mode background`.
@@ -362,7 +361,7 @@ The watched roots are `meta.indexed_volumes` (a JSON array, default the system d
 - A root it removes is no longer refreshed. If its indexer child is running, the child is killed first; then its `volume` row, its `node` rows (deleted in chunks so other writers wait briefly), its scan history (`scan`, `scan_dir`, `scan_file`), its `evidence_cache` entries, and its duplicate-group members are deleted, and a duplicate group left with one copy is dropped. Other volumes' rows are untouched. The root is listed in `meta.volumes_forgetting` until the delete finishes; a delete cut short (a crash) finishes at the next server start, unless the root is watched again.
 - Every refresh pass skips a watched root that does not exist (an unplugged drive) and keeps its index.
 - `/api/status` reports each watched root in the same shape; `/api/index/summary` (the welcome-back card) reports the selected drive.
-- The selected drive is the focus once it has an index (`index::focus`): the header's index age (`/api/status` `index`), `GET /api/history`, and the `changes` tool default to it. Before its first index completes they fall back to the most recently refreshed volume.
+- The selected drive is the focus once it has an index (`index::focus`): the header's index age (`/api/status` `index`) and the `changes` tool default to it. Before its first index completes they fall back to the most recently refreshed volume.
 
 **Acceptance criteria:**
 - `plan_change`: watched `["c:", "C:\\", "d:/"]` with selected `d:` gives `["C:\\", "D:\\"]`, selected `D:\`, added `D:\`; an empty list, a selection outside the list, `relative\x`, `\\nas\share`, and adding a missing drive are refused with a reason; an unplugged drive may stay watched and selected.

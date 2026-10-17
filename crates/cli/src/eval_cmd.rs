@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use hoardini_agent::eval::{self, Options, RamProbe, Report};
 use hoardini_agent::provider::ProviderConfig;
-use hoardini_core::runtime::{self, LLAMA_SERVER, Pinned};
+use hoardini_core::runtime::{self, Pinned};
 use hoardini_core::store::{Db, now_ms};
 use hoardini_core::vault::{DpapiVault, SecretStore};
 use hoardini_server::builtin::{self, Builtin, LlamaLauncher};
@@ -173,7 +173,7 @@ fn parent(a: EvalArgs) -> Result<ExitCode> {
             .with_context(|| format!("{model} is not a pinned built-in model"))?;
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async {
-            install(&LLAMA_SERVER, &data).await?;
+            install(builtin::runtime_for(model), &data).await?;
             install(pin, &data).await
         })?;
     } else if a.provider_id.is_none() && a.base_url.is_none() {
@@ -277,7 +277,12 @@ fn child(db: Option<PathBuf>, a: EvalArgs, root: &str) -> Result<ExitCode> {
                     }));
                 }
                 owned = Some((b, lease));
-                (p, format!("{model} (built-in, CPU)"))
+                let backend = if builtin::needs_gpu(&model) {
+                    "GPU"
+                } else {
+                    "CPU"
+                };
+                (p, format!("{model} (built-in, {backend})"))
             }
             Some(id) => {
                 let path = db.unwrap_or_else(hoardini_core::paths::db_path);

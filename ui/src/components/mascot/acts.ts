@@ -1,6 +1,6 @@
 import { GIRTH_MAX, GIRTH_MIN } from "./girth";
 
-export type MascotState = "idle" | "shuffle" | "think" | "tada";
+export type MascotState = "idle" | "shuffle" | "think" | "tada" | "look" | "carry" | "worry" | "nap";
 
 export type Act =
   | MascotState

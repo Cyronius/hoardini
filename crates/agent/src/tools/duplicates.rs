@@ -28,7 +28,7 @@ impl Tool for Duplicates {
     }
 
     fn description(&self) -> &'static str {
-        "Find identical large files (same content, not hard links) from the index, hashing candidates as needed. Groups come with an id for propose_dedupe. If it says candidates are still being hashed, call it again to continue."
+        "Find identical large files (same content, not hard links) from the index, hashing candidates as needed. If it says candidates are still being hashed, call it again to continue."
     }
 
     fn parameters(&self) -> Value {

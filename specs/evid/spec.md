@@ -151,8 +151,8 @@ SHA-256, biggest first, and the waiting files and then folders are checked again
 (EVID-ATIME-PRESERVE), stored in `file_hash` keyed by volume and file id, and reused while size and mtime hold; a file
 that changes while it is hashed gets no row. Hugging Face blobs (`models--*\blobs\<sha256>`) and Ollama blobs
 (`sha256-<hex>`) are named by their hash and are never read. `go` is polled between files and between 1 MiB chunks.
-`RunReport.online_waiting` counts the candidates that wait on an unanswered online consent; the server stores the total
-over all watched volumes in meta `copy_online_waiting` after each full pass (`set_online_waiting`).
+`RunReport.online_waiting` counts the candidates that wait on an unanswered online consent; the server logs it with each
+volume's pass.
 
 **Acceptance criteria:**
 - `effect` maps identical, same-name-and-size, claimed, none to may-start-ticked, review, follow-catalog, only-copy; `verdict_for` gives `synced` for an identical `sync` answer, `redownload` for an identical `huggingface` answer, `review` for same-name-and-size, and nothing for claimed and none.
@@ -175,8 +175,8 @@ over all watched volumes in meta `copy_online_waiting` after each full pass (`se
 Online checks (Hugging Face, winget) declare a service, and `check_subject` runs one only while
 `online_checks.services.<service>` is on (meta `online_checks`, SRV-SETTINGS). The server's env (`CheckEnv::system`,
 `live_consent`) makes `run_volume` read the consent again before each candidate, so a service turned off mid-pass sends
-nothing more. Until the user has answered (`asked`
-false), an online check that applies is reported as waiting (`Outcome.waiting`, counted by `run_volume`) and `only_copy`
+nothing more. A database with no saved `online_checks` reads as asked with both services on (the user turns them off in
+Settings); a value that does not parse reads as off. With `asked` false (only a saved value says so), an online check that applies is reported as waiting (`Outcome.waiting`, counted by `run_volume`) and `only_copy`
 stays false for its paths; once asked with the service off, the check simply does not run. Offline checks (duplicate,
 archive, sync, git, Ollama, catalog) never look at consent. Requests that go out carry repo ids, search terms made from
 file names, and package names, never a local hash, a file size, a local path, or file contents: the remote hash is
@@ -367,7 +367,7 @@ done` with its candidate, checked, and hashed counts and how many wait on consen
 **Verification (manual):**
 1. Use a scratch data dir and database, and point meta `indexed_volumes` at two folders that are only read: `~\.lmstudio\models\lmstudio-community\SmolLM2-135M-Instruct-GGUF` and `~\Downloads`.
 2. Run `hoardini --db <scratch>\h.db serve --port 72xx --token dev`, hold a status stream open (`curl -N "http://127.0.0.1:72xx/api/status/stream?token=dev"`), and post `{"looking": true}` to `/api/presence`.
-3. After the refresh, the log shows `copy checks done` for each folder with `online_waiting` above 0, and `GET /api/copy-checks/waiting` reports it.
-4. `PUT /api/settings {"online_checks": {"asked": true, "services": {"huggingface": true, "winget": true}}}`. A new pass hashes the waiting files. `GET /api/copy-checks?path=~\.lmstudio\models\lmstudio-community\SmolLM2-135M-Instruct-GGUF\SmolLM2-135M-Instruct-Q4_K_M.gguf` then shows `huggingface` `identical` "identical to lmstudio-community/SmolLM2-135M-Instruct-GGUF on Hugging Face", and `~\Downloads\balenaEtcher-2.1.7.Setup.exe` shows `winget` `identical` "in winget as Balena.Etcher 2.1.7".
+3. After the refresh, the log shows `copy checks done` for each folder with `online_waiting` above 0.
+4. `PUT /api/settings {"online_checks": {"asked": true, "services": {"huggingface": true, "winget": true}}}`. A new pass hashes the waiting files. `SELECT path, check_name, confidence, detail_json FROM copy_check` then shows `huggingface` `identical` "identical to lmstudio-community/SmolLM2-135M-Instruct-GGUF on Hugging Face" for `~\.lmstudio\models\lmstudio-community\SmolLM2-135M-Instruct-GGUF\SmolLM2-135M-Instruct-Q4_K_M.gguf`, and `winget` `identical` "in winget as Balena.Etcher 2.1.7" for `~\Downloads\balenaEtcher-2.1.7.Setup.exe`.
 5. While it hashes, Process Explorer shows the `hoardini-copycheck` thread at background priority. Closing the status stream stops the pass within a second (the log shows `stopped=true`), and opening it again with `looking: true` resumes.
-(2026-10-09: steps 1-4 pass, debug build, live Hugging Face and winget. The first pass logged `online_waiting=1` for each folder; `/api/copy-checks/waiting` then said 1 because each volume overwrote the count, which was fixed to the total and re-run: 2. After consent the pass hashed 105,454,144 + 200,093,336 bytes; the GGUF was `identical` to `lmstudio-community/SmolLM2-135M-Instruct-GGUF` (`lfs.oid` bda48499...), the installer `identical` "in winget as Balena.Etcher 2.1.7" with signer "Balena Ltd", and `~\Downloads\omarchy-4.0.4.iso` "only copy we know of" (no disk-image check yet). Step 5 was not run: the files hashed in under 3 s.)
+(2026-10-09: steps 1-4 pass, debug build, live Hugging Face and winget. The first pass logged `online_waiting=1` for each folder (the since-removed `/api/copy-checks/waiting` route then reported the count). After consent the pass hashed 105,454,144 + 200,093,336 bytes; the GGUF was `identical` to `lmstudio-community/SmolLM2-135M-Instruct-GGUF` (`lfs.oid` bda48499...), the installer `identical` "in winget as Balena.Etcher 2.1.7" with signer "Balena Ltd", and `~\Downloads\omarchy-4.0.4.iso` "only copy we know of" (no disk-image check yet). Step 5 was not run: the files hashed in under 3 s.)

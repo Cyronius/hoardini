@@ -374,19 +374,13 @@ async fn settings_round_trip() {
     keys.sort();
     assert_eq!(
         keys,
-        [
-            "builtin_idle_minutes",
-            "index_size_bytes",
-            "index_speed",
-            "online_checks"
-        ]
+        ["builtin_idle_minutes", "index_size_bytes", "online_checks"]
     );
-    assert_eq!(s["index_speed"], "lean");
     assert_eq!(s["builtin_idle_minutes"], 10);
     assert!(s["index_size_bytes"].as_u64().unwrap() > 0);
     assert_eq!(
         s["online_checks"],
-        json!({"asked": false, "services": {"huggingface": false, "winget": false}})
+        json!({"asked": true, "services": {"huggingface": true, "winget": true}})
     );
 
     let (st, s) = f
@@ -397,7 +391,7 @@ async fn settings_round_trip() {
         )
         .await;
     assert_eq!(st, 200);
-    assert_eq!(s["index_speed"], "fast");
+    assert!(s.get("index_speed").is_none(), "the speed switch is gone");
     assert_eq!(s["builtin_idle_minutes"], 0);
     assert_ne!(s["index_size_bytes"], 1);
     assert!(s.get("threshold_bytes").is_none());
@@ -406,7 +400,7 @@ async fn settings_round_trip() {
         .call(
             "PUT",
             "/api/settings",
-            Some(json!({"online_checks": {"asked": true, "services": {"huggingface": true}}})),
+            Some(json!({"online_checks": {"asked": true, "services": {"winget": false}}})),
         )
         .await;
     assert_eq!(st, 200);
@@ -423,16 +417,13 @@ async fn settings_round_trip() {
     }
 
     let (_, again) = f.call("GET", "/api/settings", None).await;
-    assert_eq!(again["index_speed"], "fast");
     assert_eq!(again["online_checks"]["services"]["huggingface"], true);
     for bad in [
-        json!({"index_speed": "turbo"}),
-        json!({"index_speed": true}),
         json!({"builtin_idle_minutes": "x"}),
         json!({"online_checks": 3}),
         json!({"online_checks": {"services": {"huggingface": "yes"}}}),
         json!({"online_checks": {"services": {"bing": true}}}),
-        json!({"index_speed": "lean", "online_checks": {"asked": "no"}}),
+        json!({"builtin_idle_minutes": 5, "online_checks": {"asked": "no"}}),
     ] {
         let (st, e) = f.call("PUT", "/api/settings", Some(bad.clone())).await;
         assert_eq!(st, 400, "{bad}");
@@ -440,7 +431,7 @@ async fn settings_round_trip() {
     }
     let (_, again) = f.call("GET", "/api/settings", None).await;
     assert_eq!(
-        again["index_speed"], "fast",
+        again["builtin_idle_minutes"], 0,
         "a rejected PUT changes nothing"
     );
     assert_eq!(
@@ -448,77 +439,6 @@ async fn settings_round_trip() {
         json!({"asked": true, "services": {"huggingface": true, "winget": false}})
     );
     let _ = f.h.shutdown.send(());
-}
-
-// Traces: SRV-COPY-CHECKS
-#[tokio::test(flavor = "multi_thread")]
-async fn copy_check_answers_are_served_for_a_path_with_the_profile_as_tilde() {
-    let f = Fixture::new().await;
-    let file = f.dir.path().join("model.gguf");
-    std::fs::write(&file, b"weights").unwrap();
-    let path = hoardini_core::index::normalize_path(&file.to_string_lossy());
-    {
-        let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
-        let conn = db.conn().unwrap();
-        let sub = hoardini_core::copycheck::Subject::load(&conn, &path).unwrap();
-        let r = hoardini_core::copycheck::CopyResult::new(
-            "huggingface",
-            Some("org/model".into()),
-            hoardini_core::copycheck::Confidence::Identical,
-            json!({"note": "identical to org/model on Hugging Face", "root": path}),
-        );
-        hoardini_core::copycheck::store(&conn, &sub, &r).unwrap();
-        hoardini_core::store::set_meta(&conn, "copy_online_waiting", "3").unwrap();
-    }
-    let profile = hoardini_core::paths::profile_dir()
-        .to_string_lossy()
-        .into_owned();
-    let tilde = hoardini_core::paths::redact(&path);
-    for q in [&path, &tilde] {
-        let (st, v) = f
-            .call("GET", &format!("/api/copy-checks?path={}", enc(q)), None)
-            .await;
-        assert_eq!(st, 200, "{v}");
-        assert_eq!(v["path"], tilde.as_str());
-        assert_eq!(v["only_copy"], false);
-        assert_eq!(v["note"], "identical to org/model on Hugging Face");
-        let r = &v["results"][0];
-        assert_eq!(
-            (
-                r["check"].as_str(),
-                r["confidence"].as_str(),
-                r["locator"].as_str()
-            ),
-            (Some("huggingface"), Some("identical"), Some("org/model"))
-        );
-        assert_eq!(r["detail"]["root"], tilde.as_str());
-        assert!(r["checked_ms"].as_i64().unwrap() > 0);
-        let escaped = profile.to_lowercase().replace('\\', "\\\\");
-        assert!(!v.to_string().to_lowercase().contains(&escaped), "{v}");
-    }
-    std::fs::write(&file, b"weights, changed").unwrap();
-    let (_, v) = f
-        .call(
-            "GET",
-            &format!("/api/copy-checks?path={}", enc(&path)),
-            None,
-        )
-        .await;
-    assert_eq!(v["results"], json!([]), "stale once the file changed");
-    let (st, _) = f.call("GET", "/api/copy-checks", None).await;
-    assert_eq!(st, 400);
-    let (_, w) = f.call("GET", "/api/copy-checks/waiting", None).await;
-    assert_eq!(w, json!({"online_waiting": 3}));
-    let _ = f.h.shutdown.send(());
-}
-
-fn enc(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }
 
 // Traces: SRV-MEMORY-CRUD
@@ -599,7 +519,7 @@ async fn a_run_with_no_provider_creates_none_and_setup_state_round_trips() {
     assert_eq!(setup["done"], false);
     let resp = f
         .authed("POST", "/api/agent/run")
-        .json(&json!({"threadId": "t1", "runId": "r1", "messages": [{"id": "u1", "role": "user", "content": "hi"}]}))
+        .json(&json!({"threadId": "item:t1", "runId": "r1", "messages": [{"id": "u1", "role": "user", "content": "hi"}]}))
         .send()
         .await
         .unwrap();
@@ -650,7 +570,7 @@ async fn index_state(f: &Fixture) -> (String, Value) {
 
 // Traces: SRV-ONE-REFRESH
 #[tokio::test(flavor = "multi_thread")]
-async fn one_refresh_at_a_time_and_fast_takes_over_lean() {
+async fn one_refresh_at_a_time_and_rescan_runs_fast() {
     let dir = tempfile::tempdir().unwrap();
     let exe = fake_indexer(dir.path(), 10);
     let fdir = tempfile::tempdir().unwrap();
@@ -674,48 +594,14 @@ async fn one_refresh_at_a_time_and_fast_takes_over_lean() {
     }
     assert_eq!(progress["phase"], "walk");
     assert_eq!(progress["files"], 2);
-
-    let (st, _) = f
-        .call("PUT", "/api/settings", Some(json!({"index_speed": "fast"})))
-        .await;
-    assert_eq!(st, 200);
-    let (_, r) = f.call("POST", "/api/index/refresh", None).await;
-    assert_eq!(r["started"], false);
-
-    let spawns = dir.path().join("spawns.txt");
-    let modes = wait_for(&spawns, |l| l.len() >= 2, 5).await;
-    assert_eq!(
-        modes,
-        ["background", "fast"],
-        "fast takes over a lean refresh"
-    );
     let (_, idx) = index_state(&f).await;
     assert_eq!(idx["mode"], "fast");
 
+    // The old switch is ignored.
     f.call("PUT", "/api/settings", Some(json!({"index_speed": "lean"})))
         .await;
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(lines(&spawns).len(), 2, "lean lets a fast refresh finish");
-    let (state, idx) = index_state(&f).await;
-    assert_eq!(
-        (state.as_str(), &idx["mode"]),
-        ("refreshing", &json!("fast"))
-    );
-    let _ = f.h.shutdown.send(());
-}
-
-// Traces: SRV-ONE-REFRESH
-#[tokio::test(flavor = "multi_thread")]
-async fn the_first_full_scan_runs_fast_even_when_lean() {
-    let dir = tempfile::tempdir().unwrap();
-    let exe = fake_indexer(dir.path(), 0);
-    let f = Fixture::with(None, Some(exe)).await;
-    let (_, s) = f.call("GET", "/api/settings", None).await;
-    assert_eq!(s["index_speed"], "lean");
-    let (_, r) = f.call("POST", "/api/index/refresh", None).await;
-    assert_eq!(r["started"], true);
-    let modes = wait_for(&dir.path().join("spawns.txt"), |l| !l.is_empty(), 5).await;
-    assert_eq!(modes, ["fast"]);
+    assert_eq!(lines(&dir.path().join("spawns.txt")), ["fast"]);
     let _ = f.h.shutdown.send(());
 }
 
@@ -749,8 +635,8 @@ async fn status_stream_sends_an_initial_status_frame() {
     let _ = f.h.shutdown.send(());
 }
 
-// An OpenAI-compatible stream that sends one text chunk and then hangs.
-async fn stalled_llm() -> String {
+// An OpenAI-compatible stream that sends a text chunk every 200 ms for a minute.
+async fn trickling_llm() -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
@@ -759,29 +645,36 @@ async fn stalled_llm() -> String {
             tokio::spawn(async move {
                 let mut buf = [0u8; 65536];
                 let _ = s.read(&mut buf).await;
-                let chunk =
-                    json!({"choices": [{"index": 0, "delta": {"content": "Thinking about"}}]});
                 let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
-                let _ = s
-                    .write_all(format!("{head}data: {chunk}\n\n").as_bytes())
-                    .await;
-                tokio::time::sleep(Duration::from_secs(60)).await;
+                if s.write_all(head.as_bytes()).await.is_err() {
+                    return;
+                }
+                let chunk = json!({"choices": [{"index": 0, "delta": {"content": "more "}}]});
+                for _ in 0..300 {
+                    if s.write_all(format!("data: {chunk}\n\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
             });
         }
     });
     format!("http://{addr}/v1")
 }
 
-// Traces: SRV-RUN-CANCEL
+// Traces: SRV-RUN-TEARDOWN, SRV-THREAD
 #[tokio::test(flavor = "multi_thread")]
-async fn cancel_closes_the_open_message_and_ends_with_run_finished() {
+async fn closing_the_run_stream_stops_the_run() {
     let f = Fixture::new().await;
-    let base = stalled_llm().await;
+    let base = trickling_llm().await;
     let (_, p) = f
         .call(
             "POST",
             "/api/providers",
-            Some(json!({"name": "stall", "base_url": base, "model": "m"})),
+            Some(json!({"name": "trickle", "base_url": base, "model": "m"})),
         )
         .await;
     let id = p["id"].as_str().unwrap();
@@ -789,43 +682,33 @@ async fn cancel_closes_the_open_message_and_ends_with_run_finished() {
         .await;
     let mut resp = f
         .authed("POST", "/api/agent/run")
-        .json(&json!({"threadId": "t-cancel", "runId": "r-cancel", "messages": [{"id": "u1", "role": "user", "content": "hi"}]}))
+        .json(&json!({"threadId": "item:teardown", "runId": "r-drop", "messages": [{"id": "u1", "role": "user", "content": "hi"}]}))
         .send()
         .await
         .unwrap();
     let mut text = String::new();
-    let mut cancelled = false;
-    while let Ok(Some(chunk)) = tokio::time::timeout(Duration::from_secs(10), resp.chunk())
-        .await
-        .unwrap()
-    {
+    while !text.contains("TEXT_MESSAGE_CONTENT") {
+        let chunk = tokio::time::timeout(Duration::from_secs(10), resp.chunk())
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("stream open");
         text.push_str(&String::from_utf8_lossy(&chunk));
-        if !cancelled && text.contains("TEXT_MESSAGE_CONTENT") {
-            let (_, st) = f.call("GET", "/api/status", None).await;
-            assert_eq!(st["running_runs"], 1);
-            f.call("POST", "/api/agent/runs/r-cancel/cancel", None)
-                .await;
-            cancelled = true;
+    }
+    assert!(text.contains(r#""threadId":"item:teardown""#), "{text}");
+    let (_, st) = f.call("GET", "/api/status", None).await;
+    assert_eq!(st["running_runs"], 1);
+    drop(resp);
+    let mut runs = 1;
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let (_, st) = f.call("GET", "/api/status", None).await;
+        runs = st["running_runs"].as_u64().unwrap();
+        if runs == 0 {
+            break;
         }
     }
-    let types: Vec<String> = text
-        .split("\n\n")
-        .filter_map(|f| f.strip_prefix("data: "))
-        .map(|d| {
-            serde_json::from_str::<Value>(d).unwrap()["type"]
-                .as_str()
-                .unwrap()
-                .to_string()
-        })
-        .collect();
-    assert!(cancelled);
-    assert_eq!(
-        types[types.len() - 2..],
-        ["TEXT_MESSAGE_END", "RUN_FINISHED"],
-        "{types:?}"
-    );
-    let (_, st) = f.call("GET", "/api/status", None).await;
-    assert_eq!(st["running_runs"], 0);
+    assert_eq!(runs, 0, "the run ends once its stream is closed");
     let _ = f.h.shutdown.send(());
 }
 
@@ -905,10 +788,7 @@ async fn launch_runs_auto_then_quiet_journal_refreshes_fall_back_to_full() {
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    assert_eq!(
-        kinds[..3],
-        ["background auto", "background journal", "background full"]
-    );
+    assert_eq!(kinds[..3], ["fast auto", "background journal", "fast full"]);
     assert!(
         !loud_after_launch,
         "a short timer-driven refresh must not show as refreshing"
@@ -1019,7 +899,7 @@ async fn arriving_with_a_stale_index_starts_one_journal_refresh() {
     let f = Fixture::in_dir(fdir, None, Some(exe), true).await;
     let log = dir.path().join("presence.txt");
     let l = wait_for(&log, |l| l.iter().any(|x| x == "end auto"), 5).await;
-    assert_eq!(l[0], "background auto");
+    assert_eq!(l[0], "fast auto");
 
     let _s = f.stream().await;
     f.presence(true).await;
@@ -1045,216 +925,56 @@ async fn arriving_with_a_stale_index_starts_one_journal_refresh() {
     let _ = f.h.shutdown.send(());
 }
 
-fn seed(f: &Fixture, id: &str, role: &str, text: &str) {
+fn seed_item(f: &Fixture, conv: &str, id: &str, role: &str, text: &str) {
     use hoardini_agent::{provider::ChatMessage, thread};
     let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
     let conn = db.conn().unwrap();
-    thread::ensure_conversation(&conn, thread::MAIN, None).unwrap();
-    thread::append(&conn, thread::MAIN, id, &ChatMessage::text(role, text)).unwrap();
-}
-
-fn sql_count(f: &Fixture, sql: &str) -> i64 {
-    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
-    db.conn().unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
+    thread::ensure_conversation(&conn, conv, None).unwrap();
+    thread::append(&conn, conv, id, &ChatMessage::text(role, text)).unwrap();
 }
 
 // Traces: SRV-THREAD
 #[tokio::test(flavor = "multi_thread")]
-async fn the_conversation_routes_report_the_window_start_fresh_and_clear_only_messages() {
+async fn only_item_threads_load_and_run() {
     let f = Fixture::new().await;
-    assert!(
-        route_list()
-            .iter()
-            .all(|(_, p)| !p.starts_with("/api/threads")),
-        "the per-thread routes are gone"
+    let routes = route_list();
+    assert!(routes.iter().all(|(_, p)| !p.starts_with("/api/threads")));
+    for gone in [("POST", "/api/thread/fresh"), ("DELETE", "/api/thread")] {
+        assert!(!routes.contains(&gone), "{gone:?}");
+    }
+    let profile = hoardini_core::paths::profile_dir()
+        .to_string_lossy()
+        .into_owned();
+    seed_item(
+        &f,
+        "item:abc",
+        "u1",
+        "user",
+        &format!(r"About {profile}\big (big): what is it?"),
     );
-    let (st, t) = f.call("GET", "/api/thread", None).await;
+    seed_item(&f, "item:abc", "a1", "assistant", "A cache.");
+    let (st, t) = f.call("GET", "/api/thread?id=item:abc", None).await;
     assert_eq!(st, 200, "{t}");
-    assert_eq!(t["id"], "main");
-    assert_eq!(t["messages"], json!([]));
-    assert_eq!(t["window_start_id"], Value::Null);
-    assert_eq!(t["has_hidden"], false);
-    assert_eq!(t["fresh"], true);
-
-    seed(&f, "u1", "user", "hello");
-    seed(&f, "a1", "assistant", "hi there");
-    let (_, t) = f.call("GET", "/api/thread", None).await;
-    assert_eq!(t["messages"].as_array().unwrap().len(), 2);
-    assert_eq!(t["window_start_id"], "u1");
-    assert_eq!(t["has_hidden"], false);
-    assert_eq!(t["fresh"], false);
-
-    let (st, r) = f.call("POST", "/api/thread/fresh", None).await;
-    assert_eq!((st, r), (200, json!({"ok": true})));
-    let (_, t) = f.call("GET", "/api/thread", None).await;
-    assert_eq!(t["messages"], json!([]), "clearing empties the screen");
-    assert_eq!(t["earlier"], 2);
-    assert_eq!(t["showing_all"], false);
-    assert_eq!(t["window_start_id"], Value::Null);
-    assert_eq!(t["has_hidden"], false);
-    assert_eq!(t["fresh"], true);
-    let (_, all) = f.call("GET", "/api/thread?all=1", None).await;
-    assert_eq!(
-        all["messages"].as_array().unwrap().len(),
-        2,
-        "earlier messages stay stored"
-    );
-    assert_eq!(all["showing_all"], true);
-    assert_eq!(all["has_hidden"], true);
-
-    seed(&f, "u2", "user", "a new topic");
-    let (_, t) = f.call("GET", "/api/thread", None).await;
-    assert_eq!(t["messages"].as_array().unwrap().len(), 1);
-    assert_eq!(t["window_start_id"], "u2");
-    assert_eq!(t["has_hidden"], false);
-    assert_eq!(t["fresh"], false);
-    let (_, all) = f.call("GET", "/api/thread?all=1", None).await;
-    assert_eq!(all["messages"].as_array().unwrap().len(), 3);
-    assert_eq!(all["has_hidden"], true);
-
-    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
-    let conn = db.conn().unwrap();
-    conn.execute(
-        "UPDATE message SET created_ms = created_ms - 7 * 3600 * 1000",
-        [],
-    )
-    .unwrap();
-    let (_, t) = f.call("GET", "/api/thread", None).await;
-    assert_eq!(t["fresh"], true, "the last message is 7 h old");
-
-    conn.execute(
-        "INSERT INTO proposal(id, conversation_id, kind, params_json, status, created_ms)
-         VALUES ('p-keep', 'main', 'delete', '{}', 'pending', 0)",
-        [],
-    )
-    .unwrap();
-    f.call(
-        "POST",
-        "/api/memory",
-        Some(json!({"scope": "global", "key": "k", "kind": "fact", "text": "stays"})),
-    )
-    .await;
-    let memories = sql_count(&f, "SELECT COUNT(*) FROM memory");
-    let (st, r) = f.call("DELETE", "/api/thread", None).await;
-    assert_eq!((st, r), (200, json!({"ok": true})));
-    let (_, t) = f.call("GET", "/api/thread", None).await;
-    assert_eq!(t["messages"], json!([]));
-    assert_eq!(t["has_hidden"], false);
-    assert_eq!(t["fresh"], true);
-    assert_eq!(
-        t["earlier"], 0,
-        "deleting the history also resets the cleared mark"
-    );
-    assert_eq!(sql_count(&f, "SELECT COUNT(*) FROM message"), 0);
-    assert_eq!(
-        sql_count(&f, "SELECT COUNT(*) FROM proposal WHERE id = 'p-keep'"),
-        1
-    );
-    assert_eq!(sql_count(&f, "SELECT COUNT(*) FROM memory"), memories);
-
-    seed(&f, "u3", "user", "after clearing");
-    let (_, t) = f.call("GET", "/api/thread", None).await;
-    assert_eq!(t["window_start_id"], "u3", "the window start was reset");
-    let _ = f.h.shutdown.send(());
-}
-
-// Traces: SRV-THREAD
-#[tokio::test(flavor = "multi_thread")]
-async fn a_run_always_uses_main_and_clearing_is_refused_while_it_runs() {
-    let f = Fixture::new().await;
-    let base = stalled_llm().await;
-    let (_, p) = f
+    assert_eq!(t["id"], "item:abc");
+    let msgs = t["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0]["content"], r"About ~\big (big): what is it?");
+    for q in [
+        "/api/thread",
+        "/api/thread?id=main",
+        "/api/thread?id=elsewhere",
+    ] {
+        let (st, _) = f.call("GET", q, None).await;
+        assert_eq!(st, 400, "{q}");
+    }
+    let (st, r) = f
         .call(
             "POST",
-            "/api/providers",
-            Some(json!({"name": "stall", "base_url": base, "model": "m"})),
+            "/api/agent/run",
+            Some(json!({"threadId": "t-other", "runId": "r1", "messages": [{"id": "u9", "role": "user", "content": "hi"}]})),
         )
         .await;
-    let id = p["id"].as_str().unwrap();
-    f.call("POST", &format!("/api/providers/{id}/activate"), None)
-        .await;
-    let mut resp = f
-        .authed("POST", "/api/agent/run")
-        .json(&json!({"threadId": "t-other", "runId": "r-main", "messages": [{"id": "u-main", "role": "user", "content": "hi"}]}))
-        .send()
-        .await
-        .unwrap();
-    let mut text = String::new();
-    while !text.contains("TEXT_MESSAGE_CONTENT") {
-        let chunk = tokio::time::timeout(Duration::from_secs(10), resp.chunk())
-            .await
-            .unwrap()
-            .unwrap()
-            .expect("stream open");
-        text.push_str(&String::from_utf8_lossy(&chunk));
-    }
-    assert!(text.contains(r#""threadId":"main""#), "{text}");
-    let (st, _) = f.call("DELETE", "/api/thread", None).await;
-    assert_eq!(st, 409);
-    let (_, t) = f.call("GET", "/api/thread", None).await;
-    assert_eq!(t["messages"][0]["id"], "u-main");
-    f.call("POST", "/api/agent/runs/r-main/cancel", None).await;
-    drop(resp);
-    let _ = f.h.shutdown.send(());
-}
-
-// Traces: SRV-HISTORY-RANGE
-#[tokio::test(flavor = "multi_thread")]
-async fn history_filters_by_range() {
-    use hoardini_core::history::{ScanRecord, record_scan_rows};
-    use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
-    use hoardini_core::store::Db;
-
-    let f = Fixture::new().await;
-    let (_, none) = f.call("GET", "/api/history", None).await;
-    assert_eq!(none, json!([]));
-
-    let db = Db::open(f.dir.path().join("h.db")).unwrap();
-    let conn = db.conn().unwrap();
-    let fs = FakeFs::new(r"C:\");
-    fs.file(r"C:\seed.bin", 1 << 20);
-    let vol = refresh(&conn, &fs, fs.root(), &RefreshOptions::default())
-        .unwrap()
-        .volume_id;
-    for (ms, free) in [(1_000, 50u64), (2_000, 40), (3_000, 30), (4_000, 20)] {
-        let rec = ScanRecord {
-            volume_id: vol,
-            kind: "full".into(),
-            mode: "background".into(),
-            started_ms: ms - 1,
-            finished_ms: ms,
-            total_bytes: Some(100),
-            free_bytes: Some(free),
-            ..ScanRecord::default()
-        };
-        record_scan_rows(&conn, &rec, &[], &[]).unwrap();
-    }
-    let finished = |v: &Value| -> Vec<i64> {
-        v.as_array()
-            .unwrap()
-            .iter()
-            .map(|p| p["finished_ms"].as_i64().unwrap())
-            .collect()
-    };
-    let (_, all) = f.call("GET", "/api/history", None).await;
-    let all = finished(&all);
-    assert_eq!(all.len(), 5);
-    assert!(all.windows(2).all(|w| w[0] <= w[1]));
-    assert_eq!(&all[..4], &[1_000, 2_000, 3_000, 4_000]);
-
-    let (_, mid) = f
-        .call("GET", "/api/history?since_ms=2000&until_ms=3000", None)
-        .await;
-    assert_eq!(finished(&mid), vec![2_000, 3_000]);
-    let (_, since) = f.call("GET", "/api/history?since_ms=3000", None).await;
-    assert_eq!(&finished(&since)[..2], &[3_000, 4_000]);
-    assert_eq!(finished(&since).len(), 3);
-    let (_, until) = f.call("GET", "/api/history?until_ms=1000", None).await;
-    assert_eq!(finished(&until).last(), Some(&1_000));
-    let (_, mid) = f
-        .call("GET", "/api/history?since_ms=2000&until_ms=3000", None)
-        .await;
-    assert_eq!(mid[0]["free_bytes"], 40);
+    assert_eq!(st, 400, "{r}");
     let _ = f.h.shutdown.send(());
 }
 
@@ -1422,7 +1142,7 @@ async fn removing_a_drive_stops_its_refresh_and_deletes_its_index() {
     let log = dir.path().join("volumes.txt");
     wait_for(&log, |l| !l.is_empty(), 5).await;
     let l = spawned(&log);
-    assert_eq!(l, [format!("{a} background auto")]);
+    assert_eq!(l, [format!("{a} fast auto")]);
 
     let t0 = std::time::Instant::now();
     let body = json!({"watched": [sys], "selected": sys});
@@ -1441,11 +1161,7 @@ async fn removing_a_drive_stops_its_refresh_and_deletes_its_index() {
 
     wait_for(&log, |l| l.len() >= 2, 5).await;
     let l = spawned(&log);
-    assert_eq!(
-        l[1],
-        format!("{sys} background auto"),
-        "the pass moves on: {l:?}"
-    );
+    assert_eq!(l[1], format!("{sys} fast auto"), "the pass moves on: {l:?}");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(
         !spawned(&log).contains(&format!("end {a}")),
@@ -1495,7 +1211,7 @@ async fn an_unplugged_drive_is_skipped_and_keeps_its_index() {
     wait_idle(&f, 5).await;
     assert_eq!(
         spawned(&log),
-        [format!("{sys} background auto"), format!("end {sys}")]
+        [format!("{sys} fast auto"), format!("end {sys}")]
     );
     assert_eq!(rows_of(&db_path, &a), before, "its index is kept");
 
@@ -1563,7 +1279,7 @@ async fn a_finished_job_links_its_follow_up_before_the_stream_reports_it() {
     let p = proposals::create(
         &db,
         NewProposal {
-            conversation_id: Some("main".into()),
+            conversation_id: Some("home".into()),
             tool_call_id: None,
             kind: ProposalKind::Delete,
             destination_id: None,
@@ -1627,10 +1343,137 @@ async fn a_finished_job_links_its_follow_up_before_the_stream_reports_it() {
     assert!(items[0]["path"].as_str().unwrap().ends_with("stay.bin"));
     assert_eq!(items[0]["selected"], false);
     assert_eq!(items[0]["memory_note"], "scratch is disposable");
+    drop(stream);
+    let _ = f.h.shutdown.send(());
+}
 
-    let (_, t) = f.call("GET", "/api/thread", None).await;
-    assert_eq!(t["proposals"][&p.id]["follow_up_id"], fid.as_str());
-    assert_eq!(t["proposals"][&fid]["parent_id"], p.id.as_str());
+// Traces: SRV-LOCATION-FORGET, SRV-THREAD
+#[tokio::test(flavor = "multi_thread")]
+async fn bring_back_drops_the_users_answer_and_item_threads_load_by_id() {
+    let f = Fixture::new().await;
+    let work = f.dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let path = work.to_string_lossy().into_owned();
+    let users = |v: &Value| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["source"] == "user" && m["scope"] == "path")
+            .count()
+    };
+
+    let (st, r) = f
+        .call(
+            "POST",
+            "/api/locations/answer",
+            Some(json!({"path": path, "answer": "never-touch"})),
+        )
+        .await;
+    assert_eq!(st, 200, "{r}");
+    let (_, mems) = f.call("GET", "/api/memory", None).await;
+    assert_eq!(users(&mems), 2, "a verdict row and a protect note: {mems}");
+    let (st, r) = f
+        .call("POST", "/api/locations/forget", Some(json!({"path": path})))
+        .await;
+    assert_eq!((st, r["forgot"].as_u64()), (200, Some(2)), "{r}");
+    let (_, mems) = f.call("GET", "/api/memory", None).await;
+    assert_eq!(users(&mems), 0, "{mems}");
+    let (st, r) = f
+        .call("POST", "/api/locations/forget", Some(json!({"path": path})))
+        .await;
+    assert_eq!((st, r["forgot"].as_u64()), (200, Some(0)), "{r}");
+    let (st, _) = f
+        .call("POST", "/api/locations/forget", Some(json!({"path": " "})))
+        .await;
+    assert_eq!(st, 400);
+
+    let (st, t) = f.call("GET", "/api/thread?id=item:abc", None).await;
+    assert_eq!(st, 200, "{t}");
+    assert_eq!(
+        (t["id"].as_str(), t["messages"].as_array().map(Vec::len)),
+        (Some("item:abc"), Some(0))
+    );
+    let (st, _) = f.call("GET", "/api/thread?id=elsewhere", None).await;
+    assert_eq!(st, 400);
+    let _ = f.h.shutdown.send(());
+}
+
+// Traces: SRV-ACT
+#[tokio::test(flavor = "multi_thread")]
+async fn an_action_on_home_runs_at_once_and_reports_what_policy_held_back() {
+    let f = Fixture::new().await;
+    let work = f.dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let go = work.join("go.bin");
+    let kept = work.join("kept.bin");
+    std::fs::write(&go, vec![1u8; 8192]).unwrap();
+    std::fs::write(&kept, vec![2u8; 8192]).unwrap();
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let (st, _) = f
+        .call(
+            "POST",
+            "/api/memory",
+            Some(json!({"scope": "path", "key": s(&kept), "kind": "protect", "text": "mine"})),
+        )
+        .await;
+    assert_eq!(st, 200);
+
+    let mut stream = f.stream().await;
+    let mut buf = String::new();
+    let (st, r) = f
+        .call(
+            "POST",
+            "/api/act",
+            Some(json!({"kind": "delete", "paths": [s(&go), s(&kept)]})),
+        )
+        .await;
+    assert_eq!(st, 200, "{r}");
+    let job_id = r["job_id"]
+        .as_str()
+        .expect("the allowed path runs")
+        .to_string();
+    let blocked = r["blocked"].as_array().unwrap();
+    assert_eq!(blocked.len(), 1, "{r}");
+    assert!(
+        blocked[0]["path"].as_str().unwrap().ends_with("kept.bin"),
+        "{r}"
+    );
+    assert!(!blocked[0]["reason"].as_str().unwrap().is_empty(), "{r}");
+    loop {
+        let fr = next_frame(&mut stream, &mut buf).await;
+        if fr["type"] == "job" && fr["id"] == job_id.as_str() && fr["status"] == "done" {
+            break;
+        }
+    }
+    assert!(!go.exists(), "approved without a second step");
+    assert!(kept.exists());
+
+    let (st, r) = f
+        .call(
+            "POST",
+            "/api/act",
+            Some(json!({"kind": "delete", "paths": [s(&kept)]})),
+        )
+        .await;
+    assert_eq!(st, 200, "{r}");
+    assert_eq!(r["job_id"], Value::Null, "{r}");
+    assert_eq!(r["blocked"].as_array().unwrap().len(), 1, "{r}");
+    if let Some(id) = r["proposal_id"].as_str() {
+        let (_, p) = f.call("GET", &format!("/api/proposals/{id}"), None).await;
+        assert_eq!(p["status"], "declined", "nothing is left pending: {p}");
+    }
+
+    for (body, why) in [
+        (json!({"kind": "dedupe", "paths": [s(&kept)]}), "kind"),
+        (
+            json!({"kind": "archive", "paths": [s(&kept)]}),
+            "destination",
+        ),
+        (json!({"kind": "delete", "paths": ["  "]}), "paths"),
+    ] {
+        let (st, r) = f.call("POST", "/api/act", Some(body)).await;
+        assert_eq!(st, 400, "{why}: {r}");
+    }
     drop(stream);
     let _ = f.h.shutdown.send(());
 }
@@ -1743,44 +1586,6 @@ async fn index_children_lists_a_folder_biggest_first_with_its_small_files_and_th
     let _ = f.h.shutdown.send(());
 }
 
-// Traces: SRV-REVEAL
-#[tokio::test(flavor = "multi_thread")]
-async fn reveal_refuses_paths_off_the_watched_drives_and_paths_that_do_not_exist() {
-    let f = Fixture::new().await;
-    let watched = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
-    std::fs::write(outside.path().join("x.txt"), b"x").unwrap();
-    let root = hoardini_core::index::normalize_path(&watched.path().to_string_lossy());
-    let other = hoardini_core::index::normalize_path(&outside.path().to_string_lossy());
-    {
-        let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
-        hoardini_core::store::set_meta(
-            &db.conn().unwrap(),
-            "indexed_volumes",
-            &serde_json::to_string(&[&root]).unwrap(),
-        )
-        .unwrap();
-    }
-    let other_name = other.rsplit('\\').next().unwrap();
-    let cases = [
-        (json!({}), 400),
-        (json!({"path": ""}), 400),
-        (json!({"path": r"relative\x.txt"}), 400),
-        (json!({"path": format!(r"{other}\x.txt")}), 403),
-        (
-            json!({"path": format!(r"{root}\..\{other_name}\x.txt")}),
-            400,
-        ),
-        (json!({"path": format!(r"{root}\missing.txt")}), 404),
-    ];
-    for (body, want) in cases {
-        let (st, v) = f.call("POST", "/api/reveal", Some(body.clone())).await;
-        assert_eq!(st, want, "{body}: {v}");
-        assert!(v["error"].is_string(), "{v}");
-    }
-    let _ = f.h.shutdown.send(());
-}
-
 struct FakeApps {
     inputs: hoardini_core::apps::AppInputs,
     launched: Mutex<Vec<hoardini_core::apps::Uninstaller>>,
@@ -1798,24 +1603,40 @@ impl hoardini_core::apps::AppSource for FakeApps {
 
 // Traces: SRV-APPS
 #[tokio::test(flavor = "multi_thread")]
-async fn rarely_used_apps_list_as_json_and_uninstall_runs_only_the_registered_command() {
+async fn the_review_lists_rarely_used_apps_and_uninstall_runs_only_the_registered_command() {
     const GIB: u64 = 1 << 30;
     const DAY: i64 = 86_400_000;
     let f = Fixture::new().await;
+    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+    let select = |root: &str| {
+        hoardini_core::store::set_meta(&db.conn().unwrap(), "selected_volume", root).unwrap()
+    };
     {
-        let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
-        let fs = hoardini_core::index::FakeFs::new(r"D:\");
-        fs.file(r"D:\Apps\Big\big.dat", 3 * GIB);
-        fs.file(r"D:\Apps\Busy\busy.dat", 3 * GIB);
-        let out = hoardini_core::index::refresh(
-            &db.conn().unwrap(),
-            &fs,
-            r"D:\",
-            &hoardini_core::index::RefreshOptions::default(),
-        )
-        .unwrap();
-        assert!(out.completed);
+        let conn = db.conn().unwrap();
+        let drives = [
+            (
+                r"D:\",
+                vec![r"D:\Apps\Big\big.dat", r"D:\Apps\Busy\busy.dat"],
+            ),
+            (r"C:\", vec![r"C:\data\x.dat"]),
+        ];
+        for (root, files) in drives {
+            let fs = hoardini_core::index::FakeFs::new(root);
+            for p in files {
+                fs.file(p, 3 * GIB);
+            }
+            let out = hoardini_core::index::refresh(
+                &conn,
+                &fs,
+                root,
+                &hoardini_core::index::RefreshOptions::default(),
+            )
+            .unwrap();
+            assert!(out.completed);
+        }
+        hoardini_core::store::set_meta(&conn, "indexed_volumes", r#"["C:\\","D:\\"]"#).unwrap();
     }
+    select(r"D:\");
     let ran = hoardini_core::store::now_ms() - 200 * DAY;
     let program = |name: &str, loc: &str, cmd: &str| hoardini_win::InstalledProgram {
         name: name.into(),
@@ -1853,13 +1674,14 @@ async fn rarely_used_apps_list_as_json_and_uninstall_runs_only_the_registered_co
     });
     hoardini_core::apps::set_source(Some(fake.clone()));
 
-    let (st, list) = f.call("GET", "/api/apps/rarely-used", None).await;
-    assert_eq!(st, 200, "{list}");
+    let (st, review) = f.call("POST", "/api/review/run", None).await;
+    assert_eq!(st, 200, "{review}");
+    let list = &review["apps"];
     let id = list[0]["id"].as_str().unwrap().to_string();
     assert!(id.starts_with("reg-"), "{id}");
     assert_eq!(
         list,
-        json!([{
+        &json!([{
             "id": id,
             "name": "Big Tool",
             "publisher": "Contoso",
@@ -1870,26 +1692,10 @@ async fn rarely_used_apps_list_as_json_and_uninstall_runs_only_the_registered_co
             "last_run_from": r"last run of d:\apps\big\big.exe",
         }])
     );
-    let (st, review) = f
-        .call("POST", "/api/review/run", Some(json!({"path": r"D:\Apps"})))
-        .await;
-    assert_eq!(st, 200, "{review}");
-    assert_eq!(
-        review["apps"], list,
-        "the review carries the list, so the UI needs no second call"
-    );
-    let (_, busy) = f
-        .call(
-            "POST",
-            "/api/review/run",
-            Some(json!({"path": r"D:\Apps\Busy"})),
-        )
-        .await;
-    assert_eq!(
-        busy["apps"],
-        json!([]),
-        "only apps inside the review's scope"
-    );
+    select(r"C:\");
+    let (st, other) = f.call("POST", "/api/review/run", None).await;
+    assert_eq!(st, 200, "{other}");
+    assert_eq!(other["apps"], json!([]), "only apps on the review's drive");
 
     let (st, r) = f
         .call(
@@ -1914,169 +1720,6 @@ async fn rarely_used_apps_list_as_json_and_uninstall_runs_only_the_registered_co
     assert_eq!(st, 404);
     assert_eq!(fake.launched.lock().unwrap().len(), 1);
     hoardini_core::apps::set_source(None);
-    let _ = f.h.shutdown.send(());
-}
-
-// Traces: SRV-LEARNED, MEM-LEARN-JOB
-#[tokio::test(flavor = "multi_thread")]
-async fn a_finished_job_lists_what_it_learned_and_the_chip_routes_undo_and_confirm() {
-    use hoardini_core::memory::knowledge::{Detail, remember_filetype};
-    use hoardini_core::proposals::{self, NewItem, NewProposal, ProposalKind};
-    let f = Fixture::new().await;
-    let work = f.dir.path().join("work");
-    std::fs::create_dir_all(&work).unwrap();
-    let go = work.join("go.bin");
-    let stay = work.join("stay.bin");
-    std::fs::write(&go, vec![1u8; 8192]).unwrap();
-    std::fs::write(&stay, vec![2u8; 8192]).unwrap();
-    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
-    let item = |p: &Path| NewItem {
-        path: p.to_string_lossy().into_owned(),
-        verdict: None,
-        reason: None,
-    };
-    let p = proposals::create(
-        &db,
-        NewProposal {
-            conversation_id: Some("main".into()),
-            tool_call_id: None,
-            kind: ProposalKind::Delete,
-            destination_id: None,
-            format: None,
-            dedupe: None,
-            summary: "two files".into(),
-            items: vec![item(&go), item(&stay)],
-        },
-    )
-    .unwrap();
-    let (_, pending) = f
-        .call("GET", &format!("/api/proposals/{}", p.id), None)
-        .await;
-    assert_eq!(pending["learned"], json!([]));
-
-    let mut stream = f.stream().await;
-    let mut buf = String::new();
-    let go_id = p
-        .items
-        .iter()
-        .find(|i| i.path.ends_with("go.bin"))
-        .unwrap()
-        .id;
-    let (st, r) = f
-        .call(
-            "POST",
-            &format!("/api/proposals/{}/approve", p.id),
-            Some(json!({"item_ids": [go_id]})),
-        )
-        .await;
-    assert_eq!(st, 200, "{r}");
-    let job_id = r["job_id"].as_str().unwrap().to_string();
-    loop {
-        let fr = next_frame(&mut stream, &mut buf).await;
-        if fr["type"] == "job"
-            && fr["id"] == job_id.as_str()
-            && matches!(fr["status"].as_str(), Some("done" | "failed" | "cancelled"))
-        {
-            break;
-        }
-    }
-    let (_, done) = f
-        .call("GET", &format!("/api/proposals/{}", p.id), None)
-        .await;
-    let learned = done["learned"]
-        .as_array()
-        .expect("learned is listed by the job's end");
-    assert_eq!(learned.len(), 1, "{done}");
-    let text = learned[0]["text"].as_str().unwrap();
-    assert!(text.starts_with(r"go.bin in ~\"), "{text}");
-    assert!(
-        text.contains(" — cleaned 8.0 KB on ")
-            && text.ends_with("; 1 item you left unticked is kept"),
-        "{text}"
-    );
-    let memory_id = learned[0]["memory_id"].as_i64().unwrap();
-    assert_eq!(learned[0]["confirmed"], false);
-    assert_eq!(learned[0]["pinned"], false);
-    let (_, t) = f.call("GET", "/api/thread", None).await;
-    assert_eq!(t["proposals"][&p.id]["learned"], done["learned"]);
-    let (st, _) = f
-        .call(
-            "PUT",
-            &format!("/api/memory/{memory_id}"),
-            Some(json!({"pinned": true})),
-        )
-        .await;
-    assert_eq!(st, 200);
-    let (_, pinned) = f
-        .call("GET", &format!("/api/proposals/{}", p.id), None)
-        .await;
-    assert_eq!(
-        pinned["learned"][0]["pinned"], true,
-        "a reload after Pin offers Unpin"
-    );
-    let (st, _) = f
-        .call("POST", &format!("/api/memory/{memory_id}/confirm"), None)
-        .await;
-    assert_eq!(st, 200);
-    let (_, confirmed) = f
-        .call("GET", &format!("/api/proposals/{}", p.id), None)
-        .await;
-    assert_eq!(
-        confirmed["learned"][0]["confirmed"], true,
-        "a reload after Confirm offers no Confirm"
-    );
-
-    let undo = format!("/api/proposals/{}/learned/{memory_id}", p.id);
-    let (st, v) = f.call("DELETE", &undo, None).await;
-    assert_eq!((st, v), (200, json!({"ok": true})));
-    let (_, after) = f
-        .call("GET", &format!("/api/proposals/{}", p.id), None)
-        .await;
-    assert_eq!(after["learned"], json!([]));
-    assert_eq!(f.call("DELETE", &undo, None).await.0, 404);
-
-    let (ty, _) = remember_filetype(
-        &db.conn().unwrap(),
-        "q4nx",
-        ".q4nx: NPU model weights (FastFlowLM).",
-        "web:https://example.test/flm",
-        Detail {
-            category: "model-weights".into(),
-            app: Some("FastFlowLM".into()),
-            ..Detail::default()
-        },
-        1,
-    )
-    .unwrap();
-    let (st, m) = f
-        .call("POST", &format!("/api/memory/{}/confirm", ty.id), None)
-        .await;
-    assert_eq!(st, 200, "{m}");
-    assert_eq!(
-        (m["id"].as_i64(), &m["source"], &m["pinned"]),
-        (Some(ty.id), &json!("user"), &json!(true))
-    );
-    assert_eq!(m["text"], ".q4nx: NPU model weights (FastFlowLM).");
-    assert_eq!(m["detail"]["app"], "FastFlowLM");
-    let (st, note) = f
-        .call(
-            "POST",
-            "/api/memory",
-            Some(json!({"scope": "global", "key": "n", "kind": "fact", "text": "a note"})),
-        )
-        .await;
-    assert_eq!(st, 200);
-    assert_eq!(
-        f.call("POST", &format!("/api/memory/{}/confirm", note["id"]), None)
-            .await
-            .0,
-        400
-    );
-    assert_eq!(
-        f.call("POST", "/api/memory/999999/confirm", None).await.0,
-        404
-    );
-    drop(stream);
     let _ = f.h.shutdown.send(());
 }
 
@@ -2116,7 +1759,7 @@ async fn settled_review(f: &Fixture) -> Value {
 
 // Traces: REVIEW-TRIGGER
 #[tokio::test(flavor = "multi_thread")]
-async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart() {
+async fn the_review_is_built_on_open_when_stale() {
     let f = Fixture::new().await;
     let (st, _) = f.call("POST", "/api/review/open", None).await;
     assert_eq!(st, 404, "no index yet");
@@ -2133,7 +1776,6 @@ async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart
     assert_eq!(a["building"], false);
     let id = a["review"]["id"].as_str().unwrap().to_string();
     assert_eq!(a["review"]["volume"], r"C:\");
-    assert_eq!(a["review"]["scope_path"], Value::Null);
     assert!(a["review"]["created_ms"].as_i64().unwrap() > 0);
     assert_eq!(
         a["header"],
@@ -2176,49 +1818,6 @@ async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart
     assert_eq!(status["review"]["id"], id.as_str());
     assert_eq!(status["review_building"], false);
     assert_eq!(a["apps"], json!([]));
-    assert_eq!(a["online"], json!({"asked": false, "waiting": 0}));
-    let (st, _) = f
-        .call(
-            "PUT",
-            "/api/settings",
-            Some(json!({"online_checks": {"asked": true}})),
-        )
-        .await;
-    assert_eq!(st, 200);
-    hoardini_core::store::set_meta(
-        &hoardini_core::store::Db::open(&dbp)
-            .unwrap()
-            .conn()
-            .unwrap(),
-        "copy_online_waiting",
-        "3",
-    )
-    .unwrap();
-    let (_, got) = f.call("GET", "/api/review", None).await;
-    assert_eq!(got["online"], json!({"asked": true, "waiting": 3}));
-
-    let (st, folder) = f
-        .call("POST", "/api/review/run", Some(json!({"path": r"C:\code"})))
-        .await;
-    assert_eq!(st, 200, "{folder}");
-    assert_eq!(folder["review"]["scope_path"], r"C:\code");
-    let fid = folder["review"]["id"].as_str().unwrap().to_string();
-    let (_, got) = f.call("GET", "/api/review", None).await;
-    assert_eq!(got["review"]["id"], id.as_str(), "the volume review stays");
-    let (_, got) = f.call("GET", &format!("/api/review?id={fid}"), None).await;
-    assert_eq!(got["review"]["scope_path"], r"C:\code");
-    let (st, _) = f
-        .call("POST", "/api/review/run", Some(json!({"path": r"C:\nope"})))
-        .await;
-    assert_eq!(st, 404);
-    let (st, _) = f
-        .call(
-            "POST",
-            "/api/review/run",
-            Some(json!({"path": r"C:\code\covenant-agent\models\m.dat"})),
-        )
-        .await;
-    assert_eq!(st, 400, "a file is no folder to review");
 
     seed_drive(&dbp);
     let (_, stale) = f.call("POST", "/api/review/open", None).await;
@@ -2245,14 +1844,14 @@ async fn the_review_is_built_on_open_when_stale_and_a_folder_review_stands_apart
     assert_ne!(c["review"]["id"], bid.as_str(), "older than 6 hours");
     let (_, d) = f.call("POST", "/api/review/run", None).await;
     assert_ne!(d["review"]["id"], c["review"]["id"]);
-    assert_eq!(d["review"]["scope_path"], Value::Null);
+    assert_eq!(d["review"]["volume"], r"C:\");
     let _ = f.h.shutdown.send(());
 }
 
 // Traces: REVIEW-SUPERSEDE
 #[tokio::test(flavor = "multi_thread")]
 async fn the_launch_refresh_rebuilds_an_untouched_review() {
-    use hoardini_core::review::{self, Scope};
+    use hoardini_core::review;
     let dir = tempfile::tempdir().unwrap();
     let exe = fake_indexer(dir.path(), 0);
     let fdir = tempfile::tempdir().unwrap();
@@ -2269,7 +1868,7 @@ async fn the_launch_refresh_rebuilds_an_untouched_review() {
             &db,
             &hoardini_core::policy::PolicyEnv::system(),
             &hoardini_core::index::WinLister,
-            Scope::Volume(vid),
+            vid,
             hoardini_core::store::now_ms(),
         )
         .unwrap()
@@ -2420,7 +2019,7 @@ async fn the_server_keeps_a_cards_ticks_and_any_change_or_decision_touches_it() 
         proposals::create(
             &db,
             NewProposal {
-                conversation_id: Some("main".into()),
+                conversation_id: Some("home".into()),
                 tool_call_id: None,
                 kind: ProposalKind::Delete,
                 destination_id: None,
@@ -2492,10 +2091,7 @@ async fn the_server_keeps_a_cards_ticks_and_any_change_or_decision_touches_it() 
         )
         .await;
     assert_eq!(st, 404);
-    let (st, _) = f
-        .call("POST", &format!("/api/proposals/{}/decline", p.id), None)
-        .await;
-    assert_eq!(st, 200);
+    proposals::decline(&db, &p.id).unwrap();
     let (st, _) = f.call("PUT", &url, Some(json!({"item_ids": []}))).await;
     assert_eq!(st, 409, "only a pending card takes ticks");
 
@@ -2541,252 +2137,6 @@ fn explore_index(db_path: &Path) -> hoardini_core::store::Db {
     .unwrap();
     assert!(out.completed);
     db
-}
-
-// Every opened folder's size is its blocks plus its "N more".
-fn adds_up(n: &Value) {
-    if let Some(kids) = n["children"].as_array() {
-        let sum: u64 = kids.iter().map(|k| k["size"].as_u64().unwrap()).sum();
-        let more = n["more"]["bytes"].as_u64().unwrap();
-        assert_eq!(n["size"].as_u64().unwrap(), sum + more, "{}", n["path"]);
-        kids.iter().for_each(adds_up);
-    }
-}
-
-fn kid<'a>(n: &'a Value, name: &str) -> &'a Value {
-    n["children"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|k| k["name"] == name)
-        .unwrap_or_else(|| panic!("no {name} under {}", n["path"]))
-}
-
-// Traces: SRV-INDEX-MAP
-#[tokio::test(flavor = "multi_thread")]
-async fn index_map_prunes_to_the_canvas_and_merges_the_rest() {
-    let f = Fixture::new().await;
-    let _db = explore_index(&f.dir.path().join("h.db"));
-    let total = 684 * MIB + 12288;
-
-    let (st, v) = f
-        .call("GET", "/api/index/map?path=C%3A%5Cdata&w=16&h=16", None)
-        .await;
-    assert_eq!(st, 200, "{v}");
-    assert_eq!(v["min_bytes"], 25_215_408);
-    assert_eq!(v["nodes"], 8);
-    assert_eq!(v["capped"], false);
-    assert_eq!(v["ancestors"], json!([{"path": r"C:\", "name": "C:"}]));
-    let t = &v["tree"];
-    assert_eq!(t["path"], r"C:\data");
-    assert_eq!(t["name"], "data");
-    assert_eq!(t["kind"], "dir");
-    assert_eq!(t["size"], total);
-    let names: Vec<&str> = t["children"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|k| k["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(names, ["models", "big.iso", "proj"]);
-    assert_eq!(t["more"], json!({"count": 4, "bytes": 24 * MIB + 12288}));
-    let models = kid(t, "models");
-    assert_eq!(models["size"], 400 * MIB);
-    assert_eq!(models["files"], 2);
-    assert_eq!(kid(models, "a.gguf")["ext"], "gguf");
-    assert_eq!(kid(models, "a.gguf")["kind"], "file");
-    assert_eq!(models["more"], json!({"count": 0, "bytes": 0}));
-    assert_eq!(kid(t, "big.iso")["ext"], "iso");
-    assert!(kid(t, "big.iso").get("children").is_none());
-    adds_up(t);
-
-    let (_, big) = f
-        .call("GET", "/api/index/map?path=c%3A%5CDATA&w=1000&h=1000", None)
-        .await;
-    let t = &big["tree"];
-    assert_eq!(t["size"], total);
-    assert_eq!(t["more"], json!({"count": 0, "bytes": 0}));
-    let small = kid(t, "small files");
-    assert_eq!(small["kind"], "small");
-    assert_eq!(small["path"], r"C:\data");
-    assert_eq!(
-        (small["size"].as_u64(), small["files"].as_u64()),
-        (Some(12288), Some(2))
-    );
-    assert_eq!(kid(kid(t, "tiny"), "t2.jpg")["ext"], "jpg");
-    adds_up(t);
-
-    let (st, _) = f
-        .call("GET", "/api/index/map?path=C%3A%5Cdata%5Cbig.iso", None)
-        .await;
-    assert_eq!(st, 400, "a file has no map");
-    let (st, _) = f.call("GET", "/api/index/map?path=C%3A%5Cnope", None).await;
-    assert_eq!(st, 404);
-    let (st, _) = f.call("GET", "/api/index/map", None).await;
-    assert_eq!(st, 400);
-    let _ = f.h.shutdown.send(());
-}
-
-// Traces: SRV-INDEX-MAP
-#[tokio::test(flavor = "multi_thread")]
-async fn index_map_tags_each_block_with_what_hoardini_knows() {
-    use hoardini_core::memory::knowledge::{self, Detail, Knowledge};
-    use hoardini_core::memory::location::{self, Answer};
-    use hoardini_core::memory::{Kind, Scope};
-    use hoardini_core::policy::{PolicyEnv, Verdict};
-
-    let f = Fixture::new().await;
-    let db = explore_index(&f.dir.path().join("h.db"));
-    let conn = db.conn().unwrap();
-    let env = PolicyEnv::system();
-    knowledge::upsert(
-        &conn,
-        Knowledge {
-            scope: Scope::Path,
-            key: r"C:\data\models".into(),
-            kind: Kind::Verdict,
-            text: "LM Studio models: re-downloadable.".into(),
-            source: "catalog".into(),
-            detail: Detail {
-                category: "model-store".into(),
-                label: Some("LM Studio models".into()),
-                verdict: Some(Verdict::Redownload),
-                ..Detail::default()
-            },
-        },
-    )
-    .unwrap();
-    location::answer(&conn, &env, r"C:\data\tiny", Answer::Keep, 1).unwrap();
-    for (id, status, path) in [
-        ("p-open", "pending", r"C:\data\cache"),
-        ("p-gone", "declined", r"C:\data\big.iso"),
-    ] {
-        conn.execute(
-            "INSERT INTO proposal(id, conversation_id, kind, params_json, status, total_alloc, created_ms)
-             VALUES (?1, 'main', 'delete', '{\"summary\":\"Caches\"}', ?2, 0, 1)",
-            [id, status],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO proposal_item(proposal_id, seq, path, kind, alloc, logical, verdict, reason, status)
-             VALUES (?1, 0, ?2, 0, 0, 0, 'safe', 'Rebuilds itself', 'pending')",
-            [id, path],
-        )
-        .unwrap();
-    }
-
-    let (st, v) = f
-        .call("GET", "/api/index/map?path=C%3A%5Cdata&w=1000&h=1000", None)
-        .await;
-    assert_eq!(st, 200, "{v}");
-    let t = &v["tree"];
-    let tag = |n: &Value| n["tag"].clone();
-    assert_eq!(
-        tag(kid(t, "cache")),
-        json!({"state": "proposed", "label": "Rebuilds itself", "verdict": "safe"})
-    );
-    assert_eq!(tag(kid(kid(t, "cache"), "c.bin"))["state"], "proposed");
-    let models = json!({"state": "review", "label": "LM Studio models", "verdict": "redownload"});
-    assert_eq!(tag(kid(t, "models")), models);
-    assert_eq!(tag(kid(kid(t, "models"), "a.gguf")), models);
-    let deps = json!({"state": "review", "label": "node_modules", "verdict": "redownload"});
-    assert_eq!(tag(kid(kid(t, "proj"), "node_modules")), deps);
-    assert_eq!(tag(kid(t, "proj")), json!({"state": "unknown"}));
-    assert_eq!(
-        tag(kid(t, "tiny")),
-        json!({"state": "user", "label": "yours", "verdict": "keep"})
-    );
-    assert_eq!(tag(kid(t, "big.iso")), json!({"state": "unknown"}));
-    assert_eq!(tag(kid(t, "small files")), tag(t));
-
-    let (_, root) = f
-        .call("GET", "/api/index/map?path=C%3A%5C&w=1000&h=1000", None)
-        .await;
-    assert_eq!(root["ancestors"], json!([]));
-    assert_eq!(
-        tag(&root["tree"]),
-        json!({"state": "unknown", "label": "the drive root"})
-    );
-    assert_eq!(
-        tag(kid(&root["tree"], "Windows")),
-        json!({"state": "system", "label": "the Windows folder", "verdict": "keep"})
-    );
-
-    let inner = hoardini_core::index::FakeFs::new(r"C:\x\node_modules\lib");
-    inner.file_alloc(r"C:\x\node_modules\lib\a.bin", 2 * MIB, 2 * MIB);
-    let out = hoardini_core::index::refresh(
-        &conn,
-        &inner,
-        inner.root(),
-        &hoardini_core::index::RefreshOptions::default(),
-    )
-    .unwrap();
-    assert!(out.completed);
-    let (_, watched) = f
-        .call(
-            "GET",
-            "/api/index/map?path=C%3A%5Cx%5Cnode_modules%5Clib&w=100&h=100",
-            None,
-        )
-        .await;
-    assert_eq!(tag(&watched["tree"]), deps, "{watched}");
-    let _ = f.h.shutdown.send(());
-}
-
-// Traces: SRV-INDEX-MAP
-#[test]
-fn a_watched_folders_breadcrumbs_start_at_the_folder_the_index_holds() {
-    use hoardini_core::explore;
-    use hoardini_core::index::{FakeFs, RefreshOptions, node_by_path, refresh};
-    use hoardini_core::policy::PolicyEnv;
-    let dir = tempfile::tempdir().unwrap();
-    let db = hoardini_core::store::Db::open(dir.path().join("h.db")).unwrap();
-    let fs = FakeFs::new(r"C:\x\proj");
-    fs.file(r"C:\x\proj\sub\a.bin", 50 * MIB);
-    fs.file(r"C:\x\proj\sub\deep\b.bin", 30 * MIB);
-    let conn = db.conn().unwrap();
-    assert!(
-        refresh(&conn, &fs, r"C:\x\proj", &RefreshOptions::default())
-            .unwrap()
-            .completed
-    );
-    let deep = node_by_path(&conn, r"C:\x\proj\sub\deep").unwrap().unwrap();
-    let m = explore::map(&conn, &PolicyEnv::system(), &deep, 1000, 1000, 5000).unwrap();
-    let crumbs: Vec<&str> = m.ancestors.iter().map(|c| c.path.as_str()).collect();
-    assert_eq!(crumbs, [r"C:\x\proj", r"C:\x\proj\sub"], "each crumb opens");
-}
-
-// Traces: SRV-INDEX-MAP
-#[tokio::test(flavor = "multi_thread")]
-async fn index_map_stops_at_the_node_cap_and_still_adds_up() {
-    use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
-    let f = Fixture::new().await;
-    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
-    let fs = FakeFs::new(r"C:\");
-    for i in 0..5100 {
-        fs.file_alloc(&format!(r"C:\many\f{i:04}.bin"), 2 * MIB, 2 * MIB);
-    }
-    let out = refresh(
-        &db.conn().unwrap(),
-        &fs,
-        fs.root(),
-        &RefreshOptions::default(),
-    )
-    .unwrap();
-    assert!(out.completed);
-    let (st, v) = f
-        .call("GET", "/api/index/map?path=C%3A%5Cmany&w=8192&h=8192", None)
-        .await;
-    assert_eq!(st, 200, "{v}");
-    assert_eq!(v["nodes"], 5000);
-    assert_eq!(v["capped"], true);
-    let t = &v["tree"];
-    assert_eq!(t["children"].as_array().unwrap().len(), 4999);
-    assert_eq!(t["children"][0]["name"], "f0000.bin");
-    assert_eq!(t["more"], json!({"count": 101, "bytes": 101 * 2 * MIB}));
-    assert_eq!(t["size"], 5100 * 2 * MIB);
-    adds_up(t);
-    let _ = f.h.shutdown.send(());
 }
 
 // Traces: SRV-INDEX-TYPES
@@ -2853,109 +2203,6 @@ async fn index_types_lists_extensions_with_what_each_one_is() {
     let _ = f.h.shutdown.send(());
 }
 
-// Traces: SRV-EXPLORE-FOCUS
-#[tokio::test(flavor = "multi_thread")]
-async fn explore_focus_is_stored_cleared_and_forgotten_on_restart() {
-    use hoardini_core::explore;
-    let dir = tempfile::tempdir().unwrap();
-    {
-        let db = hoardini_core::store::Db::open(dir.path().join("h.db")).unwrap();
-        explore::set_focus(&db.conn().unwrap(), Some(r"C:\left\over")).unwrap();
-    }
-    let f = Fixture::in_dir(dir, None, None, false).await;
-    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
-    let conn = db.conn().unwrap();
-    assert_eq!(explore::focus(&conn), None, "a restart clears it");
-
-    let (st, v) = f
-        .call(
-            "PUT",
-            "/api/explore/focus",
-            Some(json!({"path": "C:\\data\\models\\"})),
-        )
-        .await;
-    assert_eq!((st, v), (200, json!({"path": r"C:\data\models"})));
-    assert_eq!(explore::focus(&conn).as_deref(), Some(r"C:\data\models"));
-    let (st, v) = f
-        .call("PUT", "/api/explore/focus", Some(json!({"path": null})))
-        .await;
-    assert_eq!((st, v), (200, json!({"path": null})));
-    assert_eq!(explore::focus(&conn), None);
-    let (st, v) = f
-        .call(
-            "PUT",
-            "/api/explore/focus",
-            Some(json!({"path": r"relative\x"})),
-        )
-        .await;
-    assert_eq!(st, 400, "{v}");
-    assert_eq!(explore::focus(&conn), None);
-    let _ = f.h.shutdown.send(());
-}
-
-// Traces: SRV-LEARNED, AGENT-WEB-LEARN
-#[tokio::test(flavor = "multi_thread")]
-async fn a_web_learned_chips_undo_deletes_only_the_row_it_names() {
-    use hoardini_core::memory::knowledge::{Detail, remember_filetype};
-    let f = Fixture::new().await;
-    let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
-    let text = ".q4nx: NPU model weights (FastFlowLM).";
-    let (ty, _) = remember_filetype(
-        &db.conn().unwrap(),
-        "q4nx",
-        text,
-        "web:https://example.test/flm",
-        Detail {
-            category: "model-weights".into(),
-            ..Detail::default()
-        },
-        1,
-    )
-    .unwrap();
-    let path = format!("/api/learned/web/{}", ty.id);
-    let wrong = f
-        .call(
-            "DELETE",
-            &path,
-            Some(json!({"key": r"**\*.zzq", "text": text})),
-        )
-        .await;
-    assert_eq!(wrong.0, 404, "{}", wrong.1);
-    let (st, _) = f
-        .call("DELETE", &path, Some(json!({"key": ty.key, "text": text})))
-        .await;
-    assert_eq!(st, 200);
-    assert_eq!(
-        f.call("DELETE", &path, Some(json!({"key": ty.key, "text": text})))
-            .await
-            .0,
-        404
-    );
-
-    let (st, note) = f
-        .call(
-            "POST",
-            "/api/memory",
-            Some(json!({"scope": "path", "key": r"C:\tax", "kind": "protect", "text": "Never touch my tax files"})),
-        )
-        .await;
-    assert_eq!(st, 200);
-    assert_eq!(note["id"].as_i64(), Some(ty.id), "the id was reused");
-    assert_eq!(
-        f.call("DELETE", &path, Some(json!({"key": ty.key, "text": text})))
-            .await
-            .0,
-        404,
-        "the chip's Undo never reaches the protect note"
-    );
-    assert!(
-        hoardini_core::memory::get(&db.conn().unwrap(), ty.id)
-            .unwrap()
-            .is_some()
-    );
-    let _ = f.h.shutdown.send(());
-}
-
 // Traces: AGENT-REDACT, EVID-COPY-CHECK
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cards_copy_note_and_dropped_paths_show_the_profile_as_tilde() {
@@ -2993,7 +2240,7 @@ async fn a_cards_copy_note_and_dropped_paths_show_the_profile_as_tilde() {
     let p = proposals::create(
         &db,
         NewProposal {
-            conversation_id: Some("main".into()),
+            conversation_id: Some("home".into()),
             tool_call_id: None,
             kind: ProposalKind::Delete,
             destination_id: None,

@@ -532,6 +532,13 @@ thread_local! {
 }
 
 // None = still the item the user approved; Some(detail) = skip it.
+fn note_slow(path: &str, what: &str, since: std::time::Instant) {
+    let ms = since.elapsed().as_millis() as u64;
+    if ms >= 500 {
+        tracing::info!(%path, what, ms, "slow revalidation step");
+    }
+}
+
 pub fn revalidate(
     conn: &Connection,
     env: &PolicyEnv,
@@ -542,7 +549,10 @@ pub fn revalidate(
     from_review: bool,
 ) -> anyhow::Result<Option<String>> {
     // The open-file check is slow, so every cheap check runs after it, as close to acting as possible.
-    if let Some(r) = in_use_reason(conn, path, expected.kind) {
+    let t = std::time::Instant::now();
+    let in_use = in_use_reason(conn, path, expected.kind);
+    note_slow(path, "open-file check", t);
+    if let Some(r) = in_use {
         return Ok(Some(r));
     }
     #[cfg(test)]
@@ -592,9 +602,13 @@ pub fn revalidate(
         && let Some(e) = env.catalog().lookup(path)
         && e.unit == UnitKind::Contents
         && let Some(hours) = e.min_age_hours
-        && let Some(r) = fresh_inside(Path::new(path), now.kind, hours)
     {
-        return Ok(Some(r));
+        let t = std::time::Instant::now();
+        let fresh = fresh_inside(Path::new(path), now.kind, hours);
+        note_slow(path, "freshness walk", t);
+        if let Some(r) = fresh {
+            return Ok(Some(r));
+        }
     }
     // A `redownload` cap on a path no catalog entry knows came from a copy, which must still count now.
     if action == Action::Delete

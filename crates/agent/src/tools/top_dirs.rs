@@ -5,10 +5,8 @@ use hoardini_core::paths::humanize_bytes;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::util::{
-    abs_path, as_of_ms, conn, digits, failed, index_age, limit, opt_string, opt_u64, parse,
-};
-use super::{DATA_VERSION, Outcome, Tool, ToolCtx, ToolError};
+use super::util::{abs_path, conn, digits, failed, index_age, limit, opt_string, opt_u64, parse};
+use super::{Outcome, Tool, ToolCtx, ToolError};
 
 pub struct TopDirs;
 
@@ -20,8 +18,6 @@ struct Args {
     depth: Option<u64>,
     #[serde(default, deserialize_with = "opt_u64")]
     limit: Option<u64>,
-    #[serde(default, deserialize_with = "opt_string")]
-    view: Option<String>,
 }
 
 impl Tool for TopDirs {
@@ -37,8 +33,7 @@ impl Tool for TopDirs {
         json!({"type": "object", "properties": {
             "under": {"type": "string", "description": "Folder to break down, e.g. ~\\.cache; omit for the volume roots"},
             "depth": {"type": "integer", "description": "How many levels below `under` to rank (default 1, max 4)"},
-            "limit": {"type": "integer", "description": "How many to list (default 15, max 50)"},
-            "view": {"type": "string", "enum": ["list", "map"], "description": "\"map\" when the user asks to see or show where the space goes: the card opens on a treemap (default list)"}
+            "limit": {"type": "integer", "description": "How many to list (default 15, max 50)"}
         }})
     }
 
@@ -50,10 +45,6 @@ impl Tool for TopDirs {
         let a: Args = parse(args)?;
         let under = a.under.as_deref().map(|u| abs_path(ctx, u)).transpose()?;
         let depth = a.depth.unwrap_or(1).clamp(1, 4) as u32;
-        let view = match a.view.as_deref().map(str::trim) {
-            Some(v) if v.eq_ignore_ascii_case("map") => "map",
-            _ => "list",
-        };
         let conn = conn(ctx)?;
         let r = top_dirs(&conn, under.as_deref(), depth, limit(a.limit, 15)).map_err(failed)?;
         let mut out = format!(
@@ -80,25 +71,6 @@ impl Tool for TopDirs {
         if let Some(more) = r.more_line() {
             let _ = writeln!(out, "{more}");
         }
-        let items: Vec<Value> = r
-            .items
-            .iter()
-            .map(|d| json!({"path": d.path, "size": d.size, "files": d.files, "denied": d.denied}))
-            .collect();
-        // With no refresh yet there is nothing to show, so no card (AGENT-TOOL-DATA).
-        let Some(as_of) = as_of_ms(&conn, under.as_deref()) else {
-            return Ok(Outcome::text(out));
-        };
-        let data = json!({
-            "v": DATA_VERSION,
-            "kind": "folders",
-            "under": under,
-            "depth": depth,
-            "view": view,
-            "as_of_ms": as_of,
-            "items": items,
-            "more": {"count": r.more_count, "bytes": r.more_bytes},
-        });
-        Ok(Outcome::text(out).with_data(data))
+        Ok(Outcome::text(out))
     }
 }

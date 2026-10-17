@@ -20,19 +20,19 @@ use crate::provider::{
 };
 use crate::search::{SearchResult, format_for_llm};
 use crate::thread::{self, Stored};
-use crate::tools::util::{redact_all, redact_value};
+use crate::tools::util::redact_all;
 use crate::tools::{
-    About, DATA_VERSION, Kind, Outcome, Registry, ToolCtx, ToolError, learn_prompt, parse_identity,
-    refresh_note, remember_identity,
+    About, Registry, ToolCtx, ToolError, learn_prompt, parse_identity, refresh_note,
+    remember_identity,
 };
 
 // Implemented by the server's indexer supervisor; the agent only asks.
 pub trait IndexControl: Send + Sync {
     fn status(&self) -> Value;
-    fn refresh(&self, mode: &str) -> anyhow::Result<bool>;
+    fn refresh(&self) -> anyhow::Result<bool>;
     // Supervisors without scoped refreshes refresh everything.
-    fn refresh_scope(&self, _scope: Option<&str>, mode: &str) -> anyhow::Result<bool> {
-        self.refresh(mode)
+    fn refresh_scope(&self, _scope: Option<&str>) -> anyhow::Result<bool> {
+        self.refresh()
     }
 }
 
@@ -43,7 +43,7 @@ pub struct AgentEnv {
     pub index: Arc<dyn IndexControl>,
     // Profile used for `~` redaction and expansion; None = the real one (tests inject a fake).
     pub redact_profile: Option<String>,
-    // Milliseconds since the epoch; tests move it to cross the session gap.
+    // Milliseconds since the epoch; tests set it.
     pub clock: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
@@ -80,7 +80,7 @@ const SMALL_GLOBAL_MEMORIES: usize = 10;
 const SMALL_SUMMARY_CHARS: usize = 1500;
 const MAX_SHEDS: usize = 3;
 
-pub const OVERFLOW_MESSAGE: &str = "This conversation no longer fits the model's context window, even after dropping old tool results and earlier turns. Press Start fresh, or switch to a provider profile with a larger context window.";
+pub const OVERFLOW_MESSAGE: &str = "This question no longer fits the model's context window, even after dropping old tool results and earlier questions. Switch to a model with a larger context window in Settings.";
 
 pub fn new_id() -> String {
     uuid::Uuid::now_v7().to_string()
@@ -95,13 +95,6 @@ impl From<anyhow::Error> for Stop {
     fn from(e: anyhow::Error) -> Stop {
         Stop::Fail(format!("Internal error: {e:#}"))
     }
-}
-
-struct RoundEnd {
-    proposal_pending: bool,
-    bad_args: bool,
-    // The answer is written and its follow-ups are shown, so another model round adds nothing.
-    answered: bool,
 }
 
 enum TurnErr {
@@ -184,8 +177,6 @@ impl Emitter {
 }
 
 struct Pending {
-    call_id: String,
-    result_id: String,
     about: About,
     results: Vec<SearchResult>,
 }
@@ -247,7 +238,7 @@ pub async fn run_agent(
     let result = run.go(&mut em, input).await;
     em.close_open().await;
     if result.is_ok() {
-        run.learn_from_searches(&mut em).await;
+        run.learn_from_searches().await;
     }
     let stats = json!({
         "elapsed_ms": started.elapsed().as_millis() as u64,
@@ -354,10 +345,7 @@ impl Run {
                 self.move_window(&stored[i].id).await?;
                 stored.drain(..i);
             }
-            let db = self.env.db.clone();
-            let conv = self.thread_id.clone();
-            let snapshot = stored.clone();
-            let mut msgs = blocking(move || Ok(thread::context(&db, &conv, &snapshot))).await?;
+            let mut msgs = thread::context(&stored);
             msgs.insert(0, ChatMessage::text("system", &system));
             redact_messages(&mut msgs, &self.profile);
             let req = ChatRequest {
@@ -385,23 +373,17 @@ impl Run {
             let msg_id = em.turn_text.take().unwrap_or_else(new_id);
             if turn.tool_calls.is_empty() {
                 if !turn.text.trim().is_empty() {
-                    self.store(
-                        vec![Stored {
-                            id: msg_id,
-                            msg: turn.to_message(),
-                        }],
-                        Vec::new(),
-                    )
+                    self.store(vec![Stored {
+                        id: msg_id,
+                        msg: turn.to_message(),
+                    }])
                     .await?;
                 }
                 return Ok(());
             }
-            let end = self.handle_calls(em, turn, msg_id, &stored).await?;
-            if end.proposal_pending || end.answered {
-                return Ok(());
-            }
+            let bad_args = self.handle_calls(em, turn, msg_id, &stored).await?;
             self.steps += 1;
-            if end.bad_args {
+            if bad_args {
                 if self.parse_retry_used {
                     return Err(Stop::Fail(
                         "The model sent tool calls Hoardini could not parse twice in a row. Try again, rephrase the request, or switch to a stronger provider profile.".into(),
@@ -412,7 +394,6 @@ impl Run {
                 self.parse_retry_used = false;
             }
             if self.steps >= max_steps {
-                // The UI offers "keep going" when a run ends on answered tool calls.
                 self.limit_reached = true;
                 return Ok(());
             }
@@ -460,15 +441,12 @@ impl Run {
                 )
             })
             .collect();
-            let open_proposals = thread::open_proposals(&db, &conv).unwrap_or_default();
             let system = system_prompt(&PromptInput {
                 small,
                 today: fmt_date(now_ms()),
                 index_summary: summary,
                 refresh,
-                explore: hoardini_core::explore::focus(&conn),
                 globals: notes,
-                open_proposals,
             });
             Ok((system, stored))
         })
@@ -494,19 +472,11 @@ impl Run {
         Ok(shed)
     }
 
-    async fn store(&self, msgs: Vec<Stored>, ui: Vec<(String, Value)>) -> Result<(), Stop> {
+    async fn store(&self, msgs: Vec<Stored>) -> Result<(), Stop> {
         let db = self.env.db.clone();
         let conv = self.thread_id.clone();
         let now = self.env.now();
-        blocking(move || {
-            let mut conn = db.conn()?;
-            thread::append_all_at(&mut conn, &conv, &msgs, now)?;
-            for (id, data) in &ui {
-                thread::set_ui(&conn, id, data)?;
-            }
-            Ok(())
-        })
-        .await
+        blocking(move || thread::append_all_at(&mut db.conn()?, &conv, &msgs, now)).await
     }
 
     async fn stream_turn(
@@ -557,25 +527,23 @@ impl Run {
         )))
     }
 
-    fn ctx(&self, call_id: &str) -> ToolCtx {
+    fn ctx(&self) -> ToolCtx {
         ToolCtx {
             db: self.env.db.clone(),
             index: self.env.index.clone(),
             secrets: self.env.secrets.clone(),
             profile: self.profile.clone(),
-            conversation_id: Some(self.thread_id.clone()),
-            tool_call_id: call_id.to_string(),
         }
     }
 
+    // Answers every call of the round and stores them; true when a call's arguments did not parse.
     async fn handle_calls(
         &mut self,
         em: &mut Emitter,
         turn: AssembledTurn,
         msg_id: String,
         stored: &[Stored],
-    ) -> Result<RoundEnd, Stop> {
-        let has_text = !turn.text.trim().is_empty();
+    ) -> Result<bool, Stop> {
         let mut assistant = turn.to_message();
         let mut seen = thread::call_ids(stored);
         // Some servers reuse ids like "call_0" every turn; results are matched by id, so keep them unique.
@@ -589,18 +557,11 @@ impl Run {
         }
         let calls: Vec<ToolCallMsg> = assistant.tool_calls.clone().unwrap_or_default();
         let mut results: Vec<Stored> = Vec::new();
-        let mut ui: Vec<(String, Value)> = Vec::new();
-        let mut pending: Vec<(String, String, String)> = Vec::new();
         let mut bad_args = false;
-        let mut only_suggestions = !calls.is_empty();
-        for (i, call) in calls.iter().enumerate() {
-            let kind = self.registry.get(&call.function.name).map(|t| t.kind());
-            if kind != Some(Kind::Propose) {
-                self.emit_call(em, call, &call.function.arguments, &msg_id)
-                    .await?;
-            }
+        for call in &calls {
+            self.emit_call(em, call, &msg_id).await?;
             let registry = self.registry.clone();
-            let ctx = self.ctx(&call.id);
+            let ctx = self.ctx();
             let name = call.function.name.clone();
             let raw = call.function.arguments.clone();
             let outcome =
@@ -609,26 +570,9 @@ impl Run {
                     Err(e) => Err(ToolError::Failed(format!("the tool crashed: {e}"))),
                 };
             let content = match outcome {
-                Ok(Outcome::Proposal { proposal_id }) => {
-                    let args = args_with_proposal(&call.function.arguments, &proposal_id);
-                    if let Some(c) = assistant.tool_calls.as_mut().and_then(|c| c.get_mut(i)) {
-                        c.function.arguments = args.clone();
-                    }
-                    pending.push((call.id.clone(), proposal_id, args));
-                    continue;
-                }
-                Ok(Outcome::Text {
-                    content,
-                    custom,
-                    data,
-                    learn,
-                }) => {
-                    let result_id = new_id();
-                    self.emit_result(em, &result_id, &call.id, &content).await?;
-                    if let Some(l) = learn {
+                Ok(out) => {
+                    if let Some(l) = out.learn {
                         self.learn.push(Pending {
-                            call_id: call.id.clone(),
-                            result_id: result_id.clone(),
                             about: l.about,
                             results: l.results,
                         });
@@ -638,68 +582,31 @@ impl Run {
                     {
                         self.learn.retain(|p| !p.about.same(&a));
                     }
-                    only_suggestions &= call.function.name == "suggest_next" && data.is_some();
-                    if let Some(data) = data {
-                        em.custom(
-                            "tool_data",
-                            json!({"tool_call_id": call.id, "data": redact_value(&data, &self.profile)}),
-                        )
-                        .await?;
-                        ui.push((result_id.clone(), data));
-                    }
-                    for (name, value) in custom {
-                        em.custom(&name, value).await?;
-                    }
-                    results.push(Stored {
-                        id: result_id,
-                        msg: thread::tool_msg(&call.id, &content),
-                    });
-                    continue;
+                    out.content
                 }
                 Err(e) => {
                     bad_args |= matches!(e, ToolError::BadArgs(_));
-                    only_suggestions = false;
                     e.message()
                 }
             };
             let result_id = new_id();
-            if kind != Some(Kind::Propose) {
-                self.emit_result(em, &result_id, &call.id, &content).await?;
-            }
+            self.emit_result(em, &result_id, &call.id, &content).await?;
             results.push(Stored {
                 id: result_id,
                 msg: thread::tool_msg(&call.id, &content),
             });
         }
         let mut batch = vec![Stored {
-            id: msg_id.clone(),
+            id: msg_id,
             msg: assistant,
         }];
         batch.extend(results);
-        self.store(batch, ui).await?;
-        for (call_id, proposal_id, args) in &pending {
-            let name = calls
-                .iter()
-                .find(|c| &c.id == call_id)
-                .map(|c| c.function.name.clone())
-                .unwrap_or_default();
-            let call = ToolCallMsg::new(call_id, &name, args);
-            self.emit_call(em, &call, args, &msg_id).await?;
-            em.custom(
-                "proposal",
-                json!({"proposal_id": proposal_id, "tool_call_id": call_id}),
-            )
-            .await?;
-        }
-        Ok(RoundEnd {
-            proposal_pending: !pending.is_empty(),
-            bad_args,
-            answered: only_suggestions && has_text,
-        })
+        self.store(batch).await?;
+        Ok(bad_args)
     }
 
     // Each `about` gets one small request after the run, so the answer the model gave is never held up.
-    async fn learn_from_searches(&mut self, em: &mut Emitter) {
+    async fn learn_from_searches(&mut self) {
         let Some((cfg, key)) = self.resolved.clone() else {
             return;
         };
@@ -710,26 +617,8 @@ impl Run {
             }
         }
         for p in todo.into_iter().rev() {
-            let item = match self.learn_one(&cfg, key.as_deref(), &p).await {
-                Ok(Some(item)) => item,
-                Ok(None) => continue,
-                Err(e) => {
-                    tracing::debug!(error = %e, "learning from a web search failed");
-                    continue;
-                }
-            };
-            let data = json!({"v": DATA_VERSION, "kind": "learned", "items": [item]});
-            let (db, id, stored) = (self.env.db.clone(), p.result_id.clone(), data.clone());
-            if blocking(move || thread::set_ui(&db.conn()?, &id, &stored))
-                .await
-                .is_err()
-            {
-                continue;
-            }
-            let shown =
-                json!({"tool_call_id": p.call_id, "data": redact_value(&data, &self.profile)});
-            if em.custom("tool_data", shown).await.is_err() {
-                return;
+            if let Err(e) = self.learn_one(&cfg, key.as_deref(), &p).await {
+                tracing::debug!(error = %e, "learning from a web search failed");
             }
         }
     }
@@ -739,9 +628,9 @@ impl Run {
         cfg: &ProviderConfig,
         key: Option<&str>,
         p: &Pending,
-    ) -> anyhow::Result<Option<Value>> {
+    ) -> anyhow::Result<()> {
         let Some(url) = p.results.first().map(|r| r.url.clone()) else {
-            return Ok(None);
+            return Ok(());
         };
         let ask = format!(
             "What is {}?\n{}",
@@ -764,7 +653,7 @@ impl Run {
             .await
             .map_err(|e| anyhow::anyhow!(self.scrub(&describe(&e, cfg))))?;
         let Some(id) = parse_identity(&turn.text) else {
-            return Ok(None);
+            return Ok(());
         };
         let (db, about, profile, now) = (
             self.env.db.clone(),
@@ -772,21 +661,17 @@ impl Run {
             self.profile.clone(),
             self.env.now(),
         );
-        let link = url.clone();
-        let m = tokio::task::spawn_blocking(move || {
-            remember_identity(&db.conn()?, &about, id, &link, now, &profile)
+        tokio::task::spawn_blocking(move || {
+            remember_identity(&db.conn()?, &about, id, &url, now, &profile)
         })
         .await??;
-        Ok(m.map(|m| {
-            json!({"memory_id": m.id, "key": m.key, "text": m.text, "url": url, "confirmed": m.source == "user"})
-        }))
+        Ok(())
     }
 
     async fn emit_call(
         &self,
         em: &mut Emitter,
         call: &ToolCallMsg,
-        args: &str,
         parent: &str,
     ) -> Result<(), Stop> {
         em.send(Event::ToolCallStart {
@@ -797,7 +682,7 @@ impl Run {
         .await?;
         em.send(Event::ToolCallArgs {
             tool_call_id: call.id.clone(),
-            delta: redact_all(args, &self.profile),
+            delta: redact_all(&call.function.arguments, &self.profile),
         })
         .await?;
         em.send(Event::ToolCallEnd {
@@ -826,15 +711,6 @@ impl Run {
 fn remembered(raw: &str, profile: &str) -> Option<About> {
     let args = crate::tools::parse_args(raw).ok()?;
     About::from_scope(args.get("scope")?.as_str()?, profile)
-}
-
-fn args_with_proposal(raw: &str, proposal_id: &str) -> String {
-    let mut obj = crate::tools::parse_args(raw)
-        .ok()
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default();
-    obj.insert("proposal_id".into(), Value::String(proposal_id.into()));
-    Value::Object(obj).to_string()
 }
 
 pub fn redact_messages(msgs: &mut [ChatMessage], profile: &str) {

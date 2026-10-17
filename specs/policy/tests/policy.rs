@@ -796,12 +796,13 @@ fn location(fx: &Fx, dir: &Path, source: &str, text: &str, verdict: Verdict, act
 
 // Traces: POLICY-LOCATION-KEEP
 #[test]
-fn a_keep_location_blocks_delete_and_dedupe_but_allows_its_listed_actions() {
+fn only_a_keep_the_user_gave_blocks_delete_and_dedupe_and_it_allows_its_listed_actions() {
     let fx = Fx::new();
     let photo = fx.file(r"photos\2024\a.jpg", &data(4096, 1));
     let os = fx.file(r"system\core.dll", &data(4096, 2));
     let scratch = fx.file(r"scratch\x.bin", &data(4096, 3));
     let late = fx.file(r"later\y.bin", &data(4096, 4));
+    let mine = fx.file(r"mine\z.bin", &data(4096, 5));
     location(
         &fx,
         &fx.work.join("photos"),
@@ -826,23 +827,36 @@ fn a_keep_location_blocks_delete_and_dedupe_but_allows_its_listed_actions() {
         Verdict::Safe,
         Action::ALL.to_vec(),
     );
+    location(
+        &fx,
+        &fx.work.join("mine"),
+        "user",
+        "You keep this folder; it may still be moved.",
+        Verdict::Keep,
+        vec![Action::Archive],
+    );
 
     let p = fx
-        .propose(ProposalKind::Delete, &[&photo, &os, &scratch], None)
+        .propose(ProposalKind::Delete, &[&photo, &os, &scratch, &mine], None)
         .unwrap();
-    for (f, words) in [(&photo, "Your photos and videos"), (&os, "never deletes")] {
-        let it = item(&p, f);
-        assert_eq!(it.status, "blocked", "{}", f.display());
-        let reason = it.block_reason.as_deref().unwrap();
-        assert!(
-            reason.contains("a kept location") && reason.contains(words),
-            "{reason}"
+    for f in [&photo, &os, &scratch] {
+        assert_eq!(
+            item(&p, f).status,
+            "pending",
+            "a guess never blocks: {}",
+            f.display()
         );
     }
-    assert_eq!(item(&p, &scratch).status, "pending");
+    let it = item(&p, &mine);
+    assert_eq!(it.status, "blocked");
+    let reason = it.block_reason.as_deref().unwrap();
+    assert!(
+        reason.contains("a kept location") && reason.contains("You keep this folder"),
+        "{reason}"
+    );
 
     let at = fx
-        .propose(ProposalKind::Delete, &[&fx.work.join("photos")], None)
+        .propose(ProposalKind::Delete, &[&fx.work.join("mine")], None)
         .unwrap();
     assert_eq!(at.items[0].status, "blocked");
     let holder = fx.propose(ProposalKind::Delete, &[&fx.work], None).unwrap();
@@ -851,12 +865,12 @@ fn a_keep_location_blocks_delete_and_dedupe_but_allows_its_listed_actions() {
 
     let conn = fx.db.conn().unwrap();
     let block = |f: &Path, a: Action| examine(&conn, &fx.env, &s(f), a).unwrap().block;
-    assert!(block(&photo, Action::Dedupe).is_some());
-    assert_eq!(block(&photo, Action::Archive), None);
-    assert!(block(&photo, Action::Compress).is_some());
-    let online = block(&photo, Action::OnlineOnly).unwrap_or_default();
+    assert!(block(&mine, Action::Dedupe).is_some());
+    assert_eq!(block(&mine, Action::Archive), None);
+    assert!(block(&mine, Action::Compress).is_some());
+    let online = block(&mine, Action::OnlineOnly).unwrap_or_default();
     assert!(!online.contains("a kept location"), "{online}");
-    assert!(block(&os, Action::Archive).is_some());
+    assert_eq!(block(&photo, Action::Dedupe), None);
     assert_eq!(block(&scratch, Action::Dedupe), None);
 
     let before = fx.propose(ProposalKind::Delete, &[&late], None).unwrap();
@@ -960,6 +974,46 @@ fn a_disposable_answer_is_what_an_unknown_location_lacked() {
         Some(Verdict::Keep),
         "in use still wins"
     );
+}
+
+// Traces: POLICY-LOCATION-KEEP
+#[test]
+fn a_guessed_keep_inside_never_blocks_but_one_the_user_gave_does() {
+    let fx = Fx::new();
+    fx.file(r"clips\sentry\a.mp4", &data(4096, 1));
+    fx.file(r"clips\saved\b.mp4", &data(4096, 2));
+    let clips = fx.work.join("clips");
+    fx.index_work();
+    location(
+        &fx,
+        &clips.join("sentry"),
+        "mix",
+        "Your photos and videos: 99% of its bytes are images or video.",
+        Verdict::Keep,
+        vec![Action::Archive],
+    );
+    let blocked = |fx: &Fx| {
+        fx.propose(ProposalKind::Delete, &[&clips], None)
+            .unwrap()
+            .items[0]
+            .block_reason
+            .clone()
+    };
+    assert_eq!(
+        blocked(&fx),
+        None,
+        "the guess inside does not hold the folder back"
+    );
+
+    location(
+        &fx,
+        &clips.join("saved"),
+        "user",
+        "You keep this folder.",
+        Verdict::Keep,
+        vec![Action::Archive],
+    );
+    assert!(blocked(&fx).is_some_and(|r| r.contains("a kept location")));
 }
 
 fn job_row(fx: &Fx, dir: &Path, text: &str, by: &str, cleaned: Vec<serde_json::Value>) {

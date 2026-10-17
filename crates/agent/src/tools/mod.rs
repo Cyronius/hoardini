@@ -9,19 +9,10 @@ use crate::run::IndexControl;
 
 pub mod util;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    Read,
-    Propose,
-}
-
 pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
     fn parameters(&self) -> Value;
-    fn kind(&self) -> Kind {
-        Kind::Read
-    }
     // Part of the reduced toolset for profiles flagged `small` (design 5.12).
     fn small(&self) -> bool {
         false
@@ -39,67 +30,26 @@ pub struct ToolCtx {
     pub index: Arc<dyn IndexControl>,
     pub secrets: Arc<dyn SecretStore>,
     pub profile: String,
-    pub conversation_id: Option<String>,
-    pub tool_call_id: String,
 }
 
-// Card payloads carry this version so the UI can tell an old stored shape from a new one.
-pub const DATA_VERSION: u64 = 1;
-
 #[derive(Debug)]
-pub enum Outcome {
-    Text {
-        content: String,
-        custom: Vec<(String, Value)>,
-        data: Option<Value>,
-        learn: Option<WebLearn>,
-    },
-    Proposal {
-        proposal_id: String,
-    },
+pub struct Outcome {
+    pub content: String,
+    pub learn: Option<WebLearn>,
 }
 
 impl Outcome {
     pub fn text(content: impl Into<String>) -> Outcome {
-        Outcome::Text {
+        Outcome {
             content: util::cap(content.into()),
-            custom: Vec::new(),
-            data: None,
             learn: None,
         }
     }
 
-    pub fn with_data(self, data: Value) -> Outcome {
-        match self {
-            Outcome::Text {
-                content,
-                custom,
-                learn,
-                ..
-            } => Outcome::Text {
-                content,
-                custom,
-                data: Some(data),
-                learn,
-            },
-            other => other,
-        }
-    }
-
     pub fn with_learn(self, learn: WebLearn) -> Outcome {
-        match self {
-            Outcome::Text {
-                content,
-                custom,
-                data,
-                ..
-            } => Outcome::Text {
-                content,
-                custom,
-                data,
-                learn: Some(learn),
-            },
-            other => other,
+        Outcome {
+            learn: Some(learn),
+            ..self
         }
     }
 }
@@ -145,8 +95,6 @@ registry! {
     duplicates => [Duplicates],
     estimate_compression => [EstimateCompression],
     web_search => [WebSearch],
-    suggest_next => [SuggestNext],
-    propose => [ProposeDelete, ProposeArchive, ProposeCompress, ProposeDedupe, ProposeSystemCleanup, ProposeOnlineOnly],
 }
 
 pub use index_status::refresh_note;

@@ -8,9 +8,11 @@ const PLUGINS = { code };
 
 export function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
   return (
-    // Incomplete-markdown repair is only for the live stream: on finished text it cut everything after a bare "<" ("a<b and c").
-    <Streamdown skipHtml rehypePlugins={REHYPE} plugins={PLUGINS} isAnimating={!!streaming} parseIncompleteMarkdown={!!streaming}>
-      {text}
-    </Streamdown>
+    <div className="md">
+      {/* Incomplete-markdown repair is only for the live stream: on finished text it cut everything after a bare "<" ("a<b and c"). */}
+      <Streamdown skipHtml rehypePlugins={REHYPE} plugins={PLUGINS} isAnimating={!!streaming} parseIncompleteMarkdown={!!streaming}>
+        {text}
+      </Streamdown>
+    </div>
   );
 }

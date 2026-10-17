@@ -48,12 +48,12 @@ impl OnlineConsent {
     }
 }
 
+// No saved answer reads as on; a value that does not parse reads as off.
 pub fn load(conn: &Connection) -> OnlineConsent {
-    get_meta(conn, KEY)
-        .ok()
-        .flatten()
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default()
+    match get_meta(conn, KEY).ok().flatten() {
+        None => OnlineConsent::all(),
+        Some(v) => serde_json::from_str(&v).unwrap_or_default(),
+    }
 }
 
 pub fn save(conn: &Connection, c: &OnlineConsent) -> anyhow::Result<()> {

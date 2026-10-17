@@ -165,8 +165,6 @@ pub struct Proposal {
     pub parent_id: Option<String>,
     pub follow_up_id: Option<String>,
     #[serde(default)]
-    pub learned: Vec<memory::learn::Learned>,
-    #[serde(default)]
     pub review_id: Option<String>,
     #[serde(default)]
     pub card: Option<String>,
@@ -248,7 +246,16 @@ fn nothing_left(dropped: &[DroppedItem]) -> anyhow::Error {
 }
 
 pub fn create_with(db: &Db, env: &PolicyEnv, req: NewProposal) -> anyhow::Result<Proposal> {
-    build(db, env, req, None, None)?.map_err(|dropped| nothing_left(&dropped))
+    create_or_dropped(db, env, req)?.map_err(|dropped| nothing_left(&dropped))
+}
+
+// Err holds every refused path when nothing was left to propose.
+pub fn create_or_dropped(
+    db: &Db,
+    env: &PolicyEnv,
+    req: NewProposal,
+) -> anyhow::Result<Result<Proposal, Vec<DroppedItem>>> {
+    build(db, env, req, None, None)
 }
 
 pub fn create_review_card(
@@ -286,10 +293,6 @@ fn op_refusal(c: &CleanupCandidate) -> Option<String> {
         }
         _ => None,
     }
-}
-
-pub fn create_system_cleanup(db: &Db, req: NewSystemCleanup) -> anyhow::Result<Proposal> {
-    create_system_cleanup_card(db, req, None)
 }
 
 pub fn create_system_cleanup_card(
@@ -727,21 +730,6 @@ pub fn select(db: &Db, id: &str, item_ids: &[i64]) -> anyhow::Result<Proposal> {
     Ok(p)
 }
 
-pub fn list_for_conversation(db: &Db, conversation_id: &str) -> anyhow::Result<Vec<Proposal>> {
-    let conn = db.conn()?;
-    let ids: Vec<String> = conn
-        .prepare("SELECT id FROM proposal WHERE conversation_id = ?1 ORDER BY created_ms, id")?
-        .query_map([conversation_id], |r| r.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    let mut out = Vec::with_capacity(ids.len());
-    for id in ids {
-        if let Some(p) = load(&conn, &id)? {
-            out.push(p);
-        }
-    }
-    Ok(out)
-}
-
 pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposal>> {
     type Head = (
         Option<String>,
@@ -860,16 +848,6 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
             it.saves = crate::compress::saved_bytes(conn, &it.path)?;
         }
     }
-    let finished = matches!(status.as_str(), "done" | "partial" | "failed");
-    let learned = if finished
-        && matches!(
-            kind,
-            ProposalKind::Delete | ProposalKind::Archive | ProposalKind::Compress
-        ) {
-        memory::learn::learned_for(conn, id)?
-    } else {
-        Vec::new()
-    };
     Ok(Some(Proposal {
         id: id.to_string(),
         kind,
@@ -887,7 +865,6 @@ pub(crate) fn load(conn: &Connection, id: &str) -> anyhow::Result<Option<Proposa
         dropped: params.dropped,
         parent_id,
         follow_up_id,
-        learned,
         review_id,
         card,
         touched,

@@ -30,14 +30,8 @@ pub const RERUN_AFTER_MS: i64 = 6 * HOUR_MS;
 pub const DECLINED_FOR_MS: i64 = 30 * DAY_MS;
 pub const CARD_MIN_BYTES: u64 = 500 << 20;
 pub const MAX_ITEMS: usize = 50;
-// Review cards live outside the chat; the prompt names them separately (AGENT-PROMPT-CONTEXT).
+// Review cards are kept apart from proposals made by an action on Home.
 pub const CONVERSATION: &str = "review";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Scope {
-    Volume(i64),
-    Folder(String),
-}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CardRef {
@@ -52,17 +46,10 @@ pub struct Review {
     pub id: String,
     pub volume_id: i64,
     pub volume: String,
-    pub scope_path: Option<String>,
     pub scan_id: Option<i64>,
     pub created_ms: i64,
     pub cards: Vec<CardRef>,
     pub areas: Vec<Area>,
-}
-
-impl Review {
-    pub fn root(&self) -> &str {
-        self.scope_path.as_deref().unwrap_or(&self.volume)
-    }
 }
 
 fn same_or_under(a: &str, p: &str) -> bool {
@@ -94,44 +81,13 @@ pub fn volume_of(conn: &Connection, path: &str) -> anyhow::Result<Option<(i64, S
         .max_by_key(|(_, root)| root.len()))
 }
 
-// A folder that is the volume root is the volume.
-fn target(
-    conn: &Connection,
-    env: &PolicyEnv,
-    scope: &Scope,
-) -> anyhow::Result<(i64, String, Option<String>)> {
-    match scope {
-        Scope::Volume(id) => {
-            let root = volume_root(conn, *id)?
-                .ok_or_else(|| anyhow::anyhow!("volume {id} has no index"))?;
-            Ok((*id, root, None))
-        }
-        Scope::Folder(raw) => {
-            let p = normalize_path(&env.expand(raw));
-            let (id, root) =
-                volume_of(conn, &p)?.ok_or_else(|| anyhow::anyhow!("{p} is not in the index"))?;
-            if index::node_id_by_path(conn, &p)?.is_none() {
-                anyhow::bail!("{p} is not in the index");
-            }
-            let folder = (!p.eq_ignore_ascii_case(&root)).then_some(p);
-            Ok((id, root, folder))
-        }
-    }
-}
-
-// A volume review replaces the drive's folder reviews too, so their untouched cards never hide items from it.
-fn replaceable(
-    conn: &Connection,
-    volume_id: i64,
-    folder: Option<&str>,
-) -> anyhow::Result<Vec<String>> {
+fn replaceable(conn: &Connection, volume_id: i64) -> anyhow::Result<Vec<String>> {
     let mut st = conn.prepare(
         "SELECT p.id FROM proposal p JOIN review r ON r.id = p.review_id \
-         WHERE p.status = 'pending' AND p.touched = 0 AND r.volume_id = ?1 \
-         AND (?2 IS NULL OR r.scope_path = ?2 COLLATE NOCASE)",
+         WHERE p.status = 'pending' AND p.touched = 0 AND r.volume_id = ?1",
     )?;
     let ids = st
-        .query_map(params![volume_id, folder], |r| r.get(0))?
+        .query_map([volume_id], |r| r.get(0))?
         .collect::<rusqlite::Result<Vec<String>>>()?;
     Ok(ids)
 }
@@ -270,19 +226,17 @@ pub fn build(
     db: &Db,
     env: &PolicyEnv,
     lister: &dyn DirLister,
-    scope: Scope,
+    volume_id: i64,
     now: i64,
 ) -> anyhow::Result<Review> {
     let mut conn = db.conn()?;
-    let (volume_id, volume, folder) = target(&conn, env, &scope)?;
+    let volume = volume_root(&conn, volume_id)?
+        .ok_or_else(|| anyhow::anyhow!("volume {volume_id} has no index"))?;
     drop_orphans(&conn)?;
-    if folder.is_none() {
-        location::refresh_volume(&conn, env, &volume, now)?;
-    }
-    let root = folder.clone().unwrap_or_else(|| volume.clone());
+    location::refresh_volume(&conn, env, &volume, now)?;
     let scan_id = index::index_status(&conn, Some(&volume))?.and_then(|s| s.last_scan_id);
-    let units = units::resolve(&conn, env, lister, &root, now)?;
-    let replacing = replaceable(&conn, volume_id, folder.as_deref())?;
+    let units = units::resolve(&conn, env, lister, &volume, now)?;
+    let replacing = replaceable(&conn, volume_id)?;
     let taken = taken(&conn, &replacing, now)?;
     let is_taken = |p: &str| taken.paths.iter().any(|t| overlaps(t, p));
     // A contents unit's parts are split one by one below, so one taken part leaves the others in.
@@ -301,7 +255,7 @@ pub fn build(
             .map(|m| (location::expanded(env, &m.key), m))
             .collect::<Vec<(String, Memory)>>(),
         sync_roots: env.cloud().roots(),
-        compress: compress::candidates(&conn, env, &root, now)?
+        compress: compress::candidates(&conn, env, &volume, now)?
             .into_iter()
             .filter(|c| compressible(&units, c))
             .collect(),
@@ -388,7 +342,7 @@ pub fn build(
                 .min(a.unit.size),
         })
         .collect();
-    let areas = areas::collect(&cx, &left, &units, &root, &volume)?;
+    let areas = areas::collect(&cx, &left, &units, &volume)?;
 
     let id = uuid::Uuid::now_v7().to_string();
     let mut created = Vec::new();
@@ -400,7 +354,6 @@ pub fn build(
         &Target {
             review_id: &id,
             volume: &volume,
-            folder: folder.as_deref(),
         },
         &taken.ops,
         &mut created,
@@ -409,7 +362,6 @@ pub fn build(
     let row = NewRow {
         id: &id,
         volume_id,
-        folder: folder.as_deref(),
         scan_id,
         now,
         areas_json: serde_json::to_string(&areas)?,
@@ -424,7 +376,6 @@ pub fn build(
 struct Target<'a> {
     review_id: &'a str,
     volume: &'a str,
-    folder: Option<&'a str>,
 }
 
 fn make_cards(
@@ -436,11 +387,6 @@ fn make_cards(
     taken_ops: &[String],
     created: &mut Vec<String>,
 ) -> anyhow::Result<()> {
-    let min = if t.folder.is_some() {
-        1
-    } else {
-        CARD_MIN_BYTES
-    };
     for (c, mut picks) in CARDS.iter().zip(chosen) {
         picks.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
         let total: u64 = picks.iter().map(|p| p.size).sum();
@@ -450,7 +396,7 @@ fn make_cards(
             ticked: c.ticked,
         };
         if c.kind == ProposalKind::SystemCleanup {
-            let parts = (total >= min).then(|| {
+            let parts = (total >= CARD_MIN_BYTES).then(|| {
                 picks
                     .into_iter()
                     .map(|p| OpPart {
@@ -459,7 +405,7 @@ fn make_cards(
                     })
                     .collect()
             });
-            let system = (t.folder.is_none() && system_volume(env, t.volume)).then_some(t.volume);
+            let system = system_volume(env, t.volume).then_some(t.volume);
             match windows_card(db, env, c, parts, system, taken_ops, &card) {
                 Ok(Some(p)) => created.push(p),
                 Ok(None) => {}
@@ -467,7 +413,7 @@ fn make_cards(
             }
             continue;
         }
-        if picks.is_empty() || total < min {
+        if picks.is_empty() || total < CARD_MIN_BYTES {
             continue;
         }
         let rest = picks.split_off(picks.len().min(MAX_ITEMS));
@@ -517,7 +463,6 @@ fn make_cards(
 struct NewRow<'a> {
     id: &'a str,
     volume_id: i64,
-    folder: Option<&'a str>,
     scan_id: Option<i64>,
     now: i64,
     areas_json: String,
@@ -544,8 +489,8 @@ fn publish(
         strip(&tx, id, &live)?;
     }
     tx.execute(
-        "INSERT INTO review(id, volume_id, scope_path, scan_id, created_ms, areas_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![row.id, row.volume_id, row.folder, row.scan_id, row.now, row.areas_json],
+        "INSERT INTO review(id, volume_id, scan_id, created_ms, areas_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![row.id, row.volume_id, row.scan_id, row.now, row.areas_json],
     )?;
     tx.commit()?;
     Ok(())
@@ -662,7 +607,7 @@ pub fn compress_estimates(
     now: i64,
 ) -> anyhow::Result<bool> {
     let conn = db.conn()?;
-    let before = compress::candidates(&conn, env, review.root(), now)?;
+    let before = compress::candidates(&conn, env, &review.volume, now)?;
     let was: Vec<String> = before
         .iter()
         .filter(|c| c.proposable())
@@ -678,11 +623,11 @@ pub fn compress_estimates(
         return Ok(false);
     }
     // Only a folder this pass made proposable can change the card, and only one the review would not leave out.
-    let replacing = replaceable(&conn, review.volume_id, review.scope_path.as_deref())?;
+    let replacing = replaceable(&conn, review.volume_id)?;
     let taken = taken(&conn, &replacing, now)?;
     let roots = env.cloud().roots();
     let listed = |list: &[String], p: &str| list.iter().any(|x| x.eq_ignore_ascii_case(p));
-    Ok(compress::candidates(&conn, env, review.root(), now)?
+    Ok(compress::candidates(&conn, env, &review.volume, now)?
         .iter()
         .any(|c| {
             c.proposable()
@@ -705,53 +650,39 @@ pub fn rebuild_if_current(
     let Some(r) = get(&conn, review_id)? else {
         return Ok(None);
     };
-    let latest = latest(&conn, r.volume_id, r.scope_path.as_deref())?;
+    let latest = latest(&conn, r.volume_id)?;
     if latest.is_none_or(|l| l.id != r.id) || !untouched(&conn, &r.id)? {
         return Ok(None);
     }
-    let scope = match r.scope_path {
-        Some(p) => Scope::Folder(p),
-        None => Scope::Volume(r.volume_id),
-    };
-    build(db, env, lister, scope, now).map(Some)
+    build(db, env, lister, r.volume_id, now).map(Some)
 }
 
 pub fn get(conn: &Connection, id: &str) -> anyhow::Result<Option<Review>> {
-    type Head = (i64, String, Option<String>, Option<i64>, i64, String);
+    type Head = (i64, String, Option<i64>, i64, String);
     let head: Option<Head> = conn
         .query_row(
-            "SELECT r.volume_id, COALESCE(v.root, ''), r.scope_path, r.scan_id, r.created_ms, r.areas_json \
+            "SELECT r.volume_id, COALESCE(v.root, ''), r.scan_id, r.created_ms, r.areas_json \
              FROM review r LEFT JOIN volume v ON v.id = r.volume_id WHERE r.id = ?1",
             [id],
-            |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                ))
-            },
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()?;
-    let Some((volume_id, volume, scope_path, scan_id, created_ms, areas_json)) = head else {
+    let Some((volume_id, volume, scan_id, created_ms, areas_json)) = head else {
         return Ok(None);
     };
-    // Touched cards of earlier reviews (for a volume review, folder reviews' too) stay live, so they are listed here.
+    // Touched cards of earlier reviews stay live, so they are listed here.
     let mut st = conn.prepare(
         "SELECT p.id, p.card, p.review_id != ?1 FROM proposal p WHERE p.review_id = ?1 AND p.parent_id IS NULL \
          UNION ALL \
          SELECT p.id, p.card, 1 FROM proposal p JOIN review r ON r.id = p.review_id \
          WHERE r.volume_id = ?2 AND r.id != ?1 AND r.created_ms <= ?3 \
-         AND (?4 IS NULL OR r.scope_path = ?4 COLLATE NOCASE) \
          AND p.touched = 1 AND p.status IN ('pending', 'approved', 'running') \
          AND (p.parent_id IS NULL OR NOT EXISTS (SELECT 1 FROM proposal q WHERE q.id = p.parent_id \
               AND q.status IN ('pending', 'approved', 'running'))) \
          ORDER BY 1",
     )?;
     let mut rows = st
-        .query_map(params![id, volume_id, created_ms, scope_path], |r| {
+        .query_map(params![id, volume_id, created_ms], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, Option<String>>(1)?,
@@ -787,7 +718,6 @@ pub fn get(conn: &Connection, id: &str) -> anyhow::Result<Option<Review>> {
         id: id.to_string(),
         volume_id,
         volume,
-        scope_path,
         scan_id,
         created_ms,
         cards,
@@ -795,17 +725,13 @@ pub fn get(conn: &Connection, id: &str) -> anyhow::Result<Option<Review>> {
     }))
 }
 
-pub fn latest(
-    conn: &Connection,
-    volume_id: i64,
-    folder: Option<&str>,
-) -> anyhow::Result<Option<Review>> {
+pub fn latest(conn: &Connection, volume_id: i64) -> anyhow::Result<Option<Review>> {
+    // A row with a scope_path is a folder review an older build made; it never stands for the drive.
     let id: Option<String> = conn
         .query_row(
-            "SELECT id FROM review WHERE volume_id = ?1 \
-             AND ((?2 IS NULL AND scope_path IS NULL) OR scope_path = ?2 COLLATE NOCASE) \
+            "SELECT id FROM review WHERE volume_id = ?1 AND scope_path IS NULL \
              ORDER BY created_ms DESC, id DESC LIMIT 1",
-            params![volume_id, folder],
+            [volume_id],
             |r| r.get(0),
         )
         .optional()?;
@@ -841,9 +767,9 @@ pub fn open(
     now: i64,
 ) -> anyhow::Result<Review> {
     let conn = db.conn()?;
-    match latest(&conn, volume_id, None)? {
+    match latest(&conn, volume_id)? {
         Some(r) if !needs_rerun(&conn, &r, now)? => Ok(r),
-        _ => build(db, env, lister, Scope::Volume(volume_id), now),
+        _ => build(db, env, lister, volume_id, now),
     }
 }
 
@@ -856,12 +782,12 @@ pub fn build_if_stale(
     now: i64,
 ) -> anyhow::Result<Option<Review>> {
     let conn = db.conn()?;
-    if let Some(r) = latest(&conn, volume_id, None)?
+    if let Some(r) = latest(&conn, volume_id)?
         && !needs_rerun(&conn, &r, now)?
     {
         return Ok(None);
     }
-    build(db, env, lister, Scope::Volume(volume_id), now).map(Some)
+    build(db, env, lister, volume_id, now).map(Some)
 }
 
 pub fn rebuild_if_untouched(
@@ -872,13 +798,13 @@ pub fn rebuild_if_untouched(
     now: i64,
 ) -> anyhow::Result<Option<Review>> {
     let conn = db.conn()?;
-    let Some(r) = latest(&conn, volume_id, None)? else {
+    let Some(r) = latest(&conn, volume_id)? else {
         return Ok(None);
     };
     if last_scan(&conn, &r.volume)? == r.scan_id || !untouched(&conn, &r.id)? {
         return Ok(None);
     }
-    build(db, env, lister, Scope::Volume(volume_id), now).map(Some)
+    build(db, env, lister, volume_id, now).map(Some)
 }
 
 // A compress item frees what its estimate saves, not its folder's size.
@@ -951,6 +877,7 @@ pub fn apply_answer(conn: &Connection, path: &str, m: &Memory) -> anyhow::Result
             a.actions = d.actions.clone();
             a.why_not = m.text.clone();
             a.unknown = false;
+            a.user = m.source == "user";
             changed += 1;
         }
         conn.execute(

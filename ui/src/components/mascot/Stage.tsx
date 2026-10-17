@@ -14,8 +14,6 @@ const WORK_MIN_MS = 2000;
 const LOST_MS = 900;
 const HURRY_MS = 380;
 const LONG_MS = 30_000;
-const REPEAT_WINDOW_MS = 10 * 60_000;
-const REPEAT_MAX = 5;
 const PW = 60;
 const PH = 34;
 const LW = 20;
@@ -139,6 +137,8 @@ function layoutFor(card: HTMLElement, move: Move, scroller: Element | null): Lay
   };
 }
 
+const provisionalId = (proposalId: string) => `pending:${proposalId}`;
+
 function parcelFor(p: Proposal, job: Job): Parcel {
   const items = p.items.filter((i) => i.selected && !i.block_reason && i.status !== "blocked");
   const first = items[0];
@@ -174,7 +174,6 @@ function actFor(t: Trip): Act {
 class Director {
   trip: Trip | null = null;
   private headerJobs = new Map<string, { move: Move; at: number }>();
-  private tripLog: number[] = [];
   private known = new Map<string, Job["status"]>();
   private afterHome: (() => void)[] = [];
   private seq = 0;
@@ -193,6 +192,7 @@ class Director {
     for (const j of Object.values(useStore.getState().jobs)) this.known.set(j.id, j.status);
     const unsub = useStore.subscribe((s, prev) => {
       if (s.jobs !== prev.jobs) this.onJobs(s.jobs);
+      if (s.approving !== prev.approving) this.onApproving(s.approving, prev.approving);
       if (s.proposals !== prev.proposals) this.onProposals(s.proposals, prev.proposals);
     });
     return () => {
@@ -216,16 +216,41 @@ class Director {
     this.timers.add(t);
   }
 
+  // The climb starts when the hold completes, before the server has answered; the real job takes the trip over when it appears.
+  private onApproving(now: string | null, was: string | null) {
+    const st = useStore.getState();
+    if (now) {
+      const p = st.proposals[now];
+      if (!p || p.status !== "pending") return;
+      const progress = { done_bytes: 0, total_bytes: 0, done_items: 0, total_items: 0, current: null };
+      this.start({ id: provisionalId(now), kind: p.kind, proposal_id: now, status: "queued", progress, freed_bytes: 0, error: null, created_ms: Date.now(), finished_ms: null });
+      return;
+    }
+    // Approved: the job's own events end the trip. Still pending: the approve failed.
+    const key = was && provisionalId(was);
+    if (key && st.proposals[was]?.status === "pending" && !st.proposals[was]?.job_id) this.end(key, "failed");
+  }
+
+  private adopt(j: Job) {
+    const key = provisionalId(j.proposal_id!);
+    if (this.trip?.jobId === key) this.trip.jobId = j.id;
+    const h = this.headerJobs.get(key);
+    if (!h) return;
+    this.headerJobs.delete(key);
+    this.headerJobs.set(j.id, h);
+  }
+
   private onJobs(jobs: Record<string, Job>) {
     for (const j of Object.values(jobs)) {
       const was = this.known.get(j.id);
       if (was === j.status) continue;
       this.known.set(j.id, j.status);
       if (!j.proposal_id) continue;
+      this.adopt(j);
       const ended = j.status === "done" || j.status === "failed" || j.status === "cancelled";
       // A fast job can arrive already finished; old finished jobs from a reconnect are ignored.
       const fresh = ended && was === undefined && j.finished_ms != null && Date.now() - j.finished_ms < 10_000;
-      if (j.status === "running" || fresh) this.start(j);
+      if (j.status === "running" || j.status === "queued" || fresh) this.start(j);
       if (ended) this.end(j.id, j.status as Outcome);
     }
   }
@@ -238,9 +263,7 @@ class Director {
   }
 
   private canTrip(): boolean {
-    const now = Date.now();
-    this.tripLog = this.tripLog.filter((t) => now - t < REPEAT_WINDOW_MS);
-    return !reducedMotion() && !this.trip && !document.hidden && !useStore.getState().mascotAway && this.tripLog.length < REPEAT_MAX;
+    return !reducedMotion() && !this.trip && !document.hidden && !useStore.getState().mascotAway;
   }
 
   private start(j: Job) {
@@ -270,7 +293,6 @@ class Director {
   }
 
   private beginTrip(j: Job, p: Proposal, mv: Move, layout: Layout, scroller: Element | null) {
-    this.tripLog.push(Date.now());
     const seq = ++this.seq;
     this.trip = { seq, jobId: j.id, proposalId: p.id, move: mv, phase: "down", outcome: null, fast: false, startedAt: Date.now(), workAt: 0, layout, scroller };
     const g = girthLevel(girthFor(usedFraction(useMascotStage.getState().hold ?? selectedVolume(useStore.getState().status?.volumes)) ?? 0.5));

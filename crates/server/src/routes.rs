@@ -15,16 +15,13 @@ use hoardini_core::index;
 use hoardini_core::memory::{self, Kind, MemoryPatch, NewMemory, Scope};
 use hoardini_core::paths::redact;
 use hoardini_core::proposals::{self, Proposal};
-use hoardini_core::store::{get_meta, now_ms, set_meta};
+use hoardini_core::store::{get_meta, set_meta};
 use hoardini_core::syscleanup::SystemOp;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::state::{ApiError, ApiResult, AppState, blocking, parse};
-use crate::supervisor::index_speed;
-use crate::{
-    builtin, copychecks, explore, providers, rclone, review, status, stream, tree, volumes,
-};
+use crate::{builtin, filetypes, providers, rclone, review, status, stream, tree, volumes};
 
 pub struct Entry {
     pub method: &'static str,
@@ -91,22 +88,11 @@ fn entries() -> Vec<Entry> {
         put_("/api/volumes", volumes::put),
         get_("/api/index/summary", index_summary),
         get_("/api/index/children", tree::children),
-        get_("/api/index/map", explore::map),
-        get_("/api/index/types", explore::types),
-        put_("/api/explore/focus", explore::focus_put),
-        post_("/api/reveal", tree::reveal),
+        get_("/api/index/types", filetypes::types),
         post_("/api/agent/run", stream::agent_run),
-        post_("/api/agent/runs/{run_id}/cancel", stream::cancel_run),
         get_("/api/thread", thread_get),
-        post_("/api/thread/fresh", thread_fresh),
-        delete_("/api/thread", thread_clear),
         get_("/api/proposals/{id}", proposal_get),
         post_("/api/proposals/{id}/approve", proposal_approve),
-        post_("/api/proposals/{id}/decline", proposal_decline),
-        delete_(
-            "/api/proposals/{id}/learned/{memory_id}",
-            proposal_learned_undo,
-        ),
         put_("/api/proposals/{id}/selection", proposal_select),
         get_("/api/jobs", jobs_list),
         post_("/api/jobs/{id}/cancel", job_cancel),
@@ -116,9 +102,7 @@ fn entries() -> Vec<Entry> {
         put_("/api/memory/limit", memory_limit_put),
         put_("/api/memory/{id}", memory_update),
         post_("/api/memory/{id}/restore", memory_restore),
-        post_("/api/memory/{id}/confirm", memory_confirm),
         delete_("/api/memory/{id}", memory_delete),
-        delete_("/api/learned/web/{memory_id}", learned_web_undo),
         get_("/api/providers", providers::list),
         post_("/api/providers", providers::create),
         get_("/api/providers/presets", providers::preset_list),
@@ -148,24 +132,22 @@ fn entries() -> Vec<Entry> {
             providers::search_activate,
         ),
         post_("/api/search/providers/{kind}/test", providers::search_test),
-        get_("/api/history", history_points),
         get_("/api/settings", settings_get),
         put_("/api/settings", settings_put),
-        get_("/api/copy-checks", copychecks::get),
-        get_("/api/copy-checks/waiting", copychecks::waiting),
         get_("/api/archive", archive_list),
         post_("/api/archive/{id}/restore", archive_restore),
         post_("/api/dialog/pick-folder", pick_folder),
+        post_("/api/dialog/pick-model", pick_model),
         get_("/api/builtin", builtin_get),
         post_("/api/builtin/install", builtin_install),
         delete_("/api/builtin", builtin_delete),
-        get_("/api/apps/rarely-used", apps_rarely_used),
         post_("/api/apps/{id}/uninstall", app_uninstall),
         post_("/api/review/open", review::open),
         post_("/api/review/run", review::run),
         get_("/api/review", review::get),
-        post_("/api/review/look-closer", review::look_closer),
         post_("/api/locations/answer", review::answer),
+        post_("/api/act", review::act),
+        post_("/api/locations/forget", review::forget_answer),
     ]
 }
 
@@ -188,11 +170,9 @@ pub fn api_router() -> Router<AppState> {
 }
 
 async fn index_refresh(State(s): State<AppState>) -> ApiResult {
-    let st = s.clone();
-    let mode = blocking(move || Ok(st.supervisor.auto_mode())).await?;
     let started = s
         .supervisor
-        .start_refresh(mode)
+        .start_refresh()
         .map_err(|e| ApiError::bad(e.to_string()))?;
     Ok(Json(json!({"started": started})))
 }
@@ -269,9 +249,6 @@ pub(crate) fn display_proposal(mut p: Proposal) -> Value {
         d.path = redact(&d.path);
         d.reason = redact(&d.reason);
     }
-    for l in &mut p.learned {
-        l.text = redact(&l.text);
-    }
     let mut v = serde_json::to_value(&p).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
         o.remove("conversation_id");
@@ -283,65 +260,19 @@ pub(crate) fn display_proposal(mut p: Proposal) -> Value {
 #[derive(Deserialize)]
 struct ThreadQuery {
     #[serde(default)]
-    all: Option<u8>,
+    id: Option<String>,
 }
 
 async fn thread_get(State(s): State<AppState>, Query(q): Query<ThreadQuery>) -> ApiResult {
+    let id =
+        q.id.filter(|id| thread::is_item_thread(id))
+            .ok_or_else(|| ApiError::bad("unknown thread"))?;
     blocking(move || {
         let profile = hoardini_core::paths::profile_dir()
             .to_string_lossy()
             .into_owned();
-        let conn = s.db.conn()?;
-        let cleared = thread::view_start(&conn);
-        let showing_all = q.all.is_some_and(|a| a != 0);
-        let from = if showing_all { 0 } else { cleared };
-        let msgs = thread::agui_messages_from(&s.db, thread::MAIN, Some(&profile), from)?;
-        let view = thread::view_from(&conn, thread::MAIN, now_ms(), from)?;
-        let earlier = thread::count_before(&conn, thread::MAIN, cleared)?;
-        let props = match proposals::list_for_conversation(&s.db, thread::MAIN) {
-            Ok(list) => list,
-            Err(e) => {
-                tracing::warn!(error = %e, "listing proposals for thread failed");
-                Vec::new()
-            }
-        };
-        let mut map = Map::new();
-        for p in props {
-            map.insert(p.id.clone(), display_proposal(p));
-        }
-        Ok(Json(json!({
-            "id": thread::MAIN,
-            "messages": msgs,
-            "proposals": map,
-            "window_start_id": view.window_start_id,
-            "has_hidden": view.has_hidden,
-            "fresh": view.fresh,
-            "earlier": earlier,
-            "showing_all": showing_all,
-        })))
-    })
-    .await
-}
-
-async fn thread_fresh(State(s): State<AppState>) -> ApiResult {
-    blocking(move || {
-        thread::clear_screen(&s.db.conn()?, thread::MAIN)?;
-        Ok(Json(json!({"ok": true})))
-    })
-    .await
-}
-
-async fn thread_clear(State(s): State<AppState>) -> ApiResult {
-    let running = s.runs.lock().map(|r| !r.is_empty()).unwrap_or(true);
-    if running {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "a chat run is in progress; stop it first",
-        ));
-    }
-    blocking(move || {
-        thread::clear(&mut s.db.conn()?, thread::MAIN)?;
-        Ok(Json(json!({"ok": true})))
+        let msgs = thread::agui_messages(&s.db, &id, Some(&profile))?;
+        Ok(Json(json!({"id": id, "messages": msgs})))
     })
     .await
 }
@@ -380,30 +311,10 @@ async fn proposal_approve(
         return Err(ApiError::bad("nothing selected"));
     }
     let st = s.clone();
-    let res = blocking(move || st.exec.approve(&id, &b.item_ids).map_err(classify)).await?;
+    let res =
+        blocking(move || st.exec.approve_deferred(&id, &b.item_ids).map_err(classify)).await?;
     s.bump();
     Ok(Json(json!(res)))
-}
-
-async fn proposal_decline(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult {
-    let st = s.clone();
-    blocking(move || proposals::decline(&st.db, &id).map_err(classify)).await?;
-    s.bump();
-    Ok(Json(json!({"approved": false})))
-}
-
-async fn proposal_learned_undo(
-    State(s): State<AppState>,
-    Path((id, memory_id)): Path<(String, i64)>,
-) -> ApiResult {
-    blocking(move || {
-        if memory::learn::undo(&s.db.conn()?, &id, memory_id)? {
-            Ok(Json(json!({"ok": true})))
-        } else {
-            Err(ApiError::not_found("learned entry"))
-        }
-    })
-    .await
 }
 
 #[derive(Deserialize)]
@@ -520,53 +431,6 @@ async fn memory_restore(State(s): State<AppState>, Path(id): Path<i64>) -> ApiRe
     .await
 }
 
-async fn memory_confirm(State(s): State<AppState>, Path(id): Path<i64>) -> ApiResult {
-    blocking(move || {
-        let profile = hoardini_core::paths::profile_dir()
-            .to_string_lossy()
-            .into_owned();
-        let conn = s.db.conn()?;
-        let found = memory::get(&conn, id)?.ok_or_else(|| ApiError::not_found("memory"))?;
-        if found.detail.is_none() {
-            return Err(ApiError::bad(format!(
-                "memory {id} is a note; only location and file-type rows can be confirmed"
-            )));
-        }
-        let m = memory::knowledge::confirm(&conn, id, now_ms(), &profile)?
-            .ok_or_else(|| ApiError::not_found("memory"))?;
-        Ok(Json(json!(m)))
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-struct LearnedChip {
-    key: Option<String>,
-    text: String,
-}
-
-// A web search's Learned chip: only the row it names, so a reused id never deletes another memory.
-async fn learned_web_undo(
-    State(s): State<AppState>,
-    Path(memory_id): Path<i64>,
-    body: Bytes,
-) -> ApiResult {
-    let b: LearnedChip = parse(&body)?;
-    blocking(move || {
-        let profile = hoardini_core::paths::profile_dir()
-            .to_string_lossy()
-            .into_owned();
-        let conn = s.db.conn()?;
-        if memory::knowledge::forget_learned(&conn, memory_id, b.key.as_deref(), &b.text, &profile)?
-        {
-            Ok(Json(json!({"ok": true})))
-        } else {
-            Err(ApiError::not_found("learned entry"))
-        }
-    })
-    .await
-}
-
 #[derive(Deserialize)]
 struct MemoryLimit {
     limit: usize,
@@ -658,38 +522,6 @@ async fn destination_test(State(s): State<AppState>, Path(id): Path<String>) -> 
     .await
 }
 
-#[derive(Deserialize)]
-struct HistoryQuery {
-    since_ms: Option<i64>,
-    until_ms: Option<i64>,
-    volume: Option<String>,
-}
-
-async fn history_points(State(s): State<AppState>, Query(q): Query<HistoryQuery>) -> ApiResult {
-    blocking(move || {
-        let conn = s.db.conn()?;
-        let volume = q.volume.clone().or_else(|| index::focus(&conn));
-        let Some(st) = index::index_status(&conn, volume.as_deref())? else {
-            return Ok(Json(json!([])));
-        };
-        let scans = history::scans_between(&conn, st.volume_id, q.since_ms, q.until_ms)?;
-        let pts: Vec<Value> = scans
-            .iter()
-            .map(|c| {
-                json!({
-                    "finished_ms": c.finished_ms,
-                    "total_bytes": c.total_bytes.unwrap_or(0),
-                    "free_bytes": c.free_bytes.unwrap_or(0),
-                    "used_bytes": c.used_bytes.unwrap_or(0),
-                    "indexed_bytes": c.indexed_bytes,
-                })
-            })
-            .collect();
-        Ok(Json(json!(pts)))
-    })
-    .await
-}
-
 fn meta_u64(conn: &rusqlite::Connection, key: &str, default: u64) -> u64 {
     get_meta(conn, key)
         .ok()
@@ -705,7 +537,6 @@ fn settings_value(s: &AppState) -> anyhow::Result<Value> {
     let mut wal = db.clone().into_os_string();
     wal.push("-wal");
     Ok(json!({
-        "index_speed": index_speed(&conn),
         "builtin_idle_minutes": meta_u64(&conn, "builtin_idle_minutes", 10),
         "index_size_bytes": size(db) + size(wal.into()),
         "online_checks": consent::load(&conn),
@@ -727,28 +558,12 @@ async fn settings_put(State(s): State<AppState>, body: Bytes) -> ApiResult {
         }
         None => None,
     };
-    for (k, v) in &patch {
-        match k.as_str() {
-            "index_speed" => {
-                let sp = v
-                    .as_str()
-                    .filter(|x| matches!(*x, "lean" | "fast"))
-                    .ok_or_else(|| ApiError::bad("index_speed must be \"lean\" or \"fast\""))?;
-                writes.push(("index_speed", sp.to_string()));
-            }
-            "builtin_idle_minutes" => {
-                let n = v.as_u64().ok_or_else(|| {
-                    ApiError::bad("builtin_idle_minutes must be a non-negative integer")
-                })?;
-                writes.push(("builtin_idle_minutes", n.to_string()));
-            }
-            _ => {}
-        }
+    if let Some(v) = patch.get("builtin_idle_minutes") {
+        let n = v
+            .as_u64()
+            .ok_or_else(|| ApiError::bad("builtin_idle_minutes must be a non-negative integer"))?;
+        writes.push(("builtin_idle_minutes", n.to_string()));
     }
-    let speed = writes
-        .iter()
-        .find(|(k, _)| *k == "index_speed")
-        .map(|(_, v)| v.clone());
     let res = blocking({
         let s = s.clone();
         move || {
@@ -763,9 +578,6 @@ async fn settings_put(State(s): State<AppState>, body: Bytes) -> ApiResult {
         }
     })
     .await?;
-    if let Some(sp) = speed {
-        s.supervisor.speed_changed(&sp);
-    }
     if online.is_some() {
         s.copy.kick();
     }
@@ -830,6 +642,18 @@ async fn pick_folder(State(s): State<AppState>) -> ApiResult {
     ))
 }
 
+async fn pick_model(State(s): State<AppState>) -> ApiResult {
+    let Some(d) = s.dialogs.clone() else {
+        return Err(ApiError::unimplemented(
+            "no native dialogs in headless mode",
+        ));
+    };
+    let path = d.pick_file("GGUF model", &["gguf"]).await;
+    Ok(Json(
+        json!({"path": path.map(|p| p.to_string_lossy().into_owned())}),
+    ))
+}
+
 async fn builtin_get(State(s): State<AppState>) -> ApiResult {
     blocking(move || Ok(Json(builtin::view(&s)?))).await
 }
@@ -847,18 +671,6 @@ async fn builtin_install(State(s): State<AppState>, body: Bytes) -> ApiResult {
 
 async fn builtin_delete(State(s): State<AppState>) -> ApiResult {
     Ok(Json(builtin::remove(&s).await?))
-}
-
-async fn apps_rarely_used(State(s): State<AppState>) -> ApiResult {
-    blocking(move || {
-        let mut list = apps::list_rarely_used(&s.db.conn()?, now_ms())?;
-        for a in &mut list {
-            a.path = redact(&a.path);
-            a.last_run_from = a.last_run_from.as_deref().map(redact);
-        }
-        Ok(Json(json!(list)))
-    })
-    .await
 }
 
 // The body is never read: the command comes only from the app's own registration.

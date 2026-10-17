@@ -27,9 +27,8 @@ pub use cases::{Sizes, cases, size_re};
 pub use fixture::{Fixture, build as build_fixture, reset_memories};
 pub use meter::{EvalMeter, RequestStat};
 pub use score::{
-    Call, CaseScore, CaseSpec, GATE, Gate, Totals, Turn, arg_text, arg_value, forbid,
-    gate_failures, group, group_arg, leaked_calls, median, percentile, rule, score, score_with,
-    totals, turns_from,
+    Call, CaseScore, CaseSpec, GATE, Gate, Totals, Turn, arg_text, arg_value, gate_failures, group,
+    group_arg, leaked_calls, median, percentile, rule, score, score_with, totals, turns_from,
 };
 
 pub const Q4NX_SEARCH: &str = include_str!("eval/q4nx_search.json");
@@ -100,7 +99,7 @@ impl IndexControl for Idle {
     fn status(&self) -> Value {
         json!({"state": "idle"})
     }
-    fn refresh(&self, _mode: &str) -> Result<bool> {
+    fn refresh(&self) -> Result<bool> {
         Ok(false)
     }
 }
@@ -156,7 +155,6 @@ async fn run_turn(
             content: Some(text.to_string()),
             tool_calls: None,
             tool_call_id: None,
-            data: None,
         }],
         ..Default::default()
     };

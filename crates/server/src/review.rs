@@ -1,18 +1,13 @@
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::Response;
-use hoardini_agent::agui::{AgMessage, RunAgentInput};
-use hoardini_agent::thread;
 use hoardini_core::apps;
-use hoardini_core::copycheck::{self, consent};
 use hoardini_core::index::{self, WinLister};
 use hoardini_core::memory::location::{self, Answer};
 use hoardini_core::paths::redact;
 use hoardini_core::policy::PolicyEnv;
-use hoardini_core::proposals;
-use hoardini_core::review::{self, Opened, Review, Scope};
+use hoardini_core::proposals::{self, NewItem, NewProposal, ProposalKind};
+use hoardini_core::review::{self, Opened, Review};
 use hoardini_core::store::now_ms;
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -40,7 +35,7 @@ fn same_or_under(a: &str, p: &str) -> bool {
     a.eq_ignore_ascii_case(p) || index::is_ancestor_path(a, p)
 }
 
-// The review's own scope only, so a folder review lists the apps inside it.
+// Each drive's review lists only the apps installed on it.
 fn apps_under(conn: &Connection, root: &str) -> Vec<Value> {
     let list = match apps::list_rarely_used(conn, now_ms()) {
         Ok(l) => l,
@@ -63,10 +58,6 @@ fn extras(s: &AppState, conn: &Connection, root: &str) -> Value {
     json!({
         "building": s.reviews.building(),
         "apps": apps_under(conn, root),
-        "online": {
-            "asked": consent::load(conn).asked,
-            "waiting": copycheck::online_waiting(conn),
-        },
     })
 }
 
@@ -101,7 +92,6 @@ pub fn view(s: &AppState, r: &Review) -> anyhow::Result<Value> {
             "id": r.id,
             "created_ms": r.created_ms,
             "volume": r.volume,
-            "scope_path": r.scope_path.as_deref().map(redact),
         },
         "header": {
             "root": r.volume,
@@ -113,7 +103,7 @@ pub fn view(s: &AppState, r: &Review) -> anyhow::Result<Value> {
         "areas": areas,
         "proposals": props,
     });
-    Ok(merged(base, extras(s, &conn, r.root())))
+    Ok(merged(base, extras(s, &conn, &r.volume)))
 }
 
 // Before the drive's first review is built there is only the drive to show.
@@ -191,33 +181,14 @@ pub async fn open(State(s): State<AppState>) -> ApiResult {
     Ok(Json(out))
 }
 
-#[derive(Deserialize)]
-struct RunBody {
-    path: Option<String>,
-}
-
-pub async fn run(State(s): State<AppState>, body: Bytes) -> ApiResult {
-    let b: RunBody = parse(&body)?;
+pub async fn run(State(s): State<AppState>) -> ApiResult {
     let st = s.clone();
     let out = blocking(move || {
         let env = env(&st);
-        let scope = match b.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-            Some(p) => {
-                let p = index::normalize_path(&env.expand(p));
-                match index::node_by_path(&st.db.conn()?, &p)? {
-                    None => return Err(ApiError::not_found("folder in the index")),
-                    Some(n) if n.kind != index::NodeKind::Dir => {
-                        return Err(ApiError::bad(format!("{p} is a file, not a folder")));
-                    }
-                    Some(_) => {}
-                }
-                Scope::Folder(p)
-            }
-            None => Scope::Volume(focus(&st.db.conn()?)?.0),
-        };
+        let vid = focus(&st.db.conn()?)?.0;
         let r = st
             .reviews
-            .exclusive(|now| review::build(&st.db, &env, &WinLister, scope, now))?;
+            .exclusive(|now| review::build(&st.db, &env, &WinLister, vid, now))?;
         after_build(&st, &r);
         Ok(view(&st, &r)?)
     })
@@ -236,7 +207,7 @@ pub async fn get(State(s): State<AppState>, Query(q): Query<GetQuery>) -> ApiRes
         let conn = s.db.conn()?;
         let r = match q.id {
             Some(id) => review::get(&conn, &id)?,
-            None => review::latest(&conn, focus(&conn)?.0, None)?,
+            None => review::latest(&conn, focus(&conn)?.0)?,
         }
         .ok_or_else(|| ApiError::not_found("review"))?;
         Ok(Json(view(&s, &r)?))
@@ -248,7 +219,7 @@ pub async fn get(State(s): State<AppState>, Query(q): Query<GetQuery>) -> ApiRes
 pub fn status_ref(s: &AppState) -> Value {
     let found = s.db.conn().ok().and_then(|c| {
         let (vid, _) = focus(&c).ok()?;
-        review::latest(&c, vid, None).ok().flatten()
+        review::latest(&c, vid).ok().flatten()
     });
     match found {
         Some(r) => json!({"id": r.id, "created_ms": r.created_ms}),
@@ -297,39 +268,146 @@ pub async fn answer(State(s): State<AppState>, body: Bytes) -> ApiResult {
     Ok(out)
 }
 
+// Proposals made by an action on Home, kept apart from the review's.
+pub const HOME: &str = "home";
+
 #[derive(Deserialize)]
-struct LookBody {
+struct ActBody {
+    kind: String,
+    paths: Vec<String>,
+    #[serde(default)]
+    destination_id: Option<String>,
+}
+
+// The answer is the action: the paths the user chose become a proposal that is approved at once (UI-HOME).
+pub async fn act(State(s): State<AppState>, body: Bytes) -> ApiResult {
+    let b: ActBody = parse(&body)?;
+    let kind = ProposalKind::parse(&b.kind)
+        .filter(|k| {
+            matches!(
+                k,
+                ProposalKind::Delete
+                    | ProposalKind::Compress
+                    | ProposalKind::OnlineOnly
+                    | ProposalKind::Archive
+            )
+        })
+        .ok_or_else(|| ApiError::bad("kind must be delete, compress, online_only or archive"))?;
+    if kind == ProposalKind::Archive && b.destination_id.is_none() {
+        return Err(ApiError::bad("moving needs a destination_id"));
+    }
+    let st = s.clone();
+    let out = blocking(move || {
+        let env = env(&st);
+        let items: Vec<NewItem> = b
+            .paths
+            .iter()
+            .map(|p| index::normalize_path(&env.expand(p.trim())))
+            .filter(|p| !p.is_empty())
+            .map(|path| NewItem {
+                path,
+                verdict: None,
+                reason: None,
+            })
+            .collect();
+        if items.is_empty() {
+            return Err(ApiError::bad("paths is required"));
+        }
+        let req = NewProposal {
+            conversation_id: Some(HOME.into()),
+            tool_call_id: None,
+            kind,
+            destination_id: b.destination_id,
+            format: (kind == ProposalKind::Compress).then(|| "lzx".to_string()),
+            dedupe: None,
+            summary: "Chosen on Home".into(),
+            items,
+        };
+        let refused = |d: &proposals::DroppedItem| json!({"path": redact(&d.path), "reason": redact(&d.reason)});
+        let p = match proposals::create_or_dropped(&st.db, &env, req)? {
+            Ok(p) => p,
+            Err(dropped) => {
+                let blocked: Vec<Value> = dropped.iter().map(refused).collect();
+                return Ok(Json(
+                    json!({"proposal_id": Value::Null, "job_id": Value::Null, "blocked": blocked}),
+                ));
+            }
+        };
+        let ids: Vec<i64> = p
+            .items
+            .iter()
+            .filter(|i| i.status == "pending" && i.block_reason.is_none())
+            .map(|i| i.id)
+            .collect();
+        let blocked: Vec<Value> = p
+            .items
+            .iter()
+            .filter(|i| !ids.contains(&i.id))
+            .map(|i| {
+                json!({
+                    "path": redact(&i.path),
+                    "reason": redact(i.block_reason.as_deref().unwrap_or(&i.status)),
+                })
+            })
+            .chain(p.dropped.iter().map(refused))
+            .collect();
+        if ids.is_empty() {
+            proposals::decline(&st.db, &p.id)?;
+            return Ok(Json(
+                json!({"proposal_id": p.id, "job_id": Value::Null, "blocked": blocked}),
+            ));
+        }
+        let r = st
+            .exec
+            .approve_deferred(&p.id, &ids)
+            .map_err(|e| ApiError::bad(redact(&format!("{e:#}"))))?;
+        Ok(Json(
+            json!({"proposal_id": p.id, "job_id": r.job_id, "blocked": blocked}),
+        ))
+    })
+    .await?;
+    s.bump();
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+struct ForgetBody {
     path: String,
 }
 
-pub async fn look_closer(State(s): State<AppState>, body: Bytes) -> ApiResult<Response> {
-    let b: LookBody = parse(&body)?;
-    let path = redact(&index::normalize_path(
-        &PolicyEnv::system().expand(b.path.trim()),
-    ));
-    if path.is_empty() {
-        return Err(ApiError::bad("path is required"));
-    }
-    if s.runs.lock().map(|r| !r.is_empty()).unwrap_or(true) {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "a chat run is in progress; stop it first",
-        ));
-    }
-    let input = RunAgentInput {
-        thread_id: thread::MAIN.into(),
-        run_id: uuid::Uuid::now_v7().to_string(),
-        messages: vec![AgMessage {
-            id: uuid::Uuid::now_v7().to_string(),
-            role: "user".into(),
-            content: Some(format!(
-                "What is {path}? Look inside and tell me whether to keep it, delete it, or move it elsewhere."
-            )),
-            tool_calls: None,
-            tool_call_id: None,
-            data: None,
-        }],
-        ..RunAgentInput::default()
-    };
-    crate::stream::start_run(s, input).await
+// Bring back: drops the user's own answer for a folder, so the next review judges it again.
+pub async fn forget_answer(State(s): State<AppState>, body: Bytes) -> ApiResult {
+    let b: ForgetBody = parse(&body)?;
+    let st = s.clone();
+    let out = blocking(move || {
+        let env = env(&st);
+        let path = index::normalize_path(&env.expand(b.path.trim()));
+        if path.is_empty() {
+            return Err(ApiError::bad("path is required"));
+        }
+        let conn = st.db.conn()?;
+        let mut forgot = 0;
+        while let Some(m) =
+            location::location_at(&conn, &env.profile, &path)?.filter(|m| m.source == "user")
+        {
+            if !hoardini_core::memory::delete(&conn, m.id)? {
+                break;
+            }
+            forgot += 1;
+        }
+        let protects = hoardini_core::memory::list(&conn)?.into_iter().filter(|m| {
+            m.kind == hoardini_core::memory::Kind::Protect
+                && m.source == "user"
+                && location::expanded(&env, &m.key).eq_ignore_ascii_case(&path)
+        });
+        for m in protects {
+            if hoardini_core::memory::delete(&conn, m.id)? {
+                forgot += 1;
+            }
+        }
+        Ok(Json(json!({"forgot": forgot})))
+    })
+    .await?;
+    s.bump();
+    Ok(out)
 }

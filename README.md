@@ -6,15 +6,29 @@
 
 <p align="center"><b>The world's smartest trashcan.</b></p>
 
-Your drive is full and you don't know why. Hoardini is an AI agent for Windows that works out what every big folder and file on your disk actually is, then proposes the smartest way to get the space back: **delete** it, **compress** it, or **move it somewhere else**. You see the exact paths and sizes, you click, and only then does anything happen.
+Your drive is full and you don't know why. Hoardini works out what every big folder and file on your disk actually is, and shows it as one short screen:
 
-Ask it "what is this 40 GB folder?" and it answers from evidence: a catalog of known locations, file headers, the installed-programs registry and open-handle checks come first, the LLM explains, and the web is the last resort. Tell it once that a location is fine to clear and it remembers.
+- **Junk you won't miss**: temp files, caches, Windows leftovers and the Recycle Bin. One press clears it.
+- **Free space, keep the files**: compress folders in place, or keep cloud files online only. One press frees it, and nothing is lost.
+- **Your call**: the big things only you can judge, biggest first. Open one and Hoardini says what it is and why he thinks so; Delete, Shrink, Move or Keep it there, or ask him about it.
 
-- **It proposes. You decide.** Nothing is deleted, archived or compressed by the agent itself. Every action is a proposal card, and rules in code can veto any of them.
-- **The right fix for each item.** Caches and leftovers get deleted. Read-only data gets compressed, but only where it pays: weights, video, images and archives are skipped. Things you want to keep go to another drive or the cloud, copied and verified before the source is removed.
+Answers come from evidence first: a catalog of known locations, file types, the installed-programs registry and open-handle checks, then the AI to explain, and the web last.
+
+- **The answer is the action.** Pressing Delete deletes, after you hold the button. Nothing happens until you press, and rules in code can still hold any path back.
+- **Your word wins.** Hoardini's guesses never outrank you; only what you said to keep is held back.
 - **No Recycle Bin.** Delete is permanent, because the bin frees nothing until it is emptied.
-- **It learns.** Your decisions about a location or file type are stored as path-keyed rows in SQLite and applied next time.
+- **It remembers quietly.** Things you keep stop showing up, with one link to bring them back.
 - **It stays out of the way.** A persistent index of the whole drive, refreshed from the NTFS change journal in an Efficiency-mode process.
+
+## Choose a brain
+
+Hoardini needs a model. The first-run screen sets one up:
+
+- **On this PC (recommended).** Granite 4.1 3B downloads once and runs on the CPU. Nothing leaves your PC and it works offline. Qwen3.5 9B (smarter, needs a graphics card) and any `.gguf` file you already have are there too, and so are LM Studio, Ollama, llama.cpp and vLLM.
+- **A free online brain.** Built-in setup for six free providers, each with its key page: Google Gemini, OpenRouter, Ollama Cloud, Mistral, Cloudflare Workers AI and Z.ai. The setup screen says, in plain words, how much each allows, whether a card is needed, and whether it may learn from your questions.
+- **Your own provider.** OpenAI, Anthropic, Groq, Together and Cerebras are presets; any OpenAI-compatible endpoint works with a base URL and a key.
+
+Online choices send your questions, and the file and folder names Hoardini looks up to answer them, to that provider.
 
 ## Build and run
 
@@ -49,7 +63,7 @@ cd ui; bun install; bun run mock
 |---|---|
 | `crates/win` | Windows-specific code |
 | `crates/core` | Index, evidence, actions, memory |
-| `crates/agent` | Chat agent, proposals, policy |
+| `crates/agent` | The AI agent: answers about one item, its tools, and providers |
 | `crates/server` | Loopback HTTP API |
 | `crates/cli` | `hoardini` command |
 | `app` | Tauri desktop shell |

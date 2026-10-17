@@ -138,7 +138,7 @@ pub fn presets() -> Vec<Preset> {
                 "https://generativelanguage.googleapis.com/v1beta/openai/",
                 true,
             ),
-            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite",
             "https://aistudio.google.com/apikey",
         ),
         p("openai", "OpenAI", "https://api.openai.com/v1", true),
@@ -149,8 +149,39 @@ pub fn presets() -> Vec<Preset> {
                 "https://openrouter.ai/api/v1",
                 true,
             ),
-            "nvidia/nemotron-3-super-120b-a12b:free",
+            "google/gemma-4-31b-it:free",
             "https://openrouter.ai/settings/keys",
+        ),
+        free(
+            p("mistral", "Mistral", "https://api.mistral.ai/v1", true),
+            "mistral-small-2603",
+            "https://console.mistral.ai/api-keys",
+        ),
+        free(
+            p("zai", "Z.ai", "https://api.z.ai/api/paas/v4", true),
+            "glm-4.7-flash",
+            "https://z.ai/manage-apikey/apikey-list",
+        ),
+        free(
+            p(
+                "ollama-cloud",
+                "Ollama Cloud",
+                "https://ollama.com/v1",
+                true,
+            ),
+            "gemma4:31b",
+            "https://ollama.com/settings/keys",
+        ),
+        // The account ID goes into the URL; the setup form asks for it (UI-FIRST-RUN).
+        free(
+            p(
+                "cloudflare",
+                "Cloudflare Workers AI",
+                "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+                true,
+            ),
+            "@cf/zai-org/glm-4.7-flash",
+            "https://dash.cloudflare.com/profile/api-tokens",
         ),
         p(
             "anthropic",

@@ -63,7 +63,6 @@ pub type ApiResult<T = Json<serde_json::Value>> = Result<T, ApiError>;
 
 pub struct RunSlot {
     pub abort: tokio::task::AbortHandle,
-    pub cancelled: bool,
 }
 
 pub struct Inner {

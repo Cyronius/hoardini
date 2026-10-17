@@ -1,4 +1,4 @@
-use hoardini_core::index::{index_status, is_ancestor_path, normalize_path};
+use hoardini_core::index::{index_status, normalize_path};
 use hoardini_core::paths::{expand_with, redact_with};
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -52,10 +52,6 @@ pub fn redact_all(s: &str, profile: &str) -> String {
     let mut out = redact_with(s, &escaped);
     out = redact_with(&out, &slashed);
     redact_with(&out, profile)
-}
-
-pub fn redact_value(v: &Value, profile: &str) -> Value {
-    serde_json::from_str(&redact_all(&v.to_string(), profile)).unwrap_or_else(|_| v.clone())
 }
 
 pub fn cap(s: String) -> String {
@@ -113,26 +109,6 @@ pub fn index_age(conn: &Connection) -> String {
             None => "index from an unfinished first refresh".into(),
         },
         None => "no index yet".into(),
-    }
-}
-
-pub fn as_of_ms(conn: &Connection, path: Option<&str>) -> Option<i64> {
-    let mut st = conn
-        .prepare("SELECT root, last_refresh_ms FROM volume WHERE last_refresh_ms IS NOT NULL")
-        .ok()?;
-    let rows: Vec<(String, i64)> = st
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .ok()?
-        .flatten()
-        .collect();
-    let holds = |root: &str, p: &str| root.eq_ignore_ascii_case(p) || is_ancestor_path(root, p);
-    match path {
-        Some(p) => rows
-            .iter()
-            .filter(|(root, _)| holds(root, p))
-            .max_by_key(|(root, _)| root.len())
-            .map(|(_, ms)| *ms),
-        None => rows.iter().map(|(_, ms)| *ms).max(),
     }
 }
 

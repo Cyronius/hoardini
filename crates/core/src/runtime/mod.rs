@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub use catalog::{LLAMA_SERVER, MODELS, PINS, RCLONE, find};
+pub use catalog::{LLAMA_SERVER, LLAMA_SERVER_VULKAN, MODELS, PINS, RCLONE, find};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Kind {

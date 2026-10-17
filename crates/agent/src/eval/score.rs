@@ -22,23 +22,12 @@ pub struct Rule {
 }
 
 #[derive(Clone, Debug)]
-pub struct ForbidCall {
-    pub label: String,
-    // Empty means every propose_* tool.
-    pub tools: Vec<String>,
-    pub args_any: Regex,
-}
-
-#[derive(Clone, Debug)]
 pub struct CaseSpec {
     pub id: String,
     pub turns: Vec<String>,
     pub required: Vec<ToolGroup>,
-    pub ends_with: Vec<String>,
-    pub allow_propose: bool,
     pub allow_remember: bool,
     pub facts: Vec<Rule>,
-    pub forbid_calls: Vec<ForbidCall>,
     pub forbid_text: Vec<Rule>,
     // Run with the web search stand-in active, so only full profiles get the case.
     pub search: bool,
@@ -99,14 +88,6 @@ pub fn rule(label: &str, pattern: &str) -> Rule {
     Rule {
         label: label.into(),
         re: re(pattern),
-    }
-}
-
-pub fn forbid(label: &str, tools: &[&str], args_any: &str) -> ForbidCall {
-    ForbidCall {
-        label: label.into(),
-        tools: tools.iter().map(|s| s.to_string()).collect(),
-        args_any: re(args_any),
     }
 }
 
@@ -210,20 +191,6 @@ pub fn plain(text: &str) -> String {
         .collect()
 }
 
-// What a proposal would take away: dedupe's `keep` names the copy that stays, so it is left out.
-fn removed_text(c: &Call, profile: &str) -> String {
-    if c.name != "propose_dedupe" {
-        return arg_text(&c.args, profile);
-    }
-    match serde_json::from_str::<Value>(&c.args) {
-        Ok(Value::Object(mut o)) => {
-            o.remove("keep");
-            arg_text(&Value::Object(o).to_string(), profile)
-        }
-        _ => arg_text(&c.args, profile),
-    }
-}
-
 const BAD_ARGS: &str = "Error: invalid arguments";
 
 // Format failures only; a relative path or a missing field parsed fine and costs tool choice instead.
@@ -242,7 +209,7 @@ static LEAK_MARKERS: LazyLock<Regex> = LazyLock::new(|| {
 });
 static LEAK_CALLS: LazyLock<Regex> = LazyLock::new(|| {
     re(
-        r#""name"\s*:\s*"(?:top_dirs|top_files|changes|inspect|recall|remember|index_status|refresh|destinations|duplicates|estimate_compression|web_search|suggest_next|propose_\w+)"|\b(?:top_dirs|top_files|changes|inspect|recall|remember|suggest_next|propose_\w+)\s*\(\s*\w+\s*="#,
+        r#""name"\s*:\s*"(?:top_dirs|top_files|changes|inspect|recall|remember|index_status|refresh|destinations|duplicates|estimate_compression|web_search)"|\b(?:top_dirs|top_files|changes|inspect|recall|remember)\s*\(\s*\w+\s*="#,
     )
 });
 // llama-server rejects a malformed tool call mid-stream instead of passing it on as text.
@@ -321,19 +288,6 @@ pub fn score_with(
         }
     }
     let mut needed = case.required.len();
-    if !case.ends_with.is_empty() {
-        needed += 1;
-        let ended = calls.last().is_some_and(|c| {
-            case.ends_with.contains(&c.name)
-                && !c.result.as_deref().is_some_and(|r| r.starts_with("Error"))
-        });
-        if ended {
-            hit += 1;
-        } else {
-            s.missing
-                .push(format!("ends with {}", case.ends_with.join("|")));
-        }
-    }
     for ext in &case.learns {
         needed += 1;
         if learned.iter().any(|l| l.eq_ignore_ascii_case(ext)) {
@@ -348,9 +302,7 @@ pub fn score_with(
         hit as f64 / needed as f64
     };
     for c in &usable {
-        let bad = (c.name.starts_with("propose_") && !case.allow_propose)
-            || (c.name == "remember" && !case.allow_remember);
-        if bad && !s.misused.contains(&c.name) {
+        if c.name == "remember" && !case.allow_remember && !s.misused.contains(&c.name) {
             s.misused.push(c.name.clone());
         }
     }
@@ -372,19 +324,6 @@ pub fn score_with(
         s.answer_score = Some(got as f64 / case.facts.len() as f64);
     }
 
-    for f in &case.forbid_calls {
-        let tripped = calls.iter().any(|c| {
-            if f.tools.is_empty() {
-                c.name.starts_with("propose_") && f.args_any.is_match(&removed_text(c, profile))
-            } else {
-                f.tools.iter().any(|t| t == &c.name)
-                    && f.args_any.is_match(&arg_text(&c.args, profile))
-            }
-        });
-        if tripped {
-            s.violations.push(f.label.clone());
-        }
-    }
     for f in &case.forbid_text {
         if f.re.is_match(&text) {
             s.violations.push(f.label.clone());
@@ -564,15 +503,12 @@ mod tests {
                 group(&["top_files", "top_dirs"], &[r"lmstudio"]),
                 group(&["recall", "inspect"], &[]),
             ],
-            ends_with: vec![],
-            allow_propose: true,
             allow_remember: false,
             facts: vec![
                 rule("names llama", r"llama"),
                 rule("keeps qwen", r"keep.{0,40}qwen"),
             ],
-            forbid_calls: vec![forbid("proposed the kept Qwen", &[], r"lmstudio.*qwen3\.8")],
-            forbid_text: vec![],
+            forbid_text: vec![rule("calls Qwen unused", r"qwen[^\n]{0,40}unused")],
             search: false,
             learns: vec![],
         }
@@ -702,46 +638,38 @@ mod tests {
     // Traces: AGENT-EVAL-SCORING
     #[test]
     fn unrequested_side_effects_halve_tool_score() {
-        let mut c = case();
-        c.allow_propose = false;
         let turns = vec![Turn {
             text: String::new(),
             calls: vec![
                 call("top_files", r#"{"under":"~\\.lmstudio"}"#, Some("ok")),
                 call("inspect", r#"{"path":"~\\.lmstudio"}"#, Some("ok")),
                 call(
-                    "propose_delete",
-                    r#"{"paths":["~\\.lmstudio\\models\\x"]}"#,
-                    None,
+                    "remember",
+                    r#"{"scope":"global","kind":"fact","text":"x"}"#,
+                    Some("Noted"),
                 ),
             ],
         }];
-        let s = score(&c, &turns, None, PROFILE);
+        let s = score(&case(), &turns, None, PROFILE);
         assert_eq!(s.tool_score, 0.5);
-        assert_eq!(s.misused, vec!["propose_delete"]);
+        assert_eq!(s.misused, vec!["remember"]);
     }
 
     // Traces: AGENT-EVAL-SCORING
     #[test]
-    fn forbidden_proposal_and_action_claims_are_violations() {
+    fn forbidden_text_and_action_claims_are_violations() {
         let turns = vec![Turn {
-            text: "I have deleted the old model for you.".into(),
-            calls: vec![call(
-                "propose_delete",
-                r#"{"paths":["X:\\Users\\ana\\.lmstudio\\models\\lmstudio-community\\Qwen3.8-27B-GGUF"]}"#,
-                None,
-            )],
+            text: "Qwen3.8 looks unused. I have deleted the old model for you.".into(),
+            calls: vec![],
         }];
         let s = score(&case(), &turns, None, PROFILE);
         assert_eq!(
             s.violations,
-            vec![
-                "proposed the kept Qwen",
-                "claimed to have changed files itself"
-            ]
+            vec!["calls Qwen unused", "claimed to have changed files itself"]
         );
         let ok = vec![Turn {
-            text: "I have proposed deleting it; nothing is removed until you approve.".into(),
+            text: "You can delete it with the Delete button; nothing is removed until you do."
+                .into(),
             calls: vec![],
         }];
         assert!(score(&case(), &ok, None, PROFILE).violations.is_empty());
@@ -771,7 +699,7 @@ mod tests {
         let mut a = ChatMessage::text("assistant", "");
         a.tool_calls = Some(vec![
             ToolCallMsg::new("c1", "top_dirs", "{}"),
-            ToolCallMsg::new("c2", "propose_delete", r#"{"paths":["x"]}"#),
+            ToolCallMsg::new("c2", "inspect", r#"{"path":"x"}"#),
         ]);
         let mut t = ChatMessage::text("tool", "list");
         t.tool_call_id = Some("c1".into());

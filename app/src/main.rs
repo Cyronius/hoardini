@@ -27,6 +27,24 @@ impl DialogProvider for TauriDialogs {
             rx.await.ok().flatten()
         })
     }
+
+    fn pick_file(&self, label: &str, extensions: &[&str]) -> BoxFuture<'static, Option<PathBuf>> {
+        let app = self.0.clone();
+        let label = label.to_string();
+        let extensions: Vec<String> = extensions.iter().map(|e| e.to_string()).collect();
+        Box::pin(async move {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let mut dlg = app.dialog().file();
+            if let Some(w) = app.get_webview_window("main") {
+                dlg = dlg.set_parent(&w);
+            }
+            let exts: Vec<&str> = extensions.iter().map(String::as_str).collect();
+            dlg.add_filter(label, &exts).pick_file(move |p| {
+                let _ = tx.send(p.and_then(|p| p.into_path().ok()));
+            });
+            rx.await.ok().flatten()
+        })
+    }
 }
 
 struct Shutdown(Mutex<Option<tokio::sync::oneshot::Sender<()>>>);

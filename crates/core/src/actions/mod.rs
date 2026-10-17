@@ -277,6 +277,24 @@ impl Executor {
 
     // The only entry point that changes the filesystem: revalidates, then starts a job.
     pub fn approve(&self, proposal_id: &str, item_ids: &[i64]) -> anyhow::Result<ApproveResult> {
+        self.approve_inner(proposal_id, item_ids, true)
+    }
+
+    // For callers that do not read `items`: the job revalidates every item itself, so approving does not wait for a second pass.
+    pub fn approve_deferred(
+        &self,
+        proposal_id: &str,
+        item_ids: &[i64],
+    ) -> anyhow::Result<ApproveResult> {
+        self.approve_inner(proposal_id, item_ids, false)
+    }
+
+    fn approve_inner(
+        &self,
+        proposal_id: &str,
+        item_ids: &[i64],
+        early: bool,
+    ) -> anyhow::Result<ApproveResult> {
         let mut conn = self.db.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let p = proposals::load(&tx, proposal_id)?
@@ -329,13 +347,19 @@ impl Executor {
 
         // The proposal is claimed; from here a failure must not leave it approved with no job running.
         let running = RunningGuard::new(&job.id);
-        let runnable = self.revalidate_chosen(
-            &conn,
-            p.kind.action(),
-            proposal_id,
-            &chosen,
-            p.review_id.is_some(),
-        );
+        let started = std::time::Instant::now();
+        let runnable = if early {
+            self.revalidate_chosen(
+                &conn,
+                p.kind.action(),
+                proposal_id,
+                &chosen,
+                p.review_id.is_some(),
+            )
+        } else {
+            chosen.clone()
+        };
+        tracing::info!(proposal = %proposal_id, items = chosen.len(), early, ms = started.elapsed().as_millis() as u64, "approve revalidation");
         let cancel = Arc::new(AtomicBool::new(false));
         job.progress.total_items = runnable.len() as i64;
         self.shared.live.lock().insert(
@@ -589,7 +613,9 @@ fn run_proposal_job(
             return;
         }
     };
+    let waited = std::time::Instant::now();
     let turn = ctx.shared.run_lock.lock();
+    tracing::info!(job = %job.id, since_created_ms = now_ms() - job.created_ms, lock_ms = waited.elapsed().as_millis() as u64, "job has the run lock");
     if let Err(e) = run_items(&ctx, &conn, &mut job, &proposal_id, &cancel) {
         job.status = "failed".into();
         job.error = Some(e.to_string());

@@ -6,7 +6,6 @@ import { samePath } from "../format";
 import { useStore } from "../store";
 
 export type Built = ReviewView & { review: NonNullable<ReviewView["review"]> };
-type Folder = { path: string; view: Built | null; error: string | null; running: boolean };
 
 interface ReviewState {
   main: Built | null;
@@ -16,16 +15,10 @@ interface ReviewState {
   running: boolean;
   building: boolean;
   carry: ReviewCardRef[];
-  folder: Folder | null;
-  whatIs: string | null;
   open(): Promise<void>;
   refetch(): Promise<void>;
   runNow(): Promise<void>;
-  cleanUp(path: string): Promise<void>;
-  closeFolder(): void;
-  showWhatIs(path: string | null): void;
   answer(path: string, a: LocationAnswer): Promise<Memory>;
-  markAsked(): void;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -61,8 +54,6 @@ export const useReview = create<ReviewState>((set, get) => {
     running: false,
     building: false,
     carry: [],
-    folder: null,
-    whatIs: null,
 
     async open() {
       if (!get().main && !get().bare) set({ status: "loading" });
@@ -92,44 +83,12 @@ export const useReview = create<ReviewState>((set, get) => {
         set({ running: false });
       }
     },
-    async cleanUp(path) {
-      useStore.getState().setHome("review");
-      const prev = get().folder;
-      const shown = prev && samePath(prev.path, path) ? prev.view : null;
-      if (prev?.running && shown) return;
-      set({ folder: { path, view: shown, error: null, running: true } });
-      try {
-        const view = (await routes.reviewRun(path)) as Built;
-        useStore.getState().putProposals(view.proposals);
-        if (get().folder?.path === path) set({ folder: { path, view, error: null, running: false } });
-      } catch (e) {
-        if (get().folder?.path === path) set({ folder: { path, view: shown, error: message(e), running: false } });
-      }
-    },
-    closeFolder: () => set({ folder: null }),
-    showWhatIs(path) {
-      if (path) useStore.getState().setHome("review");
-      set({ whatIs: path });
-    },
     async answer(path, a) {
       const m = await routes.answerLocation(path, a);
-      // The server writes the answer into every stored review's areas, so reread the ones on screen.
-      const { main, folder } = get();
-      await Promise.all([
-        main && routes.review(main.review.id).then(accept, () => {}),
-        folder?.view &&
-          routes.review(folder.view.review.id).then(
-            (view) => get().folder?.path === folder.path && set({ folder: { ...folder, view: view as Built } }),
-            () => {},
-          ),
-      ]);
+      // The server writes the answer into the stored review's areas, so reread the one on screen.
+      const { main } = get();
+      if (main) await routes.review(main.review.id).then(accept, () => {});
       return m;
-    },
-    // The views on screen keep the `asked` they were fetched with.
-    markAsked() {
-      const asked = <V extends ReviewView>(v: V | null): V | null => (v?.online && !v.online.asked ? { ...v, online: { ...v.online, asked: true } } : v);
-      const { main, bare, folder } = get();
-      set({ main: asked(main), bare: asked(bare), folder: folder && { ...folder, view: asked(folder.view) } });
     },
   };
 });

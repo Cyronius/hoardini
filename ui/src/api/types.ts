@@ -105,12 +105,10 @@ export type Proposal = {
   items: ProposalItem[];
   parent_id: string | null;
   follow_up_id: string | null;
-  learned?: Learned[];
   review_id?: string | null;
   card?: string | null;
   touched?: boolean;
 };
-export type Learned = { memory_id: number; text: string; url?: string; key?: string; confirmed?: boolean; pinned?: boolean };
 
 export type ReviewArea = {
   path: string;
@@ -123,19 +121,21 @@ export type ReviewArea = {
   unknown: boolean;
   actions: ("delete" | "dedupe" | "archive" | "compress")[];
   only_copy?: boolean;
+  // The verdict is the user's own answer (REVIEW-AREAS).
+  user?: boolean;
 };
+export type ActKind = "delete" | "compress" | "online_only" | "archive";
+export type ActResult = { proposal_id: string | null; job_id: string | null; blocked: { path: string; reason: string }[] };
 export type ReviewCardRef = { card: string; title: string; proposal_id: string; carried?: boolean };
 export type ReviewView = {
-  review: { id: string; created_ms: number; volume: string; scope_path: string | null } | null;
+  review: { id: string; created_ms: number; volume: string } | null;
   header: { root: string; used_bytes: number | null; free_bytes: number | null; ready_bytes: number };
   cards: ReviewCardRef[];
   areas: ReviewArea[];
   proposals: Record<string, Proposal>;
   building?: boolean;
   apps?: RarelyUsedApp[];
-  online?: OnlineState;
 };
-export type OnlineState = { asked: boolean; waiting: number };
 export type LocationAnswer = "keep" | "disposable" | "move-elsewhere" | "never-touch";
 
 export type Memory = {
@@ -230,19 +230,9 @@ export type SearchProviderView = {
 export type SearchProviderInput = { api_key?: string | null; base_url?: string | null };
 export type SearchTest = { ok: boolean; error?: string | null; latency_ms?: number | null };
 
-export type HistoryPoint = {
-  finished_ms: number;
-  total_bytes: number;
-  free_bytes: number;
-  used_bytes: number;
-  indexed_bytes: number;
-};
-
-export type IndexSpeed = "lean" | "fast";
 export type OnlineService = "huggingface" | "winget";
 export type OnlineChecks = { asked: boolean; services: Record<OnlineService, boolean> };
 export type Settings = {
-  index_speed: IndexSpeed;
   builtin_idle_minutes: number;
   index_size_bytes: number;
   online_checks: OnlineChecks;
@@ -251,44 +241,27 @@ export type SettingsPatch = Partial<Omit<Settings, "index_size_bytes" | "online_
   online_checks?: { asked?: boolean; services?: Partial<Record<OnlineService, boolean>> };
 };
 
-export type CopyConfidence = "identical" | "same-name-and-size" | "claimed" | "none";
-export type CopyCheckResult = {
-  check: string;
-  locator: string | null;
-  confidence: CopyConfidence;
-  checked_ms: number;
-  detail: Record<string, unknown>;
-  note: string;
-};
-export type CopyChecks = { path: string; results: CopyCheckResult[]; only_copy: boolean; note: string | null };
-
-export type ThreadDetail = {
-  id: "main";
-  messages: unknown[];
-  proposals: Record<string, Proposal>;
-  window_start_id: string | null;
-  has_hidden: boolean;
-  fresh: boolean;
-  earlier: number;
-  showing_all: boolean;
-};
-
 export type ApproveResponse = { approved: true; items: number[]; job_id: string };
-export type DeclineResponse = { approved: false };
 
+export type BuiltinRuntime = { id: string; version: string; size: number; installed: boolean; license: string; license_url: string };
 export type BuiltinModel = {
   id: string;
   name: string;
   size: number;
   license: string;
-  license_url: string;
+  license_url: string | null;
   installed: boolean;
   recommended: boolean;
+  needs_gpu: boolean;
+  runtime: BuiltinRuntime;
+  custom?: boolean;
+  path?: string;
 };
 export type BuiltinView = {
   installed: boolean;
   running: boolean;
-  runtime: { version: string; size: number; installed: boolean; license: string; license_url: string };
+  runtime: BuiltinRuntime;
+  custom_runtime: BuiltinRuntime;
   model: BuiltinModel | null;
   candidates: BuiltinModel[];
   free_bytes: number;
@@ -300,42 +273,6 @@ export type BuiltinView = {
 };
 
 export type More = { count: number; bytes: number };
-export type FolderRow = { path: string; size: number; files: number; denied: boolean };
-export type FileRow = { path: string; size: number; modified_ms: number | null; accessed_ms: number | null };
-export type ChangeRow = { kind: "dir" | "file"; path: string; delta: number; before: number | null; after: number | null };
-export type FoldersData = { v: 1; kind: "folders"; under: string | null; depth: number; view?: "list" | "map"; as_of_ms: number | null; items: FolderRow[]; more: More };
-export type FilesData = {
-  v: 1;
-  kind: "files";
-  filters: { under: string | null; min_size: number | null; ext: string | null; not_used_for_days: number | null };
-  as_of_ms: number | null;
-  items: FileRow[];
-  more: More;
-};
-export type ChangesData = {
-  v: 1;
-  kind: "changes";
-  volume: string;
-  from: { id: number; ms: number };
-  to: { id: number; ms: number };
-  free_delta: number | null;
-  indexed_delta: number;
-  free_before: number | null;
-  free_after: number | null;
-  grew: ChangeRow[];
-  new: ChangeRow[];
-  shrank: ChangeRow[];
-  removed: ChangeRow[];
-  omitted: { grew: number; new: number; shrank: number; removed: number };
-  range_ms: [number, number];
-};
-export type PillKind = "ask" | "clean_up" | "explore" | "what_is";
-export type Pill = { label: string; kind: PillKind; path?: string };
-export type PillsData = { v: 1; kind: "pills"; items: Pill[] };
-export type LearnedData = { v: 1; kind: "learned"; items: Learned[] };
-export type CardData = FoldersData | FilesData | ChangesData;
-export type ToolData = CardData | PillsData | LearnedData;
-
 export type ChildRow = {
   path: string;
   name: string;
@@ -348,20 +285,6 @@ export type ChildRow = {
 };
 export type Children = { path: string; size: number; files: number; children: ChildRow[]; small: More; more: More };
 
-export type TagState = "proposed" | "review" | "keep" | "system" | "user" | "unknown";
-export type MapTag = { state: TagState; label?: string; verdict?: Verdict };
-export type MapNode = {
-  path: string;
-  name: string;
-  kind: "dir" | "file" | "link" | "small";
-  size: number;
-  files: number;
-  ext?: string;
-  children?: MapNode[];
-  more?: More;
-  tag: MapTag;
-};
-export type IndexMap = { tree: MapNode; ancestors: { path: string; name: string }[]; min_bytes: number; nodes: number; capped: boolean };
 export type TypeRow = {
   ext: string | null;
   bytes: number;

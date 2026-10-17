@@ -85,11 +85,6 @@ export const BrainIcon = () => (
     <path d="M12 3a4 4 0 0 0-4 4 3 3 0 0 0-2 5 3 3 0 0 0 2 5 4 4 0 0 0 4 4zM12 3a4 4 0 0 1 4 4 3 3 0 0 1 2 5 3 3 0 0 1-2 5 4 4 0 0 1-4 4z" />
   </Svg>
 );
-export const LeafIcon = ({ size = 14 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <path d="M20 3C9 3 4 9 4 15c0 1.6.4 3 1.2 4.2C6.5 14.5 10 11 15 9c-4 3-7 6.500-8 11 1 .6 2.300 1 3.800 1C17.700 21 21 14 20 3Z" />
-  </svg>
-);
 export const RefreshIcon = () => (
   <Svg>
     <path d="M21 12a9 9 0 1 1-3-6.7" />

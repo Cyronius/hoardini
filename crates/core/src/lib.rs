@@ -7,7 +7,7 @@ pub mod copycheck;
 pub mod destinations;
 pub mod dupes;
 pub mod evidence;
-pub mod explore;
+pub mod filetypes;
 pub mod history;
 pub mod index;
 pub mod memory;

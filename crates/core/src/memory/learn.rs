@@ -1,34 +1,17 @@
 use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::knowledge::{self, Detail, Knowledge, knowledge_at, set_detail};
-use super::location::{Cleaned, Kept, cleaned_entries, is_job, kept_entries, short_date};
-use super::{
-    COLS, Kind, Memory, Scope, compile_glob, delete, from_row, get, normalize_key_with,
-    path_and_ancestors,
-};
+use super::location::{Cleaned, Kept};
+use super::{Kind, Memory, Scope, compile_glob, normalize_key_with, path_and_ancestors};
 use crate::catalog::UnitKind;
 use crate::index::{is_ancestor_path, normalize_path};
-use crate::paths::humanize_bytes;
 use crate::policy::{PolicyEnv, area_of, is_volume_root};
 use crate::proposals::{self, ProposalItem, ProposalKind};
 
 pub const MAX_ENTRIES: usize = 100;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Learned {
-    pub memory_id: i64,
-    pub text: String,
-    // The user confirmed the row (its source is `user`), so the chip offers no Confirm.
-    #[serde(default)]
-    pub confirmed: bool,
-    // So a reloaded chip offers Unpin for a row pinned earlier.
-    #[serde(default)]
-    pub pinned: bool,
-}
 
 fn same_or_under(a: &str, p: &str) -> bool {
     a.eq_ignore_ascii_case(p) || is_ancestor_path(a, p)
@@ -379,73 +362,4 @@ fn describe(cleaned: &[Cleaned]) -> String {
     } else {
         items(cleaned.len())
     }
-}
-
-fn learned_text(key: &str, cleaned: &[Cleaned], kept: &[Kept]) -> String {
-    let n = kept.len();
-    let verb = if n == 1 { "is" } else { "are" };
-    let Some(first) = cleaned.first() else {
-        return format!("{} you left unticked in {key} {verb} kept", items(n));
-    };
-    let bytes: u64 = cleaned.iter().map(|c| c.bytes).sum();
-    let ms = cleaned.iter().map(|c| c.ms).max().unwrap_or(first.ms);
-    let mut text = format!(
-        "{} in {key} — {} {} on {}",
-        describe(cleaned),
-        first.verb(),
-        humanize_bytes(bytes),
-        short_date(ms)
-    );
-    if n > 0 {
-        text.push_str(&format!("; {} you left unticked {verb} kept", items(n)));
-    }
-    text
-}
-
-pub fn learned_for(conn: &Connection, proposal_id: &str) -> anyhow::Result<Vec<Learned>> {
-    let needle = format!("\"job\":{}", serde_json::to_string(proposal_id)?);
-    let mut st = conn.prepare_cached(&format!(
-        "SELECT {COLS} FROM memory WHERE scope = 'path' AND detail_json IS NOT NULL AND instr(detail_json, ?1) > 0 ORDER BY id"
-    ))?;
-    let rows = st
-        .query_map([&needle], from_row)?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|m| {
-            let d = m.detail.as_ref()?;
-            let mut c = cleaned_entries(d);
-            c.retain(|e| e.job == proposal_id);
-            let mut k = kept_entries(d);
-            k.retain(|e| e.job == proposal_id);
-            (!c.is_empty() || !k.is_empty()).then(|| Learned {
-                memory_id: m.id,
-                text: learned_text(&m.key, &c, &k),
-                confirmed: m.source == "user",
-                pinned: m.pinned,
-            })
-        })
-        .collect())
-}
-
-pub fn undo(conn: &Connection, proposal_id: &str, memory_id: i64) -> anyhow::Result<bool> {
-    let Some(m) = get(conn, memory_id)? else {
-        return Ok(false);
-    };
-    let Some(mut d) = m.detail.clone() else {
-        return Ok(false);
-    };
-    let mine = |v: &Value| v.get("job").and_then(Value::as_str) == Some(proposal_id);
-    let before = d.cleaned.len() + d.kept.len();
-    d.cleaned.retain(|v| !mine(v));
-    d.kept.retain(|v| !mine(v));
-    if d.cleaned.len() + d.kept.len() == before {
-        return Ok(false);
-    }
-    if is_job(&m.source) && !d.has_job_content() && !m.pinned {
-        delete(conn, memory_id)?;
-    } else {
-        set_detail(conn, memory_id, &d)?;
-    }
-    Ok(true)
 }

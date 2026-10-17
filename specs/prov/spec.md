@@ -56,7 +56,7 @@ Outgoing requests shall omit a blank or whitespace-only `model`, and shall strip
 
 ## Built-in model (design 5.12)
 
-The "Built-in" provider runs a pinned GGUF in a `llama-server` child. Code: `crates/server/src/builtin.rs` (supervisor, download job, routes `/api/builtin*`), UI `ui/src/drawer/BuiltinCard.tsx`. Requirement tests: `specs/prov/tests/builtin.rs` (part of `--test specs prov::`), against a fake launcher that stands in for llama-server. Download and hash checks are RUNTIME-PINNED-HASH. The choice of default model is AGENT-EVAL-GATE.
+The "Built-in" provider runs a pinned GGUF, or a GGUF the user points at (model id `file:<path>`, PROV-BUILTIN-FILE), in a `llama-server` child. Code: `crates/server/src/builtin.rs` (supervisor, download job, routes `/api/builtin*`), UI `ui/src/drawer/BuiltinCard.tsx`. Requirement tests: `specs/prov/tests/builtin.rs` (part of `--test specs prov::`), against a fake launcher that stands in for llama-server. Download and hash checks are RUNTIME-PINNED-HASH. The choice of the two pinned models is AGENT-EVAL-GATE.
 
 ### PROV-BUILTIN-LAZY: The child starts on the first chat turn
 **Applies to:** hoardini-server
@@ -91,25 +91,27 @@ When the child has exited on its own, the next run shall start a fresh one rathe
 - After the fake child exits, the next `acquire` launches a second child at a different address.
 - Acquiring model `a` then model `b` launches twice and kills the first child.
 
-### PROV-BUILTIN-CHILD: CPU-only loopback child sized to the machine
+### PROV-BUILTIN-CHILD: Loopback child, CPU or GPU per model, sized to the machine
 **Applies to:** hoardini-server
 **Verification:** test
 
-The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <random> --jinja -t <physical cores - 2, at least 1> -c 8192 --no-webui -np 1 --cache-ram 0 --cache-type-k q8_0 --cache-type-v q8_0 -ngl 0 -a <model id>`, with `CREATE_NO_WINDOW` and normal priority, inside a kill-on-close job object so it dies with the app. The Built-in profile is `small: true` (paths are redacted for every provider, AGENT-REDACT).
+The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <random> --jinja -t <physical cores - 2, at least 1> -c 8192 --no-webui -np 1 --cache-ram 0 <backend flags> -a <model id>`, with `CREATE_NO_WINDOW` and normal priority, inside a kill-on-close job object so it dies with the app. A CPU model (Granite 4.1 3B) runs on the CPU build with `--cache-type-k q8_0 --cache-type-v q8_0 -ngl 0`. A GPU model (Qwen3.5 9B) and a user's own file run on the Vulkan build with `-ngl 99` and the default KV cache; that build carries the CPU backends, so it falls back to the CPU when there is no GPU. The Built-in profile is `small: true` (paths are redacted for every provider, AGENT-REDACT).
 
 **Acceptance criteria:**
-- `builtin::args` puts `127.0.0.1` after `--host`, the port after `--port`, the GGUF after `-m`, `0` after `-ngl`, 16384 after `-c`, `physical_cores() - 2` (at least 1) after `-t`, and includes `--jinja` and `--no-webui`.
+- `builtin::args` puts `127.0.0.1` after `--host`, the port after `--port`, the GGUF after `-m`, `0` after `-ngl`, 8192 after `-c`, `physical_cores() - 2` (at least 1) after `-t`, and includes `--jinja` and `--no-webui`, for a CPU spec.
+- For a GPU spec `-ngl` is `99` and there is no `--cache-type-k`.
+- `builtin::runtime_for` is the Vulkan pin for `qwen3.5-9b` and for any `file:` id, and the CPU pin for `granite-4.1-3b`.
 - `builtin::profile(id)` is small.
 
 ### PROV-BUILTIN-STATUS: The download card's facts
 **Applies to:** hoardini-server
 **Verification:** test
 
-`GET /api/builtin` shall return `{installed, running, runtime: {version, size, installed, license, license_url}, model, candidates: [{id, name, size, license, license_url, installed, recommended}], free_bytes, recommended, install_job, provider_id, threads, context}` with sizes from the pins and the free space of the data folder's volume. `POST /api/builtin/install {model_id}` rejects an unknown id with 400.
+`GET /api/builtin` shall return `{installed, running, runtime, custom_runtime, model, candidates, free_bytes, recommended, install_job, provider_id, threads, context}`. A runtime is `{id, version, size, installed, license, license_url}`; `runtime` is the one the chosen (else the recommended) model runs on, `custom_runtime` is the Vulkan one a user's own file uses. A candidate is `{id, name, size, license, license_url, installed, recommended, needs_gpu, runtime}`; `model` is the chosen candidate or `{..., custom: true, path}` for a user's file. Sizes come from the pins and `free_bytes` from the data folder's volume. `POST /api/builtin/install {model_id}` rejects an unknown id, and a `file:` path that is not a file, with 400.
 
 **Acceptance criteria:**
-- On an empty data folder: `installed` false, `model` null, runtime size and version equal `LLAMA_SERVER`, one candidate per `runtime::MODELS` entry in order with its size, an `https://` license URL and a named license, `free_bytes` > 0, and `recommended` equal to `builtin::RECOMMENDED`.
-- `POST /api/builtin/install {"model_id": "not-a-model"}` returns 400.
+- On an empty data folder: `installed` false, `model` null, runtime size and version equal `LLAMA_SERVER` (the recommended Granite's), one candidate per `runtime::MODELS` entry in order with its size, an `https://` license URL, a named license, `needs_gpu` and its runtime id, `custom_runtime.id` equal to the Vulkan pin, `free_bytes` > 0, and `recommended` equal to `builtin::RECOMMENDED`.
+- `POST /api/builtin/install {"model_id": "not-a-model"}` returns 400, and so does `{"model_id": "file:C:\\no\\such\\model.gguf"}`.
 
 ### PROV-BUILTIN-REMOVE: Remove gives the space back
 **Applies to:** hoardini-server
@@ -120,18 +122,30 @@ The child shall run as `llama-server.exe -m <gguf> --host 127.0.0.1 --port <rand
 **Acceptance criteria:**
 - After a run started the child, `DELETE /api/builtin` returns `ok` and `freed_bytes` at least the size of the stand-in files, the child is dead, the runtime and model files are gone, `GET /api/providers` has no `builtin` row, and `GET /api/builtin` reports `installed: false` and `provider_id: null`.
 
-### PROV-BUILTIN-DOWNLOAD: One download card, on demand
+### PROV-BUILTIN-DOWNLOAD: Two models to download, on demand
 **Applies to:** hoardini
 **Verification:** manual
 
-Nothing shall be downloaded until the user clicks the card's download button. The card shows the runtime size, the model size, the free space and the model's license link; while the job runs it shows progress from the status stream and a Cancel button; when done the Built-in row appears in the provider list (active when it is the only provider). The card stays hidden while `recommended` is null and nothing is installed.
+Nothing shall be downloaded until the user clicks a download button. First-run (UI-FIRST-RUN) and Settings, AI list the two models, Qwen3.5 9B ("needs a graphics card") and Granite 4.1 3B ("runs on the CPU"), each with its download size (runtime plus model, less what is already installed), a one-line description and a Download button that is disabled without enough free space. While the job runs the list gives way to progress from the status stream and a Cancel button; when it is done the Built-in row exists, is made active, and the first chat turn starts the child. Once a model is installed Settings shows the "Built-in model" card with its state, size and license link, and Remove.
 
 **Verification (manual):**
-1. With `RECOMMENDED` set (or a model installed), open Settings, AI: the "Built-in model" card lists runtime size, model size, free space and a license link that opens the model's license.
-2. Click "Download": a progress bar advances (`builtin_install` job frames on `/api/status/stream`); Cancel stops it and leaves no `.part` file in the data folder.
-3. Download again to the end: the card shows "idle", the provider list gains "Built-in · on this PC, CPU", and the first chat turn on it answers after the model loads.
-4. Click "Remove built-in model" and confirm: the card reports the freed size, and `%LOCALAPPDATA%\hoardini\runtime\` and `models\` no longer hold the files.
-5. With `RECOMMENDED = None` and nothing installed, the card is absent.
+1. Open Settings, AI with nothing installed: "Run a model on this PC" lists both models with sizes (Qwen3.5 9B 5.6 GB plus the 33 MB Vulkan runtime, Granite 4.1 3B 2.0 GB plus the 19 MB CPU runtime) and the file box.
+2. Click Download on Granite: a progress bar advances (`builtin_install` job frames on `/api/status/stream`); Cancel stops it and leaves no `.part` file in the data folder.
+3. Download again to the end: the card changes to "Built-in model", Granite 4.1 3B, "idle", the provider list gains "Built-in", and the first chat turn on it answers after the model loads.
+4. Click "Remove built-in model" and confirm: the card reports the freed size and offers the list again, and `%LOCALAPPDATA%\hoardini\runtime\` and `models\` no longer hold the files.
+5. With a GPU, download Qwen3.5 9B: it runs on the GPU (Task Manager shows GPU memory use by `llama-server.exe`) and answers a tool question.
+
+### PROV-BUILTIN-FILE: A model file the user points at
+**Applies to:** hoardini-server, hoardini-ui
+**Verification:** manual
+
+First-run and Settings, AI also offer "A model file on this PC": a path box with Browse (a native file dialog, `POST /api/dialog/pick-model`, filtered to `.gguf`, 501 in headless mode) and "Use this file". The file runs through the same child as a model id `file:<path>`, on the Vulkan build (GPU when there is one, else CPU), with its own chat template and the 8192 context. Only the runtime is downloaded; the file is not hashed, copied or checked for tool support or memory, and Remove never deletes it. A start failure shows llama-server's last log lines.
+
+**Verification (manual):**
+1. Choose "A model file on this PC", Browse, pick a `.gguf` (for example `~\.lmstudio\models\...`), and Use this file: the Vulkan runtime downloads if it is not there, the Built-in row appears and is active, and the card reads the file's name with "your file" as the license.
+2. A chat turn starts the child with `-ngl 99` (see `logs\llama-server.log`) and answers.
+3. Point at a path that is not a file: Use this file reports an error and installs nothing.
+4. Remove built-in model: the file is still on disk.
 
 ### PROV-BUILTIN-OFFLINE: No outbound traffic with web search off
 **Applies to:** hoardini
@@ -143,7 +157,7 @@ With the Built-in profile active and web search off, a chat session shall make n
 1. Install the built-in model, activate the Built-in profile, and confirm Settings shows web search off.
 2. Open Resource Monitor, Network, TCP Connections (or run `netstat -ano` in a loop) filtered to the PIDs of `hoardini-app.exe` / `hoardini.exe` and `llama-server.exe`.
 3. Ask three questions that use tools ("what's taking space?", "what's in LM Studio and what can go?", "what grew since last week?").
-4. Expect only connections between 127.0.0.1 ports (the UI to the server, the server to llama-server) and no remote address for either process. Optionally disconnect the network adapter and repeat: the chat still works.
+4. Expect only connections between 127.0.0.1 ports (the UI to the server, the server to llama-server) and no remote address for either process. Optionally disconnect the network adapter and repeat: the Ask box still answers.
 
 ### PROV-BUILTIN-EXIT: The child never outlives the app
 **Applies to:** hoardini
@@ -185,10 +199,11 @@ Found 2026-10-09: a first-run "A model on this PC" provider had a 1 s timeout, s
 **Applies to:** hoardini-agent, hoardini-server
 **Verification:** test
 
-`presets()` shall include Cerebras (`https://api.cerebras.ai/v1`, default model `gpt-oss-120b`), Google Gemini (`https://generativelanguage.googleapis.com/v1beta/openai/`, a Flash model) and OpenRouter (a `:free` model), each with its key-page URL, besides the existing entries. The server shall never create a provider by itself: a run with no provider ends with `RUN_ERROR` and leaves `GET /api/providers` empty and no active provider. `GET /api/providers/local` lists running local servers (LM Studio, Ollama, llama.cpp, vLLM) by probing each preset's `/models` with a 1 s timeout. Local presets use `127.0.0.1`, not `localhost`: on Windows `localhost` tries `::1` first, which these servers don't listen on, and that refusal alone takes about 2 s. `GET /api/setup` reports `meta.ai_setup_done` (an install that already has a provider counts as done); `POST /api/setup/done` sets it.
+`presets()` shall include the six free providers that first run offers (UI-FIRST-RUN), each with a default model and its key-page URL: Google Gemini (`https://generativelanguage.googleapis.com/v1beta/openai/`, a Flash model; Flash-Lite, since Flash allows only about 20 free requests a day), OpenRouter (a `:free` model that no NVIDIA trial terms cover, so it works for people who block hosts that train), Mistral, Z.ai, Ollama Cloud and Cloudflare Workers AI (whose base URL carries an `{account_id}` placeholder that the setup form fills in). Cerebras (`https://api.cerebras.ai/v1`, default model `gpt-oss-120b`) stays as a preset, but first run no longer offers it as free: its free offer is now a $5 trial that needs a card. The server shall never create a provider by itself: a run with no provider ends with `RUN_ERROR` and leaves `GET /api/providers` empty and no active provider. `GET /api/providers/local` lists running local servers (LM Studio, Ollama, llama.cpp, vLLM) by probing each preset's `/models` with a 1 s timeout. Local presets use `127.0.0.1`, not `localhost`: on Windows `localhost` tries `::1` first, which these servers don't listen on, and that refusal alone takes about 2 s. `GET /api/setup` reports `meta.ai_setup_done` (an install that already has a provider counts as done); `POST /api/setup/done` sets it.
 
 **Acceptance criteria:**
 - The preset list contains `cerebras` and `gemini` with the base URLs above, a default model for each, and `needs_key`.
+- `gemini`, `openrouter`, `mistral`, `zai`, `ollama-cloud` and `cloudflare` each have a default model, a key-page URL and `needs_key`; Cloudflare's base URL contains `{account_id}`.
 - OpenRouter's default model ends in `:free`; Ollama has no default model.
 - On a fresh data dir `GET /api/setup` is `{done:false}`; `POST /api/agent/run` streams `RUN_ERROR`, `/api/providers` stays `[]`, `/api/status` has no active provider; after `POST /api/setup/done` it is `{done:true}`.
 - After creating a provider, `GET /api/setup` is `{done:true}` on an otherwise fresh data dir.

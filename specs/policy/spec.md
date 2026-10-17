@@ -99,7 +99,7 @@ it shall not execute. The proposal ends `partial` when some approved items ran a
 check is the slow one, so it runs first; the deny list and the kind, size, mtime, file-ID, and link comparisons run
 after it, immediately before the item executes, so a path swapped for a junction during the slow check is caught.
 An item of a review card (REVIEW-BUILD) inside a catalog `contents` location with a minimum age (`%TEMP%`,
-`Windows\Temp`: a part, REVIEW-UNITS, which was old when proposed; a chat card's item is the user's own request and is
+`Windows\Temp`: a part, REVIEW-UNITS, which was old when proposed; an item the user chose on Home is their own request and is
 not walked) is walked again, links not followed and at most 250,000 entries, because a file new deep inside changes no
 time the proposal compared: when the path or anything in it was written or created within that age the item is skipped with
 `Changed since the proposal: something in it was written or created in the last <hours> hours`, and when the walk cannot
@@ -192,22 +192,26 @@ the path (POLICY-PROTECT). The server redacts the note like the other item text.
 - The "scratch is disposable" note's `last_used_ms` moves to the proposal time; the "work folder" note's stays at its old value.
 - Under a `job:` row for `logs` that the sweep reclassified as documents and whose `cleaned` entry has rule `logs\*.log` (5 MB, 2024-01-15): `logs\a.log` carries `You cleaned this on 01-15 (5.0 MB).`, `logs\b.bin` carries null, and a file under a `job:` row still `by` `job` carries that row's text `You cleaned 3 items here.`. With the reason `Old logs. You cleaned this on 01-15 (5.0 MB).` the note is null; with `Old logs.` it is the cleaned sentence.
 
-### POLICY-LOCATION-KEEP: Kept locations block delete and dedupe
+### POLICY-LOCATION-KEEP: Locations the user kept block delete and dedupe
 **Applies to:** hoardini
 **Verification:** test
 
-A location row (MEM-LOCATION) whose verdict is `keep` shall block, on a path at, under, or containing the location,
-delete and dedupe always, and archive and compress unless its `actions` list them (your photos allow `archive`, a Keep
-answer allows `archive` and `compress`, OS files allow none). The item is stored
-`blocked` with a reason naming the location and quoting the row's text, and the same check skips an approved item at
-execution when the row appeared after the proposal. A location whose verdict is not `keep` blocks nothing, and no
-location blocks online-only (the cloud copy stays, ACT-ONLINE-ONLY) or a system cleanup. The check is
-`memory::location::keep_block(conn, env, path, action)`, called from `policy::examine` and `policy::revalidate`.
+A location row (MEM-LOCATION) that holds the user's own answer (`source` `user`) and whose verdict is `keep` shall block,
+on a path at, under, or containing the location, delete and dedupe always, and archive and compress unless its
+`actions` list them (a Keep answer allows `archive` and `compress`, Move elsewhere allows `archive`, Never touch is a
+protect memory, POLICY-PROTECT). Rows Hoardini wrote itself (the classifier's `mix`, `catalog`, `deny` and `index`
+rows, and job rows) never block: Hoardini's guesses never outrank what the user chooses on Home (UI-HOME), and system
+areas are held back by the deny list (POLICY-DENY), not by a location row. The item is stored `blocked` with a reason
+naming the location and quoting the row's text, and the same check skips an approved item at execution when the row
+appeared after the proposal. No location blocks online-only (the cloud copy stays, ACT-ONLINE-ONLY) or a system
+cleanup. The check is `memory::location::keep_block(conn, env, path, action)`, called from `policy::examine` and
+`policy::revalidate`.
 
 **Acceptance criteria:**
-- With `work\photos` kept with `[archive]` ("Your photos and videos: ...") and `work\system` kept with none: deleting a photo or a file under `system` is `blocked` with a reason containing "a kept location" and the row's text; a file under a `safe` location stays `pending`.
-- Deleting `work\photos` itself is blocked, and deleting `work`, which contains it, is blocked with "contains".
-- For the photo, `examine` blocks dedupe and compress and allows archive, and an online-only block never names the kept location; for the `system` file it blocks archive; under the `safe` location dedupe is allowed.
+- With `work\photos` kept by the classifier (`mix`, `[archive]`), `work\system` kept by a `deny` row, a `safe` catalog location, and `work\mine` kept by the user with `[archive]`: deleting a photo, a file under `system` or a file under the `safe` location stays `pending`; a file under `mine` is `blocked` with a reason containing "a kept location" and the row's text.
+- Deleting `work\mine` itself is blocked, and deleting `work`, which contains it, is blocked with "contains".
+- Under `mine`, `examine` blocks dedupe and compress and allows archive, and an online-only block never names the kept location; the photo allows dedupe.
+- A folder holding a classifier keep (`clips\sentry`) is not blocked; once the user keeps `clips\saved` inside it, it is.
 - A delete proposed before `work\later` became a kept location is `skipped` at approval with the row's text in its detail, and the file stays.
 
 Test: `specs/policy/tests/policy.rs`.

@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::time::Duration;
 
-use axum::Json;
 use axum::body::{Body, Bytes};
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use futures::StreamExt;
@@ -139,11 +138,10 @@ pub async fn agent_run(State(s): State<AppState>, body: Bytes) -> ApiResult<Resp
     if input.run_id.is_empty() {
         return Err(ApiError::bad("runId is required"));
     }
-    start_run(s, input).await
-}
-
-pub async fn start_run(s: AppState, mut input: RunAgentInput) -> ApiResult<Response> {
-    input.thread_id = thread::MAIN.into();
+    // Every question is about one item on Home; there is no app-wide conversation (AGENT-ASK).
+    if !thread::is_item_thread(&input.thread_id) {
+        return Err(ApiError::bad("threadId must be an item thread"));
+    }
     let provider = {
         let st = s.clone();
         blocking(move || Ok(providers::active_for_run(&st)?)).await?
@@ -167,7 +165,7 @@ pub async fn start_run(s: AppState, mut input: RunAgentInput) -> ApiResult<Respo
     let env = s.env.clone();
     let st = s.clone();
     let tx_run = tx.clone();
-    let (tid, rid) = (thread_id.clone(), run_id.clone());
+    let (tid, rid) = (thread_id, run_id.clone());
     let inner = tokio::spawn(async move {
         // The lease keeps the built-in child alive until this run ends.
         let (provider, _lease) = match builtin::resolve(&st, provider).await {
@@ -200,13 +198,10 @@ pub async fn start_run(s: AppState, mut input: RunAgentInput) -> ApiResult<Respo
             run_id.clone(),
             RunSlot {
                 abort: abort.clone(),
-                cancelled: false,
             },
         );
     }
     s.bump();
-    let watch_state = s.clone();
-    let watch_run = run_id.clone();
     tokio::spawn(async move {
         let end = match inner.await {
             Ok(Ok(())) => None,
@@ -221,17 +216,8 @@ pub async fn start_run(s: AppState, mut input: RunAgentInput) -> ApiResult<Respo
                     code: None,
                 })
             }
-            Err(_) => {
-                let cancelled = watch_state
-                    .runs
-                    .lock()
-                    .map(|r| r.get(&watch_run).is_some_and(|x| x.cancelled))
-                    .unwrap_or(false);
-                cancelled.then(|| Event::RunFinished {
-                    thread_id,
-                    run_id: watch_run.clone(),
-                })
-            }
+            // Aborted: the client closed the stream, so nobody is left to tell.
+            Err(_) => None,
         };
         if let Some(ev) = end {
             let _ = tx.send(ev).await;
@@ -246,7 +232,7 @@ pub async fn start_run(s: AppState, mut input: RunAgentInput) -> ApiResult<Respo
     Ok(event_response(ReceiverStream::new(rx), Some(guard)))
 }
 
-// A cancelled run is aborted mid-message; the terminal event must not find anything still open.
+// A run that fails can stop mid-message; the terminal event must not find anything still open.
 #[derive(Default)]
 struct OpenParts {
     text: Option<String>,
@@ -301,21 +287,4 @@ fn event_response(rx: ReceiverStream<Event>, guard: Option<RunGuard>) -> Respons
         futures::stream::iter(frames)
     });
     sse_headers(Body::from_stream(stream).into_response())
-}
-
-pub async fn cancel_run(State(s): State<AppState>, Path(run_id): Path<String>) -> ApiResult {
-    let abort = {
-        let mut runs = s
-            .runs
-            .lock()
-            .map_err(|_| ApiError::from(anyhow::anyhow!("run table poisoned")))?;
-        runs.get_mut(&run_id).map(|slot| {
-            slot.cancelled = true;
-            slot.abort.clone()
-        })
-    };
-    if let Some(a) = abort {
-        a.abort();
-    }
-    Ok(Json(json!({"ok": true})))
 }

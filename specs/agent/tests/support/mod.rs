@@ -274,7 +274,7 @@ impl SecretStore for MemSecrets {
 }
 
 pub struct FakeIndex {
-    pub refreshes: Mutex<Vec<(Option<String>, String)>>,
+    pub refreshes: Mutex<Vec<Option<String>>>,
     pub status: Mutex<Value>,
 }
 
@@ -282,14 +282,14 @@ impl IndexControl for FakeIndex {
     fn status(&self) -> Value {
         self.status.lock().unwrap().clone()
     }
-    fn refresh(&self, mode: &str) -> anyhow::Result<bool> {
-        self.refresh_scope(None, mode)
+    fn refresh(&self) -> anyhow::Result<bool> {
+        self.refresh_scope(None)
     }
-    fn refresh_scope(&self, scope: Option<&str>, mode: &str) -> anyhow::Result<bool> {
+    fn refresh_scope(&self, scope: Option<&str>) -> anyhow::Result<bool> {
         self.refreshes
             .lock()
             .unwrap()
-            .push((scope.map(str::to_string), mode.to_string()));
+            .push(scope.map(str::to_string));
         Ok(true)
     }
 }
@@ -381,7 +381,6 @@ pub fn msg(id: &str, role: &str, content: &str) -> AgMessage {
         content: Some(content.into()),
         tool_calls: None,
         tool_call_id: None,
-        data: None,
     }
 }
 
@@ -416,7 +415,7 @@ pub fn custom<'a>(events: &'a [Value], name: &str) -> Vec<&'a Value> {
         .collect()
 }
 
-// The ordering rules @ag-ui/client enforces; a violation makes the UI drop the run.
+// The ordering rules @ag-ui/client enforces.
 pub fn assert_valid_sequence(events: &[Value]) {
     let t = types(events);
     assert_eq!(t.first().map(String::as_str), Some("RUN_STARTED"), "{t:?}");

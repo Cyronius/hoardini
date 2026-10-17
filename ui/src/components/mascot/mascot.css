@@ -1755,3 +1755,148 @@
   border-radius: 50%;
   opacity: 0;
 }
+
+/* New poses (UI-MASCOT-FULLNESS): looking, carrying, worried, napping. Props stay out of the layout until shown. */
+.sumo .s-lens,
+.sumo .s-box {
+  display: none;
+}
+.sumo .s-zzz {
+  opacity: 0;
+}
+.sumo:is(.sumo-hop-heavy, .sumo-strain, .sumo-shiko, .sumo-sulk, .sumo-push, .sumo-sit, .sumo-windup, .sumo-spread, .sumo-fin-push, .sumo-fin-throw, .sumo-fin-throw-up, .sumo-shake, .sumo-shrug, .sumo-dizzy, .sumo-slip, .sumo-look, .sumo-carry, .sumo-worry) .s-brows-calm {
+  opacity: 0;
+}
+
+@keyframes s-peer {
+  0%,
+  100% {
+    transform: rotate(-118deg);
+  }
+  50% {
+    transform: rotate(-104deg);
+  }
+}
+@keyframes s-lean {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  50% {
+    transform: rotate(2.5deg);
+  }
+}
+.sumo-look .s-lens {
+  display: inline;
+}
+.sumo-look .s-arm-r {
+  animation: s-peer 2.6s ease-in-out infinite;
+}
+.sumo-look .s-torso {
+  animation: s-lean 2.6s ease-in-out infinite;
+}
+.sumo-look .s-brows {
+  opacity: 1;
+}
+
+@keyframes s-heave {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1px);
+  }
+}
+.sumo-carry .s-box {
+  display: inline;
+  animation: s-heave 0.5s ease-in-out infinite;
+}
+.sumo-carry .s-arm-l {
+  transform: rotate(-30deg);
+}
+.sumo-carry .s-arm-r {
+  transform: rotate(30deg);
+}
+.sumo-carry .s-brows,
+.sumo-carry .s-grit {
+  opacity: 1;
+}
+.sumo-carry .s-smile {
+  opacity: 0;
+}
+
+@keyframes s-shiver {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-0.4px);
+  }
+  75% {
+    transform: translateX(0.4px);
+  }
+}
+.sumo-worry .s-sweat,
+.sumo-worry .s-mouth-o,
+.sumo-worry .s-brows-up {
+  opacity: 1;
+}
+.sumo-worry .s-smile {
+  opacity: 0;
+}
+.sumo-worry .s-torso {
+  animation: s-shiver 0.6s ease-in-out infinite;
+}
+.sumo-worry .s-eyes {
+  animation: s-blink 3.8s infinite;
+}
+
+@keyframes s-doze {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(1.02, 1.045);
+  }
+}
+@keyframes s-float {
+  0% {
+    opacity: 0;
+    transform: translate(0, 1px);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(2px, -3px);
+  }
+}
+.sumo-nap .s-eyes {
+  opacity: 0;
+}
+.sumo-nap .s-eyes-shut,
+.sumo-nap .s-zzz {
+  opacity: 1;
+}
+.sumo-nap .s-torso {
+  animation: s-doze 4.2s ease-in-out infinite;
+}
+.sumo-nap .s-z {
+  animation: s-float 3s ease-out infinite;
+}
+.sumo-nap .s-z-2 {
+  animation-delay: 0.6s;
+}
+.sumo-nap .s-z-3 {
+  animation-delay: 1.2s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sumo:is(.sumo-look, .sumo-carry, .sumo-worry, .sumo-nap) * {
+    animation: none !important;
+  }
+}

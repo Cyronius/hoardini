@@ -647,4 +647,19 @@ fn cerebras_and_gemini_presets_have_base_urls_and_models() {
             .is_some_and(|m| m.ends_with(":free"))
     );
     assert!(get("ollama").default_model.is_none());
+    for id in [
+        "gemini",
+        "openrouter",
+        "mistral",
+        "zai",
+        "ollama-cloud",
+        "cloudflare",
+    ] {
+        let p = get(id);
+        assert!(
+            p.needs_key && p.default_model.is_some() && p.key_url.is_some(),
+            "{id}"
+        );
+    }
+    assert!(get("cloudflare").base_url.contains("{account_id}"));
 }

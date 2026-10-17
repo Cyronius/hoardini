@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use crate::cloud::Cloud;
 use crate::index::{self, FLAG_DENIED, FLAG_HARDLINK_DUP, FLAG_PLACEHOLDER, is_ancestor_path};
 use crate::policy::Verdict;
-use crate::store::{Db, now_ms, set_meta};
+use crate::store::{Db, now_ms};
 
 pub use archive::ArchiveCheck;
 pub use claimed::{CatalogCheck, OllamaCheck};
@@ -33,7 +33,6 @@ pub use winget::{WingetCheck, WingetCli};
 pub const FILE_MIN: u64 = 100 << 20;
 pub const DIR_MIN: u64 = 1 << 30;
 const MAX_CANDIDATES: usize = 2000;
-pub const WAITING_KEY: &str = "copy_online_waiting";
 
 // Ordered weakest to strongest, so `max` picks the best answer among checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -1059,19 +1058,6 @@ pub fn run_volume(
         );
     }
     Ok(report)
-}
-
-// The server stores the total over every watched volume after a full pass.
-pub fn set_online_waiting(conn: &Connection, n: usize) -> anyhow::Result<()> {
-    set_meta(conn, WAITING_KEY, &n.to_string())
-}
-
-pub fn online_waiting(conn: &Connection) -> usize {
-    crate::store::get_meta(conn, WAITING_KEY)
-        .ok()
-        .flatten()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

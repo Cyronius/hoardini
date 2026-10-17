@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hoardini_core::runtime::{self, LLAMA_SERVER, MODELS};
+use hoardini_core::runtime::{self, LLAMA_SERVER, LLAMA_SERVER_VULKAN, MODELS};
 use hoardini_core::vault::SecretStore;
 use hoardini_server::builtin::{self, Builtin, ChildProc, Launched, Launcher};
 use hoardini_server::{ServerHandle, ServerOptions, start_with_launcher};
@@ -244,6 +244,7 @@ fn child_command_line_is_loopback_cpu_only_with_cores_minus_two() {
         port: 51000,
         threads: builtin::threads(),
         ctx: builtin::CONTEXT,
+        gpu: false,
     };
     let a = builtin::args(&spec);
     let pair = |flag: &str| a.iter().position(|x| x == flag).map(|i| a[i + 1].clone());
@@ -257,6 +258,33 @@ fn child_command_line_is_loopback_cpu_only_with_cores_minus_two() {
     assert!(a.contains(&"--jinja".to_string()) && a.contains(&"--no-webui".to_string()));
     let p = builtin::profile("m");
     assert!(p.small);
+}
+
+// Traces: PROV-BUILTIN-CHILD
+#[test]
+fn a_gpu_child_offloads_every_layer_and_runs_on_the_vulkan_build() {
+    let spec = builtin::LaunchSpec {
+        exe: r"C:\d\runtime\llama.cpp-vulkan-b11503\llama-server.exe".into(),
+        model: r"C:\d\models\m.gguf".into(),
+        model_id: "m".into(),
+        port: 51000,
+        threads: builtin::threads(),
+        ctx: builtin::CONTEXT,
+        gpu: true,
+    };
+    let a = builtin::args(&spec);
+    let pair = |flag: &str| a.iter().position(|x| x == flag).map(|i| a[i + 1].clone());
+    assert_eq!(pair("-ngl").as_deref(), Some("99"));
+    assert!(!a.contains(&"--cache-type-k".to_string()));
+    assert_eq!(
+        builtin::runtime_for("qwen3.5-9b").id,
+        LLAMA_SERVER_VULKAN.id
+    );
+    assert_eq!(builtin::runtime_for("granite-4.1-3b").id, LLAMA_SERVER.id);
+    assert_eq!(
+        builtin::runtime_for(r"file:D:\m\x.gguf").id,
+        LLAMA_SERVER_VULKAN.id
+    );
 }
 
 #[derive(Default)]
@@ -288,13 +316,13 @@ impl SecretStore for MemStore {
     }
 }
 
-// Stand-ins for the downloaded runtime and model: present with an install record, as after `ensure`.
+// Stand-ins for the downloaded CPU runtime and the CPU model (Granite): present with an install record, as after `ensure`.
 fn fake_install(root: &Path) {
     let exe = runtime::entry_path(&LLAMA_SERVER, root);
     std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
     std::fs::write(&exe, vec![0u8; 2048]).unwrap();
     std::fs::write(exe.parent().unwrap().join(".verified"), "{}").unwrap();
-    let model = runtime::entry_path(&MODELS[0], root);
+    let model = runtime::entry_path(&MODELS[1], root);
     std::fs::create_dir_all(model.parent().unwrap()).unwrap();
     std::fs::write(&model, vec![0u8; 4096]).unwrap();
     std::fs::write(format!("{}.verified", model.display()), "{}").unwrap();
@@ -314,7 +342,7 @@ impl Server {
         if installed {
             fake_install(dir.path());
             let conn = hoardini_core::store::Db::open(&db).unwrap().conn().unwrap();
-            let cfg = builtin::profile(MODELS[0].id);
+            let cfg = builtin::profile(MODELS[1].id);
             conn.execute(
                 "INSERT INTO provider(id, name, config_json, is_active, created_ms) VALUES ('builtin', 'Built-in', ?1, 1, 0)",
                 [serde_json::to_string(&cfg).unwrap()],
@@ -375,7 +403,7 @@ async fn a_run_on_the_builtin_profile_starts_the_child_and_streams_its_answer() 
         0,
         "nothing starts before the first chat turn"
     );
-    let body = json!({"threadId": "t1", "runId": "r1", "messages": [{"id": "m1", "role": "user", "content": "hi"}]});
+    let body = json!({"threadId": "item:t1", "runId": "r1", "messages": [{"id": "m1", "role": "user", "content": "hi"}]});
     let text = s
         .http
         .post(s.url("/api/agent/run"))
@@ -402,14 +430,14 @@ async fn a_run_without_the_files_explains_instead_of_starting() {
         .unwrap()
         .conn()
         .unwrap();
-    let cfg = builtin::profile(MODELS[0].id);
+    let cfg = builtin::profile(MODELS[1].id);
     conn.execute(
         "INSERT INTO provider(id, name, config_json, is_active, created_ms) VALUES ('builtin', 'Built-in', ?1, 1, 0)",
         [serde_json::to_string(&cfg).unwrap()],
     )
     .unwrap();
     hoardini_core::store::set_meta(&conn, "active_provider", "builtin").unwrap();
-    let body = json!({"threadId": "t2", "runId": "r2", "messages": [{"id": "m2", "role": "user", "content": "hi"}]});
+    let body = json!({"threadId": "item:t2", "runId": "r2", "messages": [{"id": "m2", "role": "user", "content": "hi"}]});
     let text = s
         .http
         .post(s.url("/api/agent/run"))
@@ -450,7 +478,10 @@ async fn status_lists_sizes_licenses_and_free_space() {
                 .starts_with("https://")
         );
         assert_ne!(cand["license"], "see link");
+        assert_eq!(cand["runtime"]["id"], builtin::runtime_for(pin.id).id);
+        assert_eq!(cand["needs_gpu"], builtin::needs_gpu(pin.id));
     }
+    assert_eq!(v["custom_runtime"]["id"], LLAMA_SERVER_VULKAN.id);
     assert!(v["free_bytes"].as_u64().unwrap() > 0);
     assert_eq!(v["recommended"], json!(builtin::RECOMMENDED));
     let r = s
@@ -462,13 +493,22 @@ async fn status_lists_sizes_licenses_and_free_space() {
         .await
         .unwrap();
     assert_eq!(r.status().as_u16(), 400);
+    let r = s
+        .http
+        .post(s.url("/api/builtin/install"))
+        .bearer_auth(TOKEN)
+        .json(&json!({"model_id": r"file:C:\no\such\model.gguf"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 400, "a file that is not there");
 }
 
 // Traces: PROV-BUILTIN-REMOVE
 #[tokio::test]
 async fn remove_stops_the_child_deletes_the_files_and_the_profile() {
     let s = Server::start(true).await;
-    let body = json!({"threadId": "t3", "runId": "r3", "messages": [{"id": "m3", "role": "user", "content": "hi"}]});
+    let body = json!({"threadId": "item:t3", "runId": "r3", "messages": [{"id": "m3", "role": "user", "content": "hi"}]});
     s.http
         .post(s.url("/api/agent/run"))
         .bearer_auth(TOKEN)
@@ -494,7 +534,7 @@ async fn remove_stops_the_child_deletes_the_files_and_the_profile() {
     assert!(r["freed_bytes"].as_u64().unwrap() >= 2048 + 4096);
     assert!(!s.fake.alive(0));
     assert!(!runtime::entry_path(&LLAMA_SERVER, s.dir.path()).exists());
-    assert!(!runtime::entry_path(&MODELS[0], s.dir.path()).exists());
+    assert!(!runtime::entry_path(&MODELS[1], s.dir.path()).exists());
     let (_, providers) = s.get("/api/providers").await;
     assert!(
         providers

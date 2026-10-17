@@ -3,8 +3,8 @@ use std::path::Path;
 use hoardini_core::index::{FakeFs, RefreshOptions, refresh};
 use hoardini_core::policy::{Action, PolicyEnv, Verdict};
 use hoardini_core::proposals::{self, ProposalKind};
+use hoardini_core::review;
 use hoardini_core::review::areas::ADMIN_HINT;
-use hoardini_core::review::{self, Scope};
 use hoardini_core::store::Db;
 use hoardini_core::syscleanup::{OpPart, SystemOp};
 
@@ -63,7 +63,7 @@ fn big_things_no_card_takes_are_listed_with_why_and_a_hint() {
         .query_row("SELECT id FROM volume", [], |r| r.get(0))
         .unwrap();
 
-    let r = review::build(&db, &env, &fs, Scope::Volume(vid), NOW).unwrap();
+    let r = review::build(&db, &env, &fs, vid, NOW).unwrap();
     let cards: Vec<&str> = r.cards.iter().map(|c| c.card.as_str()).collect();
     assert_eq!(cards, ["windows"], "only what needs an administrator");
     let w = proposals::get(&db, &r.cards[0].proposal_id)

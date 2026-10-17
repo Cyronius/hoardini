@@ -207,7 +207,7 @@ function ProviderForm({ initial, presets, onDone, onCancel }: { initial: Form; p
           value=""
           onChange={(e) => {
             const p = presets.find((x) => x.name === e.target.value);
-            if (p) setF((x) => ({ ...x, base_url: p.base_url, name: x.name || p.name }));
+            if (p) setF((x) => ({ ...x, base_url: p.base_url, name: x.name || p.name, model: x.model || p.default_model || "" }));
           }}
         >
           <option value="">Choose a preset...</option>

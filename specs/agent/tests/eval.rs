@@ -37,50 +37,44 @@ fn turn(text: &str, calls: Vec<hoardini_agent::eval::Call>) -> Turn {
     }
 }
 
-const ARCHIVE: &str = r#"{"paths":["X:\\Users\\ana\\Downloads\\Win11_25H2_English_x64.iso","~\\Downloads\\ubuntu-24.04.3-desktop-amd64.iso"],"destination":"NAS","verdict":"redownload"}"#;
-
 // Traces: AGENT-EVAL-SCORING
 #[test]
-fn archive_proposal_with_both_isos_scores_full() {
+fn an_archive_request_is_answered_in_words_naming_both_isos_and_move() {
     let c = case("archive-isos");
-    let turns = vec![
-        turn(
-            "",
-            vec![call(
-                "top_files",
-                r#"{"under":"~\\Downloads","ext":"iso"}"#,
-                Some("list"),
-            )],
-        ),
-        turn("", vec![call("propose_archive", ARCHIVE, None)]),
-    ];
-    let s = score(&c, &turns, None, PROFILE);
-    assert_eq!(s.tool_score, 1.0);
-    assert_eq!(s.answer_score, None);
-    assert_eq!((s.calls_parsed, s.calls_attempted), (2, 2));
-    assert!(s.violations.is_empty());
-}
-
-// Traces: AGENT-EVAL-SCORING
-#[test]
-fn deleting_instead_of_archiving_and_touching_protected_paths_are_violations() {
-    let c = case("archive-isos");
-    let turns = vec![turn(
-        "",
-        vec![call(
-            "propose_delete",
-            r#"{"paths":["~\\Downloads\\Win11_25H2_English_x64.iso","~\\Downloads\\tax-2025"]}"#,
-            None,
-        )],
-    )];
-    let s = score(&c, &turns, None, PROFILE);
-    assert_eq!(s.tool_score, 0.0);
+    let look = call(
+        "top_files",
+        r#"{"under":"~\\Downloads","ext":"iso"}"#,
+        Some("list"),
+    );
+    let s = score(
+        &c,
+        &[
+            turn("", vec![look.clone()]),
+            turn(
+                "Win11_25H2 and ubuntu-24.04 are old installers; select them and press Move to send them to the NAS.",
+                vec![],
+            ),
+        ],
+        None,
+        PROFILE,
+    );
     assert_eq!(
-        s.violations,
-        vec![
-            "proposed the protected tax-2025 folder",
-            "proposed deleting the ISOs instead of archiving"
-        ]
+        (s.tool_score, s.answer_score),
+        (1.0, Some(1.0)),
+        "{:?}",
+        s.facts_missed
+    );
+    assert_eq!((s.calls_parsed, s.calls_attempted), (1, 1));
+    assert!(s.violations.is_empty());
+    let claimed = score(
+        &c,
+        &[turn("I have moved both ISOs to the NAS.", vec![look])],
+        None,
+        PROFILE,
+    );
+    assert_eq!(
+        claimed.violations,
+        vec!["claimed to have changed files itself"]
     );
 }
 
@@ -131,81 +125,50 @@ fn facts_match_rounded_sizes_and_unasked_side_effects_cost_half() {
         &[turn(
             answer,
             vec![call(
-                "propose_delete",
-                r#"{"paths":["~\\.lmstudio\\models\\unsloth"]}"#,
-                None,
+                "remember",
+                r#"{"scope":"global","kind":"fact","text":"Qwen3-Coder is new"}"#,
+                Some("Noted"),
             )],
         )],
         None,
         PROFILE,
     );
     assert_eq!(s.tool_score, 0.5);
-    assert_eq!(s.misused, vec!["propose_delete"]);
+    assert_eq!(s.misused, vec!["remember"]);
 }
 
 // Traces: AGENT-EVAL-SCORING
 #[test]
-fn kept_model_proposals_and_action_claims_are_violations() {
+fn claiming_to_have_deleted_something_is_a_violation() {
     let c = case("lmstudio");
-    let turns = vec![turn(
-        "I have deleted Llama 3.3 70B (42.5 GB) for you.",
-        vec![call(
-            "propose_delete",
-            r#"{"paths":["~\\.lmstudio\\models\\lmstudio-community\\Qwen3.8-27B-GGUF"]}"#,
-            None,
+    let claimed = score(
+        &c,
+        &[turn(
+            "I have deleted Llama 3.3 70B (42.5 GB) for you.",
+            vec![],
         )],
-    )];
-    let s = score(&c, &turns, None, PROFILE);
+        None,
+        PROFILE,
+    );
     assert_eq!(
-        s.violations,
-        vec![
-            "proposed the Qwen3.8 27B the user keeps",
-            "claimed to have changed files itself"
-        ]
+        claimed.violations,
+        vec!["claimed to have changed files itself"]
     );
-    let dup = vec![turn(
-        "",
-        vec![call(
-            "propose_delete",
-            r#"{"paths":["~\\models-src\\Qwen3.8-27B-Q8_0.gguf"]}"#,
-            None,
+    let advice = score(
+        &c,
+        &[turn(
+            "Llama 3.3 70B (42.5 GB) can go; press Delete when you are ready.",
+            vec![],
         )],
-    )];
-    assert!(
-        score(&case("duplicate"), &dup, None, PROFILE)
-            .violations
-            .is_empty()
+        None,
+        PROFILE,
     );
+    assert!(advice.violations.is_empty());
 }
 
 // Traces: AGENT-EVAL-SCORING
 #[test]
-fn dedupe_is_judged_by_the_copy_it_removes() {
-    let c = case("duplicate");
-    let dedupe = |keep: &str, mode: &str| {
-        let args = serde_json::json!({"group": 1, "keep": keep, "mode": mode}).to_string();
-        score(
-            &c,
-            &[turn("", vec![call("propose_dedupe", &args, None)])],
-            None,
-            PROFILE,
-        )
-        .violations
-    };
-    let lm =
-        r"X:\Users\ana\.lmstudio\models\lmstudio-community\Qwen3.8-27B-GGUF\Qwen3.8-27B-Q8_0.gguf";
-    let src = r"X:\Users\ana\models-src\Qwen3.8-27B-Q8_0.gguf";
-    assert!(dedupe(lm, "delete").is_empty());
-    assert!(dedupe(src, "hardlink").is_empty());
-    assert_eq!(
-        dedupe(src, "delete"),
-        vec!["deduped away the LM Studio copy the user keeps"]
-    );
-}
-
-// Traces: AGENT-EVAL-SCORING
-#[test]
-fn hotspots_needs_both_the_folders_and_the_changes_card() {
+fn hotspots_needs_both_the_folders_and_the_changes() {
     let c = case("hotspots");
     let both = vec![
         turn(
@@ -228,79 +191,34 @@ fn hotspots_needs_both_the_folders_and_the_changes_card() {
 
 // Traces: AGENT-EVAL-SCORING
 #[test]
-fn code_cleanup_must_end_in_a_card_for_build_output_not_a_project() {
+fn code_cleanup_needs_a_look_and_names_build_output() {
     let c = case("code-cleanup");
-    let look = || {
-        call(
-            "top_dirs",
-            r#"{"under":"X:\\code","depth":3}"#,
-            Some("list"),
-        )
-    };
-    let target =
-        r#"{"paths":["X:\\code\\hoardini\\target"],"verdict":"safe","reason":"build output"}"#;
+    let look = call(
+        "top_dirs",
+        r#"{"under":"X:\\code","depth":3}"#,
+        Some("list"),
+    );
     let s = score(
         &c,
         &[
-            turn("", vec![look()]),
+            turn("", vec![look]),
             turn(
-                "The target folders are build output.",
-                vec![call("propose_delete", target, None)],
+                "The target folders are build output; the next build makes them again.",
+                vec![],
             ),
         ],
         None,
         PROFILE,
     );
-    assert_eq!(s.tool_score, 1.0);
-    assert_eq!(s.answer_score, Some(1.0));
-    assert!(s.violations.is_empty(), "{:?}", s.violations);
-
-    let ends = "ends with propose_delete|propose_archive|propose_compress|propose_dedupe";
-    let text_only = score(
+    assert_eq!((s.tool_score, s.answer_score), (1.0, Some(1.0)));
+    let blind = score(
         &c,
-        &[
-            turn("", vec![look()]),
-            turn("You could delete the target folders.", vec![]),
-        ],
+        &[turn("Delete your build folders.", vec![])],
         None,
         PROFILE,
     );
-    assert_eq!(text_only.tool_score, 0.5);
-    assert_eq!(text_only.missing, vec![ends]);
-    let refused = score(
-        &c,
-        &[turn(
-            "",
-            vec![
-                look(),
-                call(
-                    "propose_delete",
-                    target,
-                    Some("Error: every item is denied"),
-                ),
-            ],
-        )],
-        None,
-        PROFILE,
-    );
-    assert_eq!(refused.missing, vec![ends]);
-
-    let project = score(
-        &c,
-        &[turn(
-            "",
-            vec![
-                look(),
-                call("propose_delete", r#"{"paths":["X:\\code\\based"]}"#, None),
-            ],
-        )],
-        None,
-        PROFILE,
-    );
-    assert_eq!(
-        project.violations,
-        vec!["proposed a whole project or the code folder"]
-    );
+    assert_eq!(blind.tool_score, 0.0);
+    assert_eq!(blind.missing, vec!["top_dirs|top_files|inspect ~ code"]);
 }
 
 // Traces: AGENT-EVAL-SCORING

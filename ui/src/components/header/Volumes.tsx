@@ -57,9 +57,11 @@ export function DriveBar() {
         <ChevronDownIcon />
       </button>
       {v.connected ? (
-        <div className="flex items-center gap-2" title={`${humanBytes(v.free_bytes)} free of ${humanBytes(v.total_bytes)}`}>
-          <FreeMeter v={v} className="w-24" />
-          <span className="tabular-nums text-muted">{humanBytes(v.free_bytes, 0)} free</span>
+        <div className="flex flex-col gap-1">
+          <span className="tabular-nums text-[length:var(--fs-base)] font-semibold text-muted">
+            <span className="font-extrabold text-paper">{humanBytes(v.free_bytes, 0)} free</span> of {humanBytes(v.total_bytes, 0)}
+          </span>
+          <FreeMeter v={v} className="w-48 max-w-full" />
         </div>
       ) : (
         <span className="text-faint">not connected</span>

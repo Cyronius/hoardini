@@ -56,13 +56,13 @@ that same set, and none when only non-protect rows match.
 The Memory drawer shall list every memory row sorted by last used, each with a "last used ..." label and a pin toggle, let the user change its text, kind, and key, and delete it. Forgotten rows (MEM-LIMIT) shall sit greyed at the bottom with a Restore button. A "Remember up to N notes" control shall set the limit. Rows whose source is `web:<url>` shall show that URL. Location and file-type rows shall also show their label (or app, or category) and their verdict as chips; `GET /api/memory` carries each row's `detail` (null for notes).
 
 **Verification (manual):**
-1. Ask the agent to remember a fact about a folder ("remember that D:\scratch is disposable"). A chip appears in the chat with an undo and a pin toggle, and reads "noted - pinned".
+1. In an item's Ask box, ask the agent to remember a fact about a folder ("remember that D:\scratch is disposable"). The answer says it is noted.
 2. Open the Memory drawer. The row appears with scope `path`, key `D:\scratch`, source `agent`, pinned, and "last used just now".
 3. Edit its text and kind to `protect`, save, reload the app. The edited row persists.
-4. Ask the agent to propose deleting a file under `D:\scratch`. No card appears: policy refuses the path (POLICY-PROTECT), and the model gets an `Error: ... refused by policy` result that it explains.
-5. Delete the row in the drawer. It disappears, and the same request now produces a card.
+4. Send what Home's Delete sends for a file under `D:\scratch` (`POST /api/act {kind: "delete", paths: [...]}`). It answers `job_id` null with the path in `blocked`: policy holds it back (POLICY-PROTECT), and the file stays.
+5. Delete the row in the drawer. It disappears, and the same request now starts a job.
 6. For a row created from a web search, confirm the drawer shows its source URL.
-7. Ask the agent to remember a preference: the chat shows a "noted" chip; Undo turns it into "forgotten" and the row is gone from the drawer.
+7. In an Ask box, ask the agent to remember a preference: the drawer shows it as an unpinned `preference` row.
 8. In the drawer's search box, a word from the note finds it; an unrelated word shows "No notes match."
 9. Add a few unpinned notes, then lower the limit to its minimum below the note count. The oldest-used unpinned notes move, greyed, to the bottom with a Restore button; pinned and protect notes stay in place. Restore one: it returns to the top as "last used just now".
 10. Toggle a row's pin off and on; the state persists across a reload.
@@ -271,14 +271,8 @@ Reading them back:
   `path` or whose rule matches `path` or a folder above it. `Cleaned::reason()` reads
   `you cleaned this on 10-09 (28.0 GB)` (`archived`, `compressed` by kind; the date in UTC).
 
-`memory::learn::learned_for(conn, proposal_id)` lists, per row holding entries of that job, `{memory_id, text,
-confirmed}` (`confirmed`: the row's source is `user`, so the chip offers no Confirm):
-`target folders in C:\code — cleaned 28.0 GB on 10-09`, then `; 1 item you left unticked is kept` when there are
-kept entries (`2 items you left unticked in C:\code are kept` when there are only those). The text names the shared
-rule (`.log files`, `target folders`), else the one item's name, else `N items`. The proposal JSON carries it as
-`learned` for `done`, `partial` and `failed` delete, archive and compress proposals (SRV-LEARNED); online-only and system-cleanup jobs learn nothing. `learn::undo(conn,
-proposal_id, memory_id)` removes that job's entries from the row and deletes the row when a job made it, nothing is
-left in it, and it is not pinned; it returns false when the row holds nothing of that job.
+A new row's text names the shared rule (`.log files`, `target folders`), else the one item's name, else `N items`
+(`You cleaned file.bin here.`). Online-only and system-cleanup jobs learn nothing.
 
 **Acceptance criteria:**
 - A delete of `work\code\proj\target` (under an `index` row for `work\code`), `notes\one.log`, `notes\two.log`,
@@ -288,15 +282,10 @@ left in it, and it is not pinned; it returns false when the row holds nothing of
   `work` reads `You cleaned 3 items here.`, has category `unknown`, no verdict and `by` `job`, and holds the two logs
   with rule `work\notes\*.log`, `odd.dat` with its own path, and `kept` `[{ms, path: keep\big.bin, size: <alloc>,
   job}]`. The vanished file is nowhere.
-- That proposal's `learned` is `target folders in work\code — cleaned <size> on <MM-DD>` for the first row and
-  `3 items in work — cleaned <sum> on <MM-DD>; 1 item you left unticked is kept` for the new row; its pending
-  follow-up has none.
 - With the proposal's `anchor` set to `work\cards`, a deleted `cards\deep\x\file.bin` gives a row at `work\cards`
-  (`You cleaned file.bin here.`); a second job's file under it joins that row. Undo of the first job leaves the row
-  with the second job's entry; a second undo returns false; undo of the second job then deletes the row, and so does
-  undo of a job that made a row alone.
-- An archive whose copy fails verification, a declined delete, and a delete dedupe leave no `learned`, no `job:` row
-  and no entry naming a job.
+  (`You cleaned file.bin here.`); a second job's file under it joins that row, which keeps the first job's source.
+- An archive whose copy fails verification, a declined delete, and a delete dedupe leave no `job:` row and no entry
+  naming a job.
 - With kept `D:\code\big.iso` at 1,000 bytes: `was_kept` is true at 1,000 and 1,499 (any case) and false at 1,500,
   for another file, and for `D:\code`; an entry on `D:\code` still counts for `D:\code\sub\k.bin` under a nearer
   `D:\code\sub` row; an unknown entry shape is skipped.

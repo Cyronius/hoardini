@@ -208,7 +208,7 @@ async fn cancel_leaves_nothing() {
 
 #[test]
 fn static_pins_are_well_formed() {
-    assert!(runtime::PINS.len() >= 6);
+    assert!(runtime::PINS.len() >= 5);
     for p in runtime::PINS {
         assert_eq!(p.sha256.len(), 64, "{}", p.id);
         assert!(
@@ -227,4 +227,5 @@ fn static_pins_are_well_formed() {
     }
     assert!(runtime::find("rclone").is_some());
     assert!(runtime::find("llama.cpp").is_some());
+    assert!(runtime::find("llama.cpp-vulkan").is_some());
 }

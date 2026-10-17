@@ -35,7 +35,7 @@ impl IndexControl for Idle {
     fn status(&self) -> Value {
         json!({"state": "idle"})
     }
-    fn refresh(&self, _mode: &str) -> anyhow::Result<bool> {
+    fn refresh(&self) -> anyhow::Result<bool> {
         Ok(false)
     }
 }
@@ -86,7 +86,6 @@ async fn main() -> anyhow::Result<()> {
             content: Some(question.into()),
             tool_calls: None,
             tool_call_id: None,
-            data: None,
         }],
         ..Default::default()
     };

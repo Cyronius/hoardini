@@ -1,9 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use hoardini_core::actions::{Executor, Job};
 use hoardini_core::memory::knowledge::upsert_with;
-use hoardini_core::memory::learn::{learned_for, undo};
 use hoardini_core::memory::location::location_at;
 use hoardini_core::memory::{Detail, Kind, Knowledge, Memory, Scope, get};
 use hoardini_core::proposals::{self, Proposal, ProposalKind};
@@ -34,10 +33,6 @@ fn job_rows(fx: &Fx) -> i64 {
         &fx.db,
         "SELECT COUNT(*) FROM memory WHERE source LIKE 'job:%'",
     )
-}
-
-fn mmdd(ms: i64) -> String {
-    hoardini_core::history::fmt_date(ms)[5..].to_string()
 }
 
 // Traces: MEM-LEARN-JOB
@@ -143,39 +138,11 @@ fn done_items_go_to_cleaned_and_unticked_ones_to_kept_with_exact_entries() {
         entries(&made, "kept"),
         [json!({"ms": ms, "path": s(&keep), "size": item(&p, &keep).alloc, "job": p.id})]
     );
-
-    let learned = after.learned.clone();
-    let bytes = |fs: &[&PathBuf]| -> u64 { fs.iter().map(|f| item(&p, f).alloc as u64).sum() };
-    let human = hoardini_core::paths::humanize_bytes;
-    assert_eq!(learned.len(), 2, "{learned:#?}");
-    assert_eq!(learned[0].memory_id, code.id);
-    assert_eq!(
-        learned[0].text,
-        format!(
-            r"target folders in {w}\code — cleaned {} on {}",
-            human(bytes(&[&target])),
-            mmdd(ms)
-        )
-    );
-    assert_eq!(learned[1].memory_id, made.id);
-    assert_eq!(
-        learned[1].text,
-        format!(
-            "3 items in {w} — cleaned {} on {}; 1 item you left unticked is kept",
-            human(bytes(&[&one, &two, &odd])),
-            mmdd(ms)
-        )
-    );
-    let follow = fx.get(after.follow_up_id.as_deref().unwrap());
-    assert!(
-        follow.learned.is_empty(),
-        "a pending card has learned nothing"
-    );
 }
 
 // Traces: MEM-LEARN-JOB
 #[test]
-fn the_card_anchor_names_the_new_row_and_undo_takes_back_only_this_job() {
+fn the_card_anchor_names_the_new_row_and_a_later_job_joins_it() {
     let fx = Fx::new();
     let w = s(&fx.work);
     let deep = fx.file(r"cards\deep\x\file.bin", &data(9_000, 1));
@@ -202,36 +169,6 @@ fn the_card_anchor_names_the_new_row_and_undo_takes_back_only_this_job() {
         "the second job reuses the row"
     );
     assert_eq!(both.source, format!("job:{}", p.id));
-
-    assert!(undo(&conn, &p.id, made.id).unwrap());
-    let left = get(&conn, made.id)
-        .unwrap()
-        .expect("another job's entry keeps the row");
-    let paths: Vec<Value> = entries(&left, "cleaned")
-        .iter()
-        .map(|e| e["path"].clone())
-        .collect();
-    assert_eq!(paths, [json!(s(&other))]);
-    assert!(learned_for(&conn, &p.id).unwrap().is_empty());
-    assert!(
-        !undo(&conn, &p.id, made.id).unwrap(),
-        "nothing left to undo"
-    );
-    assert!(undo(&conn, &q.id, made.id).unwrap());
-    assert!(
-        get(&conn, made.id).unwrap().is_none(),
-        "a job's row goes once no job's entry is left"
-    );
-
-    let third = fx.file(r"solo\a.bin", &data(9_000, 3));
-    let r = fx.propose(ProposalKind::Delete, &[&third], None).unwrap();
-    assert_eq!(run(&ex, &r, &ids(&r)).status, "done");
-    let solo = row(&fx, &fx.work.join("solo")).unwrap();
-    assert!(undo(&conn, &r.id, solo.id).unwrap());
-    assert!(
-        get(&conn, solo.id).unwrap().is_none(),
-        "the job made it and nothing else is in it"
-    );
 }
 
 // Traces: MEM-LEARN-JOB
@@ -260,9 +197,6 @@ fn failed_declined_and_dedupe_jobs_learn_nothing() {
     let job = run(&ex, &dd, &ids(&dd));
     assert_eq!(item(&fx.get(&dd.id), &dup.twin).status, "done", "{job:?}");
 
-    for p in [&a, &d, &dd] {
-        assert!(fx.get(&p.id).learned.is_empty(), "{}", p.id);
-    }
     assert_eq!(job_rows(&fx), 0);
     assert_eq!(
         count(

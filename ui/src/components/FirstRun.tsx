@@ -4,18 +4,22 @@ import type { LocalServer, Preset, ProviderView, TestReport } from "../api/types
 import { useAiSetup } from "../aiSetup";
 import { btnPrimary, btnSecondary, ErrorLine, errMsg, field } from "../drawer/ui";
 import { useStore } from "../store";
+import { DEFAULT_MODEL, LocalDownload } from "./LocalDownload";
 
-type Cloud = { id: string; blurb: string; recommended?: boolean };
+type Cloud = { id: string; blurb: string };
 
 const CLOUD: Cloud[] = [
-  { id: "gemini", blurb: "Free and generous. Google uses free-tier prompts, including folder and file names, to improve its products." },
-  { id: "openrouter", blurb: "Free models, 50 requests a day (1,000 after a one-time $10 top-up). Some free models' providers may keep or train on prompts; OpenRouter's privacy settings can block them." },
-  { id: "cerebras", blurb: "Very fast. Needs a payment method for a one-time $5 credit that lasts 30 days; after that it's paid." },
+  { id: "gemini", blurb: "About 500 free requests a day, no card. Outside the EU, UK and Switzerland, Google may use free-tier questions, including folder and file names, to improve its products. Not free in the EU, UK or Switzerland." },
+  { id: "openrouter", blurb: "50 free requests a day (1,000 after a one-time $10 top-up), no card. Whether a free model's host keeps your questions depends on the model; OpenRouter's privacy settings can block hosts that do." },
+  { id: "ollama-cloud", blurb: "A small free monthly allowance, one request at a time. Ollama says it never logs or trains on your questions." },
+  { id: "mistral", blurb: "A free monthly allowance, no card. Mistral may train on free-tier questions unless you opt out in its settings." },
+  { id: "cloudflare", blurb: "A free daily allowance of about 300 short requests. Cloudflare doesn't train on your questions. Needs your account ID as well as a token." },
+  { id: "zai", blurb: "Two GLM models are free; limits aren't published. Z.ai doesn't use your questions without consent." },
 ];
 
 const SEND_NOTE = "Cloud choices send your questions, and the file and folder names Hoardini looks up to answer them, to that provider.";
 
-type View = { kind: "choose" } | { kind: "cloud"; preset: Preset; blurb: string } | { kind: "local" };
+type View = { kind: "choose" } | { kind: "cloud"; preset: Preset; blurb: string } | { kind: "local" } | { kind: "download" };
 
 function ExternalLink({ href, children, primary }: { href: string; children: string; primary?: boolean }) {
   return (
@@ -65,11 +69,13 @@ function Outcome({ report }: { report: TestReport }) {
   );
 }
 
-function CloudSetup({ preset, onBack, onDone }: { preset: Preset; onBack: () => void; onDone: () => void }) {
+function CloudSetup({ preset, blurb, onBack, onDone }: { preset: Preset; blurb: string; onBack: () => void; onDone: () => void }) {
   const [key, setKey] = useState("");
+  const [account, setAccount] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<TestReport | null>(null);
+  const needsAccount = preset.base_url.includes("{account_id}");
 
   const go = async () => {
     setBusy(true);
@@ -77,7 +83,8 @@ function CloudSetup({ preset, onBack, onDone }: { preset: Preset; onBack: () => 
     setReport(null);
     try {
       const existing = await routes.providers();
-      const view = await saveProvider(existing, preset, preset.default_model, key.trim());
+      const base_url = needsAccount ? preset.base_url.replace("{account_id}", encodeURIComponent(account.trim())) : preset.base_url;
+      const view = await saveProvider(existing, { name: preset.name, base_url }, preset.default_model, key.trim());
       setKey("");
       const r = await routes.testProvider(view.id);
       setReport(r);
@@ -98,10 +105,12 @@ function CloudSetup({ preset, onBack, onDone }: { preset: Preset; onBack: () => 
       <ol className="space-y-3 text-[length:var(--fs-base)]">
         <li className="space-y-1.5">
           <div className="font-semibold">1. Get a free key</div>
+          <div className="text-[length:var(--fs-sm)] text-muted">{blurb}</div>
           {preset.key_url && <ExternalLink href={preset.key_url} primary>Get a free key</ExternalLink>}
         </li>
         <li className="space-y-1.5">
           <div className="font-semibold">2. Paste it here</div>
+          {needsAccount && <input className={field} placeholder="Account ID" value={account} onChange={(e) => setAccount(e.target.value)} />}
           <input className={field} type="password" autoComplete="new-password" placeholder="API key" value={key} onChange={(e) => setKey(e.target.value)} />
           <div className="text-[length:var(--fs-xs)] text-faint">Stored encrypted on this PC; never shown again.</div>
         </li>
@@ -110,7 +119,7 @@ function CloudSetup({ preset, onBack, onDone }: { preset: Preset; onBack: () => 
           <div className="text-[length:var(--fs-xs)] text-faint">
             Uses {preset.default_model}. Hoardini checks the model exists and can call tools.
           </div>
-          <button className={btnPrimary} disabled={busy || !key.trim()} onClick={() => void go()}>
+          <button className={btnPrimary} disabled={busy || !key.trim() || (needsAccount && !account.trim())} onClick={() => void go()}>
             {busy ? "Testing..." : "Save and test"}
           </button>
         </li>
@@ -208,6 +217,7 @@ export function FirstRun() {
   const openDrawer = useStore((s) => s.openDrawer);
   const [view, setView] = useState<View>({ kind: "choose" });
   const [presets, setPresets] = useState<Preset[]>([]);
+  const [more, setMore] = useState(false);
 
   useEffect(() => {
     routes
@@ -221,7 +231,10 @@ export function FirstRun() {
   }, [setDone, setOpen]);
 
   useEffect(() => {
-    if (open) setView({ kind: "choose" });
+    if (open) {
+      setView({ kind: "choose" });
+      setMore(false);
+    }
   }, [open]);
 
   if (!open) return null;
@@ -244,41 +257,48 @@ export function FirstRun() {
       <div role="dialog" aria-label="Set up AI" className="relative max-h-full w-full max-w-lg space-y-3 overflow-auto rounded-2xl border border-line bg-ink-900 p-4 shadow-2xl">
         {view.kind === "choose" && (
           <>
-            <h2 className="font-[family-name:var(--font-display)] text-[19px] font-extrabold">How should Hoardini think?</h2>
-            <p className="text-muted">Pick where the AI runs. Your files are never uploaded; only the questions and the names Hoardini looks up are sent to a cloud provider.</p>
-            <ul className="space-y-2">
-              {CLOUD.map((c) => {
-                const preset = presets.find((p) => p.id === c.id);
-                if (!preset) return null;
-                return (
-                  <li key={c.id}>
-                    <button
-                      className={`w-full rounded-xl border p-3 text-left hover:border-brass ${c.recommended ? "border-brass/60 bg-brass/5" : "border-line-soft bg-ink-850"}`}
-                      onClick={() => setView({ kind: "cloud", preset, blurb: c.blurb })}
-                    >
-                      <div className="flex items-center gap-2 font-bold">
-                        {preset.name}
-                        {c.recommended && <span className="rounded-full bg-brass px-2 py-px text-[length:var(--fs-xs)] text-on-accent">Recommended</span>}
-                      </div>
-                      <div className="text-[length:var(--fs-sm)] text-muted">{c.blurb}</div>
-                    </button>
-                  </li>
-                );
-              })}
-              <li>
-                <button className="w-full rounded-xl border border-line-soft bg-ink-850 p-3 text-left hover:border-brass" onClick={() => setView({ kind: "local" })}>
-                  <div className="font-bold">A model on this PC</div>
-                  <div className="text-[length:var(--fs-sm)] text-muted">Finds LM Studio, Ollama, or llama.cpp if one is running. Nothing leaves this PC.</div>
-                </button>
-              </li>
-              <li>
-                <button className="w-full rounded-xl border border-line-soft bg-ink-850 p-3 text-left hover:border-brass" onClick={own}>
-                  <div className="font-bold">Set up a provider</div>
-                  <div className="text-[length:var(--fs-sm)] text-muted">Any OpenAI-compatible service or server, by hand.</div>
-                </button>
-              </li>
-            </ul>
-            <p className="text-[length:var(--fs-xs)] text-faint">{SEND_NOTE}</p>
+            <h2 className="font-[family-name:var(--font-display)] text-[19px] font-extrabold">Set up Hoardini's AI</h2>
+            <p className="text-muted">Hoardini uses a small AI on this PC to work out what is taking space. Your files and questions never leave it.</p>
+            <LocalDownload only={DEFAULT_MODEL} onDone={finish} />
+            {!more ? (
+              <button className="text-[length:var(--fs-sm)] font-semibold text-brass hover:underline" onClick={() => setMore(true)}>
+                Other ways to connect
+              </button>
+            ) : (
+              <ul className="space-y-2">
+                {CLOUD.map((c) => {
+                  const preset = presets.find((p) => p.id === c.id);
+                  if (!preset) return null;
+                  return (
+                    <li key={c.id}>
+                      <button className="w-full rounded-xl border border-line-soft bg-ink-850 p-3 text-left hover:border-brass" onClick={() => setView({ kind: "cloud", preset, blurb: c.blurb })}>
+                        <div className="font-bold">{preset.name}</div>
+                        <div className="text-[length:var(--fs-sm)] text-muted">{c.blurb}</div>
+                      </button>
+                    </li>
+                  );
+                })}
+                <li>
+                  <button className="w-full rounded-xl border border-line-soft bg-ink-850 p-3 text-left hover:border-brass" onClick={() => setView({ kind: "download" })}>
+                    <div className="font-bold">A different model on this PC</div>
+                    <div className="text-[length:var(--fs-sm)] text-muted">Qwen3.5 9B (smarter, needs a graphics card), or a model file you already have.</div>
+                  </button>
+                </li>
+                <li>
+                  <button className="w-full rounded-xl border border-line-soft bg-ink-850 p-3 text-left hover:border-brass" onClick={() => setView({ kind: "local" })}>
+                    <div className="font-bold">LM Studio, Ollama or llama.cpp</div>
+                    <div className="text-[length:var(--fs-sm)] text-muted">Uses one that is already running. Nothing leaves this PC.</div>
+                  </button>
+                </li>
+                <li>
+                  <button className="w-full rounded-xl border border-line-soft bg-ink-850 p-3 text-left hover:border-brass" onClick={own}>
+                    <div className="font-bold">Set up a provider</div>
+                    <div className="text-[length:var(--fs-sm)] text-muted">Any OpenAI-compatible service or server, by hand.</div>
+                  </button>
+                </li>
+              </ul>
+            )}
+            <p className="text-[length:var(--fs-xs)] text-faint">{more && SEND_NOTE}</p>
             <div className="flex justify-end">
               <button className={btnSecondary} onClick={later}>
                 Later
@@ -286,8 +306,17 @@ export function FirstRun() {
             </div>
           </>
         )}
-        {view.kind === "cloud" && <CloudSetup preset={view.preset} onBack={() => setView({ kind: "choose" })} onDone={finish} />}
+        {view.kind === "cloud" && <CloudSetup preset={view.preset} blurb={view.blurb} onBack={() => setView({ kind: "choose" })} onDone={finish} />}
         {view.kind === "local" && <LocalSetup onBack={() => setView({ kind: "choose" })} onDone={finish} />}
+        {view.kind === "download" && (
+          <div className="space-y-3">
+            <h3 className="font-bold">Download a model to this PC</h3>
+            <LocalDownload onDone={finish} />
+            <button className={btnSecondary} onClick={() => setView({ kind: "choose" })}>
+              Back
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

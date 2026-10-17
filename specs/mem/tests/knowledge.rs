@@ -68,10 +68,9 @@ fn detail(m: &Memory) -> &Detail {
     m.detail.as_ref().unwrap()
 }
 
-// Traces: SRV-LEARNED, MEM-LOCATION
+// Traces: MEM-LOCATION, POLICY-LOCATION-KEEP
 #[test]
-fn confirming_a_classified_row_keeps_its_keep_verdict() {
-    use hoardini_core::memory::knowledge::confirm;
+fn a_classified_keep_holds_nothing_back_until_the_user_keeps_the_folder() {
     use hoardini_core::memory::location::keep_block;
     let d = Drive::new();
     d.fs.file(r"C:\Users\tester\Pictures\2019\a.jpg", 30 * GIB);
@@ -83,18 +82,23 @@ fn confirming_a_classified_row_keeps_its_keep_verdict() {
     assert!(
         keep_block(&d.c(), &d.env, photo, Action::Delete)
             .unwrap()
-            .is_some()
+            .is_none(),
+        "a classified guess holds nothing back"
     );
-    let m = confirm(&d.c(), row.id, T0, P).unwrap().unwrap();
-    assert_eq!(m.source, "user");
-    assert_eq!(detail(&m).verdict, Some(Verdict::Keep));
-    assert_eq!(detail(&m).actions, [Action::Archive]);
+    answer(
+        &d.c(),
+        &d.env,
+        r"C:\Users\tester\Pictures\2019",
+        Answer::Keep,
+        T0,
+    )
+    .unwrap();
     d.sweep(T0 + 200 * DAY);
     assert!(
         keep_block(&d.c(), &d.env, photo, Action::Delete)
             .unwrap()
             .is_some(),
-        "a confirmed photos folder stays protected"
+        "the user's own keep still protects its folder after a later sweep"
     );
 }
 

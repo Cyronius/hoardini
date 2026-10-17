@@ -43,8 +43,7 @@ or removed parent is dropped in favour of the parent. Files are never dropped.
 
 The `changes` agent tool result shall also carry, when the range holds at least two scans with a known free
 space, one free-space line (`history::free_summary`) giving the refresh count, start, end, and lowest free space with
-their dates, and the net change; it never carries the raw points. The tool takes an optional `drive` (default: the selected drive once it has an index, INDEX-VOLUMES). The result ends with a machine-readable line
-`range_ms: <earlier finished_ms>..<latest finished_ms> <volume root>` that the chat card uses to fetch the chart's points.
+their dates, and the net change; it never carries the raw points. The tool takes an optional `drive` (default: the selected drive once it has an index, INDEX-VOLUMES).
 
 **Acceptance criteria:**
 - After adding a 2 GiB file to `models`, deleting the 500 MiB dir `C:\old`, deleting a 600 MiB file and shrinking a

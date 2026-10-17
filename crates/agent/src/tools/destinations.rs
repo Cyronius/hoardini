@@ -15,7 +15,7 @@ impl Tool for Destinations {
     }
 
     fn description(&self) -> &'static str {
-        "The archive destinations the user registered (name, type, free space). propose_archive can only target one of these."
+        "The places the user set up for moving big things off this drive (name, type, free space). The user moves an item there with the Move button."
     }
 
     fn parameters(&self) -> Value {
@@ -28,7 +28,7 @@ impl Tool for Destinations {
             .map_err(|e| ToolError::Failed(format!("could not list destinations: {e}")))?;
         if all.is_empty() {
             return Ok(Outcome::text(
-                "No destinations registered. The user can add one in Settings, Destinations; archiving needs one.",
+                "No destinations set up. The user can add one in Settings, Move big things to; moving needs one.",
             ));
         }
         let mut out = String::from("Registered destinations:\n");

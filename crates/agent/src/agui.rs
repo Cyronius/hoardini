@@ -1,4 +1,4 @@
-// AG-UI wire types, @ag-ui/core 0.0.47 schema. SEAM (wave 2): the agent-loop owner may extend these.
+// AG-UI wire types, @ag-ui/core 0.0.47 schema.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -49,8 +49,6 @@ pub struct AgMessage {
     pub tool_calls: Option<Vec<AgToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

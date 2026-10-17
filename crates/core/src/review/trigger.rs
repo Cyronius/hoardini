@@ -152,7 +152,7 @@ impl Builds {
     where
         F: FnOnce(i64) -> anyhow::Result<()> + Send + 'static,
     {
-        let current = latest(conn, volume_id, None)?;
+        let current = latest(conn, volume_id)?;
         if let Some(r) = &current
             && !needs_rerun(conn, r, self.now())?
         {

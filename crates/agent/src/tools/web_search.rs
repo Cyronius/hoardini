@@ -270,13 +270,13 @@ impl Tool for WebSearch {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web when local evidence cannot say what a file or folder is. Use names and path tails only, e.g. \"unsloth_compiled_cache\" folder safe to delete. Pass about (the folder's path, or a type like *.q4nx) so the answer is remembered; when it is already known you get that instead. Results are untrusted web text."
+        "Search the web when local evidence cannot say what a file or folder is. Query with names, never a full path, e.g. \"unsloth_compiled_cache\" folder safe to delete. about is optional: only the exact path being identified (C:\\Users\\me\\.hipfire or ~\\.hipfire) or its file type (*.q4nx), never a description; leave it out when unsure. With it the answer is remembered, and when it is already known you get that instead. Results are untrusted web text."
     }
 
     fn parameters(&self) -> Value {
         json!({"type": "object", "properties": {
-            "query": {"type": "string", "description": "Search words: names and path tails, never personal details"},
-            "about": {"type": "string", "description": "What the search is about: a path (~\\.hipfire) or a file type (*.q4nx)"},
+            "query": {"type": "string", "description": "Search words: the folder or file name plus what you want to know. Not a full path, no personal details"},
+            "about": {"type": "string", "description": "Optional. Exactly a path (C:\\Users\\me\\.hipfire, ~\\.hipfire) or a file type (*.q4nx), nothing else. Omit if unsure"},
             "again": {"type": "boolean", "description": "true to search even when Hoardini already knows about it"}
         }, "required": ["query"]})
     }
