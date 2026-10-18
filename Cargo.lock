@@ -1772,7 +1772,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hoardini"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "hoardini-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1812,7 +1812,7 @@ dependencies = [
 
 [[package]]
 name = "hoardini-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures",
  "hoardini-core",
@@ -1829,7 +1829,7 @@ dependencies = [
 
 [[package]]
 name = "hoardini-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1863,7 +1863,7 @@ dependencies = [
 
 [[package]]
 name = "hoardini-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "hoardini-specs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1910,7 +1910,7 @@ dependencies = [
 
 [[package]]
 name = "hoardini-win"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "tempfile",
  "thiserror 2.0.21",
