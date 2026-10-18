@@ -6,3 +6,4 @@ ui/dist/
 *.db
 *.db-wal
 *.db-shm
+dist-rel/
