@@ -18,6 +18,7 @@ interface ReviewState {
   open(): Promise<void>;
   refetch(): Promise<void>;
   runNow(): Promise<void>;
+  changed(): Promise<void>;
   answer(path: string, a: LocationAnswer): Promise<Memory>;
 }
 
@@ -82,6 +83,10 @@ export const useReview = create<ReviewState>((set, get) => {
       } finally {
         set({ running: false });
       }
+    },
+    // Each action already patched the index for the paths it touched, so only the list needs rebuilding.
+    async changed() {
+      await get().runNow();
     },
     async answer(path, a) {
       const m = await routes.answerLocation(path, a);

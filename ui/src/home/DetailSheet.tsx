@@ -5,6 +5,7 @@ import { fileName, humanBytes, shortDate } from "../format";
 import { useReview } from "../review/state";
 import { useStore } from "../store";
 import { SumoSvg } from "../components/Mascot";
+import { ExplorerIcon } from "../components/icons";
 import { Ask, type AskHandle } from "./Ask";
 import { choosable, picked, worth, type CallRow, type Part } from "./groups";
 import { HoldPill } from "./HoldPill";
@@ -39,6 +40,14 @@ function typeLine(rows: TypeRow[], total: number): string | null {
     .join(", ");
 }
 
+function RevealButton({ path }: { path: string }) {
+  return (
+    <button type="button" className="rounded-md p-1 text-faint hover:bg-ink-850 hover:text-paper" title="Show in Explorer" aria-label="Show in Explorer" onClick={() => void routes.reveal(path).catch(() => {})}>
+      <ExplorerIcon />
+    </button>
+  );
+}
+
 function Inside({ path, size, onOpen }: { path: string; size: number; onOpen: (t: Target) => void }) {
   const [kids, setKids] = useState<Children | null>(null);
   useEffect(() => {
@@ -63,10 +72,10 @@ function Inside({ path, size, onOpen }: { path: string; size: number; onOpen: (t
       </div>
       <ul className="grid">
         {rows.map((c) => (
-          <li key={c.path}>
+          <li key={c.path} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 border-t border-line-soft">
             <button
               type="button"
-              className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2.5 border-t border-line-soft py-1.5 text-left text-[length:var(--fs-sm)] hover:text-brass disabled:hover:text-inherit"
+              className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2.5 py-1.5 text-left text-[length:var(--fs-sm)] hover:text-brass disabled:hover:text-inherit"
               disabled={c.kind !== "dir"}
               onClick={() => onOpen({ path: c.path, name: c.name, size: c.size })}
               title={c.kind === "dir" ? `Look inside ${c.name}` : c.path}
@@ -75,6 +84,7 @@ function Inside({ path, size, onOpen }: { path: string; size: number; onOpen: (t
               <span className="tabular-nums text-faint">{Math.round((c.size / total) * 100)}%</span>
               <span className="tabular-nums font-bold text-paper-dim">{humanBytes(c.size)}</span>
             </button>
+            <RevealButton path={c.path} />
           </li>
         ))}
       </ul>
@@ -349,7 +359,7 @@ export function DetailSheet({ row, wide, onClose, onGone }: { row: CallRow; wide
       <AreaBody
         key={target!.path}
         target={target!}
-        area={sub ? null : row.area}
+        area={sub || row.kind === "peek" ? null : row.area}
         onGone={onGone}
         onOpen={(t) => setStack((s) => [...s, t])}
         onFindOut={() => askRef.current?.ask(FIND_OUT)}
@@ -369,9 +379,12 @@ export function DetailSheet({ row, wide, onClose, onGone }: { row: CallRow; wide
           <h3 className="text-[19px] font-extrabold leading-tight [overflow-wrap:anywhere]">{name}</h3>
           <p className="font-bold tabular-nums text-muted">{humanBytes(size)}</p>
           {target && (
-            <p className="mt-0.5 truncate text-[length:var(--fs-xs)] text-faint" title={target.path}>
-              {target.path}
-            </p>
+            <div className="mt-0.5 flex items-center gap-1">
+              <p className="min-w-0 flex-1 truncate text-[length:var(--fs-xs)] text-faint" title={target.path}>
+                {target.path}
+              </p>
+              <RevealButton path={target.path} />
+            </div>
           )}
         </div>
         <button type="button" className="rounded-md p-1 text-muted hover:bg-ink-850 hover:text-paper" aria-label="Close" onClick={onClose}>

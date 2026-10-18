@@ -6,7 +6,7 @@ import { useReview } from "../review/state";
 import { useStore } from "../store";
 import { selectedVolume } from "../components/mascot/girth";
 import { DetailSheet } from "./DetailSheet";
-import { choosable, homeOf, summaryOf, worth, type CallRow, type Group, type GroupId, type Part } from "./groups";
+import { choosable, homeOf, worth, type CallRow, type Group, type GroupId, type Part } from "./groups";
 import { HoldPill } from "./HoldPill";
 import { approveParts, toggleTick } from "./ticks";
 
@@ -51,7 +51,7 @@ function itemLabel(i: ProposalItem): string {
   return i.op?.label ?? (fileName(i.path) || i.path);
 }
 
-function PartItems({ part, live }: { part: Part; live: Proposal }) {
+function PartItems({ part, live, onPeek }: { part: Part; live: Proposal; onPeek: (i: ProposalItem) => void }) {
   const [all, setAll] = useState(false);
   const rows = live.items.filter((i) => i.status === "pending");
   const shown = all ? rows : rows.slice(0, SHOWN);
@@ -79,21 +79,27 @@ function PartItems({ part, live }: { part: Part; live: Proposal }) {
               <span className="block truncate font-semibold" title={i.path}>
                 {itemLabel(i)}
               </span>
+              <span className="block truncate text-[length:var(--fs-xs)] text-faint" title={i.path}>
+                {i.path}
+              </span>
               {i.block_reason ? (
                 <span className="block text-[length:var(--fs-xs)] text-faint">Stays: {i.block_reason}</span>
               ) : (
                 i.reason && <span className="block truncate text-[length:var(--fs-xs)] text-muted">{i.reason}</span>
               )}
             </span>
-            <span className="tabular-nums text-[length:var(--fs-sm)] font-bold text-paper-dim">
-              {i.op && !i.op.estimate_known ? "size unknown" : humanBytes(worth(i))}
-            </span>
+            <button type="button" className="flex items-center gap-2 text-[length:var(--fs-sm)] font-bold text-paper-dim hover:text-brass" aria-label={`Look inside ${itemLabel(i)}`} title={`Look inside ${i.path}`} onClick={() => onPeek(i)}>
+              <span className="tabular-nums">{i.op && !i.op.estimate_known ? "size unknown" : humanBytes(worth(i))}</span>
+              <svg viewBox="0 0 24 24" className="h-4 w-4 text-faint" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                <path d="M9 6l6 6-6 6" />
+              </svg>
+            </button>
           </li>
         ))}
       </ul>
       {rows.length > SHOWN && (
         <button type="button" className="justify-self-start text-[length:var(--fs-sm)] font-bold text-brass hover:underline" onClick={() => setAll((a) => !a)}>
-          {all ? "Show fewer" : `Show all ${rows.length}`}
+          {all ? "Show fewer" : `Show ${rows.length - SHOWN} more`}
         </button>
       )}
     </div>
@@ -105,8 +111,7 @@ function Markers({ ids, children }: { ids: string[]; children: ReactNode }) {
   return ids.reduceRight<ReactNode>((inner, id) => <div data-proposal-id={id}>{inner}</div>, children);
 }
 
-function GroupBlock({ id, title, group, run, onRun }: { id: GroupId; title: string; group: Group; run: Run | undefined; onRun: (r: Run) => void }) {
-  const [open, setOpen] = useState(false);
+function GroupBlock({ id, title, group, run, onRun, onPeek }: { id: GroupId; title: string; group: Group; run: Run | undefined; onRun: (r: Run) => void; onPeek: (i: ProposalItem) => void }) {
   const proposals = useStore((s) => s.proposals);
   const jobs = useStore((s) => s.jobs);
   const mine = (run?.jobs ?? []).map((j) => jobs[j]).filter((j): j is Job => !!j);
@@ -116,7 +121,9 @@ function GroupBlock({ id, title, group, run, onRun }: { id: GroupId; title: stri
   const total = mine.reduce((a, j) => a + j.progress.total_bytes, 0);
   const moved = mine.reduce((a, j) => a + j.progress.done_bytes, 0);
   const failed = mine.filter((j) => j.status === "failed");
-  const summary = summaryOf(group);
+  useEffect(() => {
+    if (done) void useReview.getState().changed();
+  }, [done]);
   const go = async () => {
     const r = await approveParts(group.parts);
     onRun(r);
@@ -156,17 +163,9 @@ function GroupBlock({ id, title, group, run, onRun }: { id: GroupId; title: stri
             {action}
           </div>
         </div>
-        {group.parts.length > 0 && (
-          <p className="text-[length:var(--fs-sm)] text-muted">
-            {summary} ·{" "}
-            <button type="button" className="font-bold text-brass hover:underline" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-              {open ? "Hide" : "Show"}
-            </button>
-          </p>
-        )}
         {(run?.errors.length ?? 0) > 0 && <p className="text-[length:var(--fs-sm)] text-err">{run!.errors[0]}</p>}
         {done && failed.length > 0 && <p className="text-[length:var(--fs-sm)] text-err">{failed[0]!.error ?? "Part of it failed."}</p>}
-        {open && group.parts.map((p) => <PartItems key={p.proposal.id} part={p} live={proposals[p.proposal.id] ?? p.proposal} />)}
+        {group.parts.map((p) => <PartItems key={p.proposal.id} part={p} live={proposals[p.proposal.id] ?? p.proposal} onPeek={onPeek} />)}
       </section>
     </Markers>
   );
@@ -275,6 +274,7 @@ export function Home() {
   const [gone, setGone] = useState<Set<string>>(() => new Set());
   const [runs, setRuns] = useState<Partial<Record<GroupId, Run>>>({});
   const [sel, setSel] = useState<string | null>(null);
+  const [peek, setPeek] = useState<CallRow | null>(null);
   const wide = useWide();
   const reviewId = main?.review.id;
   // A newer review lists what is left, so finished runs and acted paths start over with it.
@@ -287,10 +287,19 @@ export function Home() {
   useEffect(() => {
     useStore.setState({ homeClean: clean });
   }, [clean]);
-  const row = home?.calls.find((c) => c.key === sel) ?? null;
+  const row = peek ?? home?.calls.find((c) => c.key === sel) ?? null;
   useEffect(() => {
     if (sel && home && !row) setSel(null);
   }, [sel, home, row]);
+
+  const look = (i: ProposalItem) => {
+    setSel(null);
+    setPeek({ kind: "peek", key: `peek:${i.id}`, name: itemLabel(i), desc: "", bytes: i.alloc, path: i.path });
+  };
+  const openCall = (key: string) => {
+    setPeek(null);
+    setSel(key);
+  };
 
   let body: ReactNode;
   if (status === "no-index") {
@@ -333,8 +342,8 @@ export function Home() {
           </h1>
           {home.freeable > 0 && home.calls.length > 0 && <p className="text-paper-dim">And {things(home.calls.length)} waiting for your call.</p>}
         </div>
-        {showJunk && <GroupBlock id="junk" title="Junk you won't miss" group={home.junk} run={runs.junk} onRun={(r) => setRuns((x) => ({ ...x, junk: r }))} />}
-        {showKeep && <GroupBlock id="keep" title="Free space, keep the files" group={home.keep} run={runs.keep} onRun={(r) => setRuns((x) => ({ ...x, keep: r }))} />}
+        {showJunk && <GroupBlock id="junk" title="Junk you won't miss" group={home.junk} run={runs.junk} onRun={(r) => setRuns((x) => ({ ...x, junk: r }))} onPeek={look} />}
+        {showKeep && <GroupBlock id="keep" title="Free space, keep the files" group={home.keep} run={runs.keep} onRun={(r) => setRuns((x) => ({ ...x, keep: r }))} onPeek={look} />}
         {home.calls.length > 0 && (
           <section aria-label="Your call" className="grid gap-1.5">
             <div className="flex items-baseline gap-3">
@@ -343,7 +352,7 @@ export function Home() {
                 {home.calls.length} big {home.calls.length === 1 ? "thing" : "things"}
               </span>
             </div>
-            <CallRows rows={home.calls} selected={sel} onOpen={setSel} />
+            <CallRows rows={home.calls} selected={sel} onOpen={openCall} />
           </section>
         )}
         <Kept kept={home.kept} />
@@ -356,8 +365,13 @@ export function Home() {
       key={row.key}
       row={row}
       wide={wide}
-      onClose={() => setSel(null)}
+      onClose={() => {
+        setSel(null);
+        setPeek(null);
+      }}
       onGone={(paths) => {
+        setPeek(null);
+        void useReview.getState().changed();
         setGone((g) => new Set([...g, ...paths.map((p) => p.toLowerCase())]));
         setSel(null);
       }}

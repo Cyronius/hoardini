@@ -129,6 +129,7 @@ export const routes = {
   installBuiltin: (model_id: string) => api<T.Job>("/api/builtin/install", { body: { model_id } }),
   removeBuiltin: () => del<{ ok: true; freed_bytes: number }>("/api/builtin"),
 
+  reveal: (path: string) => api<{ ok: boolean }>("/api/reveal", { method: "POST", body: JSON.stringify({ path }) }),
   children: (path: string, limit = 50) => api<T.Children>(`/api/index/children?path=${enc(path)}&limit=${limit}`),
   types: (path: string) => api<T.TypeRow[]>(`/api/index/types?path=${enc(path)}`),
   forgetAnswer: (path: string) => api<{ forgot: number }>("/api/locations/forget", { body: { path } }),

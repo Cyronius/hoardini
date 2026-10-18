@@ -39,11 +39,25 @@
   --primary: #d9604c;
   --primary-foreground: #f6ece2;
   --radius: 12px;
-  --fs-xs: 11px;
-  --fs-sm: 12px;
-  --fs-base: 13px;
-  --fs-md: 14px;
+  --fs-xs: 13px;
+  --fs-sm: 14px;
+  --fs-base: 15px;
+  --fs-md: 16px;
   color-scheme: light;
+}
+
+:root[data-text-size="small"] {
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 15px;
+}
+
+:root[data-text-size="large"] {
+  --fs-xs: 15px;
+  --fs-sm: 16px;
+  --fs-base: 17px;
+  --fs-md: 18px;
 }
 
 @theme {

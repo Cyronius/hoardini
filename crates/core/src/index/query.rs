@@ -418,7 +418,24 @@ fn like_escape(s: &str) -> String {
     out
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FileOrder {
+    #[default]
+    Size,
+    Oldest,
+    Newest,
+}
+
 pub fn top_files(conn: &Connection, q: &TopFilesQuery) -> Result<Ranked<FileItem>> {
+    top_files_ordered(conn, q, FileOrder::Size)
+}
+
+// Oldest and newest go by modified time; files with no recorded time sort last either way.
+pub fn top_files_ordered(
+    conn: &Connection,
+    q: &TopFilesQuery,
+    order: FileOrder,
+) -> Result<Ranked<FileItem>> {
     let mut args: Vec<Value> = Vec::new();
     let mut prefix = String::new();
     let mut filters = vec![
@@ -465,9 +482,14 @@ pub fn top_files(conn: &Connection, q: &TopFilesQuery) -> Result<Ranked<FileItem
         params_from_iter(args.iter()),
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    let by = match order {
+        FileOrder::Size => "f.alloc DESC, f.id",
+        FileOrder::Oldest => "f.mtime IS NULL, f.mtime ASC, f.id",
+        FileOrder::Newest => "f.mtime IS NULL, f.mtime DESC, f.id",
+    };
     let mut st = conn.prepare(&format!(
         "{prefix}SELECT f.parent_id, f.name, f.alloc, f.logical, f.mtime, f.atime, f.ctime, f.flags \
-         FROM node f WHERE {wh} ORDER BY f.alloc DESC, f.id LIMIT {limit}"
+         FROM node f WHERE {wh} ORDER BY {by} LIMIT {limit}"
     ))?;
     let rows = st
         .query_map(params_from_iter(args.iter()), |r| {
@@ -505,6 +527,24 @@ pub fn top_files(conn: &Connection, q: &TopFilesQuery) -> Result<Ranked<FileItem
         more_bytes: to_u64(total_bytes).saturating_sub(shown_bytes),
         items,
     })
+}
+
+// How many files sit under a folder and the oldest and newest modified time among them.
+pub fn file_dates(conn: &Connection, under: &str) -> Result<(u64, Option<i64>, Option<i64>)> {
+    let prefix = match scope_of(conn, Some(under))? {
+        Scope::Subtree(id) => format!(
+            "WITH RECURSIVE d(id) AS (SELECT {id} UNION ALL              SELECT n.id FROM node n JOIN d ON n.parent_id = d.id WHERE +n.kind = 0) "
+        ),
+        _ => return Ok((0, None, None)),
+    };
+    let (n, lo, hi): (i64, Option<i64>, Option<i64>) = conn.query_row(
+        &format!(
+            "{prefix}SELECT COUNT(*), MIN(f.mtime), MAX(f.mtime) FROM node f              WHERE f.kind = 1 AND f.parent_id IN (SELECT id FROM d)"
+        ),
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    Ok((to_u64(n), lo, hi))
 }
 
 pub fn top_dirs(

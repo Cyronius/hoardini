@@ -258,4 +258,17 @@ Test: `specs/srv/tests/srv.rs`.
 
 ## Retired
 
+### SRV-SHOW-IN-EXPLORER: Show in Explorer
+**Applies to:** hoardini-server
+**Verification:** test
+
+`POST /api/reveal {path}` shall run `explorer.exe /select,"<path>"` (the path quoted after the comma) and answer `{ok: true}` without waiting for Explorer. `path` may start with `~`. It starts nothing and refuses: a missing or empty path, a path that is not an absolute drive path, contains `"`, or has a `.` or `..` component (400); a path that is not a watched drive (INDEX-VOLUMES) or under one (403); a path that does not exist (404). The refusals are tested; opening Explorer is checked by hand.
+
+**Acceptance criteria:**
+- With `indexed_volumes` set to one scratch folder: `{}`, `{path: ""}` and `{path: "relative\x.txt"}` are 400; an existing file in another folder is 403; `<root>\..\<other>\x.txt` is 400; `<root>\missing.txt` is 404; every refusal is a JSON `error`.
+
+**Verification (manual, Explorer):**
+1. Start `hoardini serve --port 72xx --token dev --no-refresh` with `HOARDINI_DATA_DIR` and `--db` in a scratch folder, and watch a scratch folder holding `a b\c.txt` (`PUT /api/volumes`).
+2. `POST /api/reveal?token=dev` with `{"path": "<folder>\a b\c.txt"}`: Explorer opens `a b` with `c.txt` selected, and the answer is `{"ok":true}`.
+
 These IDs are not reused. Retired 2026-10-16 with the chat and the old cards (simpler-model plan): SRV-COPY-CHECKS, SRV-HISTORY-RANGE, SRV-REVEAL, SRV-LEARNED, SRV-RUN-CANCEL. Retired earlier the same day with Explore: SRV-INDEX-MAP, SRV-EXPLORE-FOCUS.

@@ -83,6 +83,7 @@ fn entries() -> Vec<Entry> {
         get_("/api/status", status::get_status),
         get_("/api/status/stream", stream::status_stream),
         post_("/api/index/refresh", index_refresh),
+        post_("/api/reveal", tree::reveal),
         post_("/api/presence", presence),
         get_("/api/volumes", volumes::list),
         put_("/api/volumes", volumes::put),

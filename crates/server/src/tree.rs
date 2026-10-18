@@ -1,11 +1,13 @@
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Query, State};
-use hoardini_core::index::{self, NodeKind, normalize_path};
+use axum::http::StatusCode;
+use hoardini_core::index::{self, NodeKind, is_ancestor_path, normalize_path};
 use hoardini_core::paths::{expand, redact};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::state::{ApiError, ApiResult, AppState, blocking};
+use crate::state::{ApiError, ApiResult, AppState, blocking, parse};
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 1000;
@@ -71,4 +73,52 @@ pub async fn children(State(s): State<AppState>, Query(q): Query<ChildrenQuery>)
         })))
     })
     .await
+}
+
+#[derive(Deserialize)]
+pub struct RevealBody {
+    path: Option<String>,
+}
+
+pub async fn reveal(State(s): State<AppState>, body: Bytes) -> ApiResult {
+    let b: RevealBody = parse(&body)?;
+    let path = absolute(b.path.as_deref())?;
+    blocking(move || {
+        let watched = index::watched(&s.db.conn()?);
+        let inside = watched
+            .iter()
+            .any(|root| root.eq_ignore_ascii_case(&path) || is_ancestor_path(root, &path));
+        if !inside {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                format!("{} is not on a watched drive", redact(&path)),
+            ));
+        }
+        if std::fs::symlink_metadata(&path).is_err() {
+            return Err(ApiError::not_found(&redact(&path)));
+        }
+        open_explorer(&path).map_err(|e| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not start Explorer: {e}"),
+            )
+        })?;
+        Ok(Json(json!({"ok": true})))
+    })
+    .await
+}
+
+// Explorer wants the path quoted after the comma; std's own quoting would wrap the whole switch.
+#[cfg(windows)]
+fn open_explorer(path: &str) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("explorer.exe")
+        .raw_arg(format!("/select,\"{path}\""))
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(not(windows))]
+fn open_explorer(_path: &str) -> std::io::Result<()> {
+    Err(std::io::Error::other("Explorer exists only on Windows"))
 }

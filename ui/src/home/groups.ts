@@ -23,17 +23,6 @@ export const PART_NAME: Record<string, string> = {
   archive: "Old photos, videos and documents",
 };
 
-// How each part reads inside the group's one-line summary.
-export const PART_SHORT: Record<string, string> = {
-  temp: "temporary files",
-  caches: "app and browser caches",
-  build: "build files",
-  windows: "Windows leftovers",
-  disposable: "folders you said can go",
-  compress: "shrink in place",
-  online_only: "keep in the cloud only",
-};
-
 export const PART_NOTE: Record<string, string> = {
   temp: "Leftovers from Windows and your apps, untouched for a day",
   caches: "Your apps and browsers download these again as needed",
@@ -54,7 +43,8 @@ type RowBase = { key: string; name: string; desc: string; bytes: number };
 export type CallRow =
   | (RowBase & { kind: "area"; path: string; area: ReviewArea })
   | (RowBase & { kind: "app"; path: string; app: RarelyUsedApp })
-  | (RowBase & { kind: "part"; part: Part });
+  | (RowBase & { kind: "part"; part: Part })
+  | (RowBase & { kind: "peek"; path: string });
 
 export type Home = { junk: Group; keep: Group; calls: CallRow[]; kept: ReviewArea[]; freeable: number };
 
@@ -85,6 +75,12 @@ function group(id: GroupId, parts: Part[]): Group {
   };
 }
 
+// Same-named rows (three model.q4nx files) need the folder they live in to be told apart.
+function parentTail(p: string): string {
+  const parts = p.split(/[\\/]/).filter(Boolean).slice(0, -1);
+  return parts.length ? parts.slice(-2).join("\\") : p;
+}
+
 function areaRow(a: ReviewArea): CallRow {
   const name = fileName(a.path) || a.path;
   const desc = a.unknown ? "Hoardini doesn't know what this is yet" : capitalized(a.label);
@@ -103,19 +99,15 @@ function partRow(x: Part): CallRow {
   return { kind: "part", key: `part:${x.card}`, name: x.name, desc: `${n} ${n === 1 ? "item" : "items"} · ${x.note}`, bytes, part: x };
 }
 
-export function summaryOf(g: Group): string {
-  const names = g.parts.map((p) => PART_SHORT[p.card] ?? p.name.toLowerCase());
-  const text = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "");
-  return capitalized(text);
-}
-
 // `gone` holds paths acted on this session, which a stored review still lists until it is rebuilt.
 export function homeOf(view: ReviewView, proposals: Record<string, Proposal | undefined>, gone: ReadonlySet<string> = new Set()): Home {
   const byCard = new Map(view.cards.map((c) => [c.card, proposals[c.proposal_id] ?? view.proposals[c.proposal_id]]));
-  const parts = (ids: readonly string[]) => ids.map((id) => part(id, byCard.get(id))).filter((x): x is Part => !!x);
+  const isGone = (p: string) => [...gone].some((g) => samePath(g, p) || isUnder(g, p));
+  // A stored proposal still lists what was acted on this session until the rebuild lands.
+  const live = (p: Proposal | undefined) => (p && gone.size ? { ...p, items: p.items.filter((i) => !isGone(i.path)) } : p);
+  const parts = (ids: readonly string[]) => ids.map((id) => part(id, live(byCard.get(id)))).filter((x): x is Part => !!x);
   const junk = group("junk", parts(GROUP_CARDS.junk));
   const keep = group("keep", parts(GROUP_CARDS.keep));
-  const isGone = (p: string) => [...gone].some((g) => samePath(g, p) || isUnder(g, p));
 
   const kept: ReviewArea[] = [];
   const calls: CallRow[] = [];
@@ -129,5 +121,10 @@ export function homeOf(view: ReviewView, proposals: Record<string, Proposal | un
   for (const a of view.apps ?? []) if (!isGone(a.path)) calls.push(appRow(a));
   for (const x of parts(CALL_CARDS)) calls.push(partRow(x));
   calls.sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
+  const seen = new Map<string, number>();
+  for (const r of calls) seen.set(r.name.toLowerCase(), (seen.get(r.name.toLowerCase()) ?? 0) + 1);
+  for (const r of calls) {
+    if ("path" in r && r.path && (seen.get(r.name.toLowerCase()) ?? 0) > 1) r.desc = `${r.desc} · in ${parentTail(r.path)}`;
+  }
   return { junk, keep, calls, kept, freeable: junk.bytes + keep.bytes };
 }

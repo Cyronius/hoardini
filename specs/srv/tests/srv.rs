@@ -2294,3 +2294,42 @@ async fn a_cards_copy_note_and_dropped_paths_show_the_profile_as_tilde() {
     assert!(!v.to_string().to_lowercase().contains(&escaped), "{v}");
     let _ = f.h.shutdown.send(());
 }
+
+
+// Traces: SRV-SHOW-IN-EXPLORER
+#[tokio::test(flavor = "multi_thread")]
+async fn reveal_refuses_paths_off_the_watched_drives_and_paths_that_do_not_exist() {
+    let f = Fixture::new().await;
+    let watched = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("x.txt"), b"x").unwrap();
+    let root = hoardini_core::index::normalize_path(&watched.path().to_string_lossy());
+    let other = hoardini_core::index::normalize_path(&outside.path().to_string_lossy());
+    {
+        let db = hoardini_core::store::Db::open(f.dir.path().join("h.db")).unwrap();
+        hoardini_core::store::set_meta(
+            &db.conn().unwrap(),
+            "indexed_volumes",
+            &serde_json::to_string(&[&root]).unwrap(),
+        )
+        .unwrap();
+    }
+    let other_name = other.rsplit('\\').next().unwrap();
+    let cases = [
+        (json!({}), 400),
+        (json!({"path": ""}), 400),
+        (json!({"path": r"relative\x.txt"}), 400),
+        (json!({"path": format!(r"{other}\x.txt")}), 403),
+        (
+            json!({"path": format!(r"{root}\..\{other_name}\x.txt")}),
+            400,
+        ),
+        (json!({"path": format!(r"{root}\missing.txt")}), 404),
+    ];
+    for (body, want) in cases {
+        let (st, v) = f.call("POST", "/api/reveal", Some(body.clone())).await;
+        assert_eq!(st, want, "{body}: {v}");
+        assert!(v["error"].is_string(), "{v}");
+    }
+    let _ = f.h.shutdown.send(());
+}

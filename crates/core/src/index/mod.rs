@@ -20,9 +20,9 @@ pub use journal::{
 pub use lister::{DirLister, WinLister};
 pub use patch::{patch_removed, patch_rescan};
 pub use query::{
-    ChildRow, DirItem, ExtMix, ExtShare, FileItem, IndexStatus, NodeInfo, NodeKind, Ranked,
-    TopFilesQuery, child_rows, children, compact_summary_for_prompt, ext_mix, humanize_age,
-    index_status, node_by_path, node_id_by_path, path_of, summary_for_prompt, top_dirs, top_files,
+    ChildRow, DirItem, ExtMix, ExtShare, FileItem, FileOrder, IndexStatus, NodeInfo, NodeKind, Ranked,
+    TopFilesQuery, child_rows, children, compact_summary_for_prompt, ext_mix, file_dates, humanize_age,
+    index_status, node_by_path, node_id_by_path, path_of, summary_for_prompt, top_dirs, top_files, top_files_ordered,
 };
 pub use verify::{SnapRow, snapshot, verify_totals};
 pub use volumes::{

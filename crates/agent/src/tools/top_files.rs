@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use hoardini_core::index::{TopFilesQuery, top_files};
+use hoardini_core::index::{FileOrder, TopFilesQuery, top_files_ordered};
 use hoardini_core::paths::humanize_bytes;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,6 +24,8 @@ struct Args {
     not_used_for: Option<u32>,
     #[serde(default, deserialize_with = "opt_u64")]
     limit: Option<u64>,
+    #[serde(default, deserialize_with = "opt_string")]
+    order: Option<String>,
 }
 
 impl Tool for TopFiles {
@@ -32,7 +34,7 @@ impl Tool for TopFiles {
     }
 
     fn description(&self) -> &'static str {
-        "Largest files from the index, biggest first, with modified and last-access dates."
+        "Files from the index with modified and last-access dates: biggest first by default, or oldest or newest first by modified date. Use it with `under` to look inside a folder."
     }
 
     fn parameters(&self) -> Value {
@@ -41,7 +43,8 @@ impl Tool for TopFiles {
             "min_size": {"type": "string", "description": "Smallest size to list, e.g. \"500 MB\""},
             "ext": {"type": "string", "description": "Extensions, comma separated, e.g. \"gguf,safetensors\""},
             "not_used_for": {"type": "integer", "description": "Only files neither modified nor accessed for this many days"},
-            "limit": {"type": "integer", "description": "How many to list (default 15, max 50)"}
+            "limit": {"type": "integer", "description": "How many to list (default 15, max 50)"},
+            "order": {"type": "string", "enum": ["size", "oldest", "newest"], "description": "size (default, biggest first), oldest or newest by modified date"}
         }})
     }
 
@@ -60,9 +63,19 @@ impl Tool for TopFiles {
             not_used_for_days: a.not_used_for,
             limit: limit(a.limit, 15),
         };
-        let r = top_files(&conn, &q).map_err(failed)?;
+        let order = match a.order.as_deref().map(str::to_ascii_lowercase).as_deref() {
+            Some("oldest") => FileOrder::Oldest,
+            Some("newest") => FileOrder::Newest,
+            _ => FileOrder::Size,
+        };
+        let r = top_files_ordered(&conn, &q, order).map_err(failed)?;
         let mut out = format!(
-            "Largest files under {}",
+            "{} files under {}",
+            match order {
+                FileOrder::Size => "Largest",
+                FileOrder::Oldest => "Oldest (by modified date)",
+                FileOrder::Newest => "Newest (by modified date)",
+            },
             under.as_deref().unwrap_or("all indexed volumes")
         );
         let mut filters = Vec::new();

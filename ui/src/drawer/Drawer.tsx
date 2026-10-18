@@ -10,6 +10,7 @@ import { useReview } from "../review/state";
 import { useStore, type DrawerTab } from "../store";
 import { DestinationsTab } from "./DestinationsTab";
 import { LookPicker } from "./LookPicker";
+import { TextSizePicker } from "./TextSizePicker";
 import { MemoryTab } from "./MemoryTab";
 import { ProvidersTab } from "./ProvidersTab";
 import { SearchTab } from "./SearchTab";
@@ -113,6 +114,10 @@ function Main() {
       <div className="grid gap-2 border-t border-line-soft py-3">
         <div className="font-extrabold">Look</div>
         <LookPicker />
+      </div>
+      <div className="grid gap-2 border-t border-line-soft py-3">
+        <div className="font-extrabold">Text size</div>
+        <TextSizePicker />
       </div>
       <div className="mt-4 border-t border-line-soft pt-3">
         <div className="mb-1 text-[length:var(--fs-xs)] font-bold uppercase tracking-wide text-faint">Advanced</div>

@@ -2,6 +2,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 use hoardini_core::evidence::{Evidence, PathKind, inspect};
+use hoardini_core::index::file_dates;
 use hoardini_core::paths::humanize_bytes;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -175,9 +176,23 @@ impl Tool for Inspect {
         if ev.kind == PathKind::Missing {
             return Ok(Outcome::text(format!("{path} does not exist on disk.")));
         }
+        let mut body = render(&ev);
+        if ev.kind == PathKind::Dir
+            && let Ok(conn) = ctx.db.conn()
+            && let Ok((n, Some(lo), Some(hi))) = file_dates(&conn, &path)
+        {
+            let _ = writeln!(
+                body,
+                "Files inside: {} files, oldest modified {}, newest modified {} (a folder's own date is not its files' dates; use top_files with under and order to list them, top_dirs to list subfolders)",
+                digits(n),
+                date(Some(lo)),
+                date(Some(hi))
+            );
+        }
         Ok(Outcome::text(format!(
-            "Evidence for {path}:\n{}",
-            untrusted("evidence from file headers, the registry and saved notes", &render(&ev))
+            "Evidence for {path}:
+{}",
+            untrusted("evidence from file headers, the registry and saved notes", &body)
         )))
     }
 }
