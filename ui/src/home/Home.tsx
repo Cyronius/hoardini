@@ -63,7 +63,7 @@ function PartItems({ part, live, onPeek }: { part: Part; live: Proposal; onPeek:
       </div>
       <ul className="grid">
         {shown.map((i) => (
-          <li key={i.id} className="grid grid-cols-[20px_minmax(0,1fr)_auto] items-start gap-x-2.5 border-t border-line-soft py-1.5">
+          <li key={i.id} className="grid grid-cols-[20px_minmax(0,1fr)] items-start gap-x-2.5 border-t border-line-soft py-1.5">
             {choosable(i) ? (
               <input
                 type="checkbox"
@@ -75,24 +75,26 @@ function PartItems({ part, live, onPeek }: { part: Part; live: Proposal; onPeek:
             ) : (
               <span />
             )}
-            <span className="min-w-0">
-              <span className="block truncate font-semibold" title={i.path}>
-                {itemLabel(i)}
+            <button type="button" className="group grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2.5 rounded-md text-left hover:bg-ink-850" aria-label={`Look inside ${itemLabel(i)}`} title={`Look inside ${i.path}`} onClick={() => onPeek(i)}>
+              <span className="min-w-0">
+                <span className="block truncate font-semibold" title={i.path}>
+                  {itemLabel(i)}
+                </span>
+                <span className="block truncate text-[length:var(--fs-xs)] text-faint" title={i.path}>
+                  {i.path}
+                </span>
+                {i.block_reason ? (
+                  <span className="block text-[length:var(--fs-xs)] text-faint">Stays: {i.block_reason}</span>
+                ) : (
+                  i.reason && <span className="block truncate text-[length:var(--fs-xs)] text-muted">{i.reason}</span>
+                )}
               </span>
-              <span className="block truncate text-[length:var(--fs-xs)] text-faint" title={i.path}>
-                {i.path}
+              <span className="flex items-center gap-2 text-[length:var(--fs-sm)] font-bold text-paper-dim group-hover:text-brass">
+                <span className="tabular-nums">{i.op && !i.op.estimate_known ? "size unknown" : humanBytes(worth(i))}</span>
+                <svg viewBox="0 0 24 24" className="h-4 w-4 text-faint group-hover:text-brass" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                  <path d="M9 6l6 6-6 6" />
+                </svg>
               </span>
-              {i.block_reason ? (
-                <span className="block text-[length:var(--fs-xs)] text-faint">Stays: {i.block_reason}</span>
-              ) : (
-                i.reason && <span className="block truncate text-[length:var(--fs-xs)] text-muted">{i.reason}</span>
-              )}
-            </span>
-            <button type="button" className="flex items-center gap-2 text-[length:var(--fs-sm)] font-bold text-paper-dim hover:text-brass" aria-label={`Look inside ${itemLabel(i)}`} title={`Look inside ${i.path}`} onClick={() => onPeek(i)}>
-              <span className="tabular-nums">{i.op && !i.op.estimate_known ? "size unknown" : humanBytes(worth(i))}</span>
-              <svg viewBox="0 0 24 24" className="h-4 w-4 text-faint" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
-                <path d="M9 6l6 6-6 6" />
-              </svg>
             </button>
           </li>
         ))}

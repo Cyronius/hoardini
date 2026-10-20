@@ -18,7 +18,18 @@ const VERB: Record<ActKind, [string, string]> = {
   online_only: ["Freeing", "Freed"],
   archive: ["Moving", "Moved"],
 };
-const FIND_OUT = "What is this? Look inside it, and search the web if that helps. Then tell me whether to keep it, delete it, or move it elsewhere.";
+const CANT: Record<ActKind, string> = { delete: "delete", compress: "shrink", online_only: "free", archive: "move" };
+
+// pid 4 is Windows itself, which holds a virtual disk open while WSL or Docker runs.
+export function explainBlock(reason: string): { say: string } {
+  const m = /^Open in (.+?) \(pid (\d+)\)/.exec(reason);
+  if (!m) return { say: reason };
+  const [, app, pid] = m;
+  if (pid === "4" || app === "System") return { say: "Windows has a file in here open. WSL or Docker is probably running. Shut it down (wsl --shutdown), then try again." };
+  return { say: `${app} has a file in here open. Close it, then try again.` };
+}
+
+const FIND_OUT ="What is this? Look inside it, and search the web if that helps. Then tell me whether to keep it, delete it, or move it elsewhere.";
 
 type Target = { path: string; name: string; size: number };
 type Outcome = { kind: ActKind; result: ActResult | null; error: string | null };
@@ -40,10 +51,16 @@ function typeLine(rows: TypeRow[], total: number): string | null {
     .join(", ");
 }
 
-function RevealButton({ path }: { path: string }) {
-  return (
-    <button type="button" className="rounded-md p-1 text-faint hover:bg-ink-850 hover:text-paper" title="Show in Explorer" aria-label="Show in Explorer" onClick={() => void routes.reveal(path).catch(() => {})}>
-      <ExplorerIcon />
+function RevealButton({ path, label }: { path: string; label?: boolean }) {
+  const open = () => void routes.reveal(path).catch(() => {});
+  return label ? (
+    <button type="button" className="inline-flex items-center gap-1.5 rounded-full bg-brass px-3 py-1 text-[length:var(--fs-sm)] font-extrabold text-on-accent hover:brightness-110" onClick={open}>
+      <ExplorerIcon size={16} />
+      Show in Explorer
+    </button>
+  ) : (
+    <button type="button" className="rounded-md bg-brass/15 p-1.5 text-brass hover:bg-brass hover:text-on-accent" title="Show in Explorer" aria-label="Show in Explorer" onClick={open}>
+      <ExplorerIcon size={16} />
     </button>
   );
 }
@@ -117,12 +134,18 @@ function Result({ o, onDone }: { o: Outcome; onDone: () => void }) {
       {job?.status === "done" && <p className="font-extrabold">{o.kind === "delete" || o.kind === "online_only" ? `${past}. Freed ${humanBytes(job.freed_bytes)}.` : `${past}.`}</p>}
       {job?.status === "failed" && <p className="text-err">{job.error ?? "It didn't work."}</p>}
       {blocked.length > 0 && (
-        <div className="text-muted">
-          <p className="font-semibold text-paper-dim">{o.result?.job_id ? "Some of it stayed:" : "Nothing changed:"}</p>
-          <ul className="ml-4 list-disc">
-            {blocked.slice(0, 4).map((b) => (
-              <li key={b.path}>{b.reason}</li>
-            ))}
+        <div role="alert" className="grid gap-1 rounded-xl border border-err/50 bg-err/10 px-3 py-2">
+          <p className="font-extrabold text-err">{o.result?.job_id ? "Some of it stayed." : `Couldn't ${CANT[o.kind]} this.`}</p>
+          <ul className="grid gap-1.5">
+            {blocked.slice(0, 4).map((b) => {
+              const why = explainBlock(b.reason);
+              return (
+                <li key={b.path}>
+                  <p className="text-paper">{why.say}</p>
+                  {why.say !== b.reason && <p className="text-[length:var(--fs-xs)] text-faint">{b.reason}</p>}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
@@ -288,7 +311,7 @@ function AreaBody({
       )}
       {outcome && !started && !outcome.error && (
         <button type="button" className="justify-self-start text-[length:var(--fs-sm)] font-bold text-brass hover:underline" onClick={() => setOutcome(null)}>
-          Back
+          {(outcome.result?.blocked ?? []).length > 0 ? "Try again" : "Back"}
         </button>
       )}
     </>
@@ -379,11 +402,13 @@ export function DetailSheet({ row, wide, onClose, onGone }: { row: CallRow; wide
           <h3 className="text-[19px] font-extrabold leading-tight [overflow-wrap:anywhere]">{name}</h3>
           <p className="font-bold tabular-nums text-muted">{humanBytes(size)}</p>
           {target && (
-            <div className="mt-0.5 flex items-center gap-1">
-              <p className="min-w-0 flex-1 truncate text-[length:var(--fs-xs)] text-faint" title={target.path}>
+            <div className="mt-0.5 grid gap-2">
+              <p className="min-w-0 truncate text-[length:var(--fs-xs)] text-faint" title={target.path}>
                 {target.path}
               </p>
-              <RevealButton path={target.path} />
+              <div>
+                <RevealButton path={target.path} label />
+              </div>
             </div>
           )}
         </div>
