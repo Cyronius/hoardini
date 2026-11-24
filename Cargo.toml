@@ -6,7 +6,7 @@ default-members = ["crates/win", "crates/core", "crates/agent", "crates/server",
 [workspace.package]
 version = "0.1.2"
 edition = "2024"
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 rust-version = "1.92"
 
 [profile.dev]

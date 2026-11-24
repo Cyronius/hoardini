@@ -74,3 +74,14 @@ cd ui; bun install; bun run mock
 | `specs` | Requirements and their tests, one folder per feature |
 
 Behavior is defined in `specs/<feature>/spec.md`; each requirement has an ID and says whether it is checked by a test or by a manual procedure. Run the spec tests with `cargo test -p hoardini-specs` and the vitest tests with `bun run test` in `specs/`.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion in this work, as defined in the Apache-2.0 license, is dual licensed as above, without any additional terms or conditions.
