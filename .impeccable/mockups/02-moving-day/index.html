@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hoardini · Sort a full drive into three boxes</title>
+<meta name="description" content="Hoardini works out what every big folder and file on your Windows PC is, then sorts it: junk you won't miss, space you can free without losing a file, and the few things only you can judge. Free for Windows 10 and 11.">
+<meta name="theme-color" content="#241a12">
+<link rel="icon" href="../assets/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..900&family=Big+Shoulders+Stencil+Display:wght@700;800;900&family=Kalam:wght@700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg class="defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 3v14M5 11l7 7 7-7M4 21h16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="square"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 19 19 5M8 5h11v11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="square"/></symbol>
+  <symbol id="m-up" viewBox="0 0 48 48"><path d="M15 38V12M8 19l7-8 7 8M33 38V12M26 19l7-8 7 8M6 42h36" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="square"/></symbol>
+  <symbol id="m-hand" viewBox="0 0 48 48"><path d="M17 26V10a3 3 0 0 1 6 0v13M23 22v-3a3 3 0 0 1 6 0v4M29 23v-1a3 3 0 0 1 6 0v3M35 25a3 3 0 0 1 6 0v6c0 8-5 13-12 13h-3c-5 0-8-3-11-7l-6-8a3 3 0 0 1 5-4l4 4" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+  <symbol id="m-bin" viewBox="0 0 48 48"><path d="M12 14h24M20 14v-4h8v4M15 14l2 26h14l2-26M21 20v14M27 20v14" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M6 42 42 6" stroke="currentColor" stroke-width="3.4"/></symbol>
+  <symbol id="m-glass" viewBox="0 0 48 48"><path d="M15 6h18l-1 13a8 8 0 0 1-16 0zM24 27v13M16 42h16" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M22 8l3 6-3 4" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="m-umbrella" viewBox="0 0 48 48"><path d="M6 24a18 18 0 0 1 36 0zM24 6V3M24 24v14a4 4 0 0 1-8 0" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M14 36v4M34 32v4M10 30v3M38 38v3" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></symbol>
+  <symbol id="m-pc" viewBox="0 0 48 48"><path d="M6 9h36v24H6zM18 33l-2 7h16l-2-7M12 40h24" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></symbol>
+  <symbol id="m-cloud" viewBox="0 0 48 48"><path d="M14 36a8 8 0 0 1-1-16 11 11 0 0 1 21-3 9 9 0 0 1 1 19z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></symbol>
+  <symbol id="m-key" viewBox="0 0 48 48"><circle cx="15" cy="24" r="8" fill="none" stroke="currentColor" stroke-width="3"/><path d="M23 24h19M36 24v7M42 24v5" fill="none" stroke="currentColor" stroke-width="3"/></symbol>
+</svg>
+
+<a class="skip" href="#main">Skip to the page</a>
+
+<header class="bar">
+  <a class="brand" href="#top" aria-label="Hoardini, home">
+    <img src="../assets/icon.svg" alt="" width="36" height="36">
+    <span>Hoardini</span>
+  </a>
+  <nav aria-label="Page sections">
+    <a href="#boxes">How he sorts</a>
+    <a href="#safe">Is it safe?</a>
+    <a href="#brains">Brains</a>
+    <a href="https://github.com/Cyronius/hoardini">Source</a>
+  </nav>
+  <a class="tape-btn tape-btn--small" href="https://github.com/Cyronius/hoardini/releases/download/v0.1.2/Hoardini-0.1.2-x64-portable.exe">Download</a>
+</header>
+
+<main id="main">
+<section class="wall" id="top" aria-labelledby="hook">
+  <div class="carton carton--main">
+    <span class="seam" aria-hidden="true"></span>
+    <p class="tagline">Hoardini · The world's smartest trashcan</p>
+    <h1 id="hook">Your drive is full. He’ll sort it into three boxes.</h1>
+    <p class="lede">Hoardini works out what every big folder and file on your PC actually is. Then he packs it: junk you won't miss, space you can free without losing a thing, and the few big things only you can judge.</p>
+
+    <div class="ship-label" aria-label="Download Hoardini">
+      <dl class="fields">
+        <div><dt>To</dt><dd>Your Windows PC</dd></div>
+        <div><dt>Contents</dt><dd>Hoardini 0.1.2, one file, no installer</dd></div>
+        <div><dt>Weight</dt><dd class="num">39 MB</dd></div>
+      </dl>
+      <a class="ship-btn" href="https://github.com/Cyronius/hoardini/releases/download/v0.1.2/Hoardini-0.1.2-x64-portable.exe">
+        <svg aria-hidden="true"><use href="#i-down"/></svg>
+        Download for Windows
+      </a>
+      <p class="fine">Free and open source. Windows 10 and 11, 64&#8209;bit.</p>
+    </div>
+
+    <img class="sumo-carry" src="../assets/mascot/carry-medium.svg" alt="Hoardini the sumo, carrying a box" width="190" height="190">
+  </div>
+
+  <div class="carton carton--junk">
+    <span class="seam" aria-hidden="true"></span>
+    <h2 class="box-name">Junk <small>you won't miss</small></h2>
+    <div class="packlist" aria-label="Example packing list">
+      <span class="stamp">Example</span>
+      <p class="packlist-head"><span>Contents</span><span class="num">41 GB</span></p>
+      <details><summary><span>Recycle Bin</span><span class="num">13.6 GB</span></summary><p>Things you deleted, still taking space.</p></details>
+      <details><summary><span>Windows Update leftovers</span><span class="num">12.4 GB</span></summary><p>Windows already installed these updates.</p></details>
+      <details><summary><span>Temporary files</span><span class="num">8.9 GB</span></summary><p>Leftovers from Windows and your apps, untouched for 12 days.</p></details>
+      <details><summary><span>Chrome cache</span><span class="num">6.2 GB</span></summary><p>Web pages Chrome saved. It gets them again as you browse.</p></details>
+    </div>
+    <p class="box-action">One press clears the box.</p>
+  </div>
+
+  <div class="carton carton--keep">
+    <span class="seam" aria-hidden="true"></span>
+    <h2 class="box-name">Keep <small>· squish it</small></h2>
+    <div class="packlist" aria-label="Example packing list">
+      <span class="stamp">Example</span>
+      <p class="packlist-head"><span>Contents</span><span class="num">38 GB</span></p>
+      <details><summary><span>OneDrive photos 2019–2022</span><span class="num">29.5 GB</span></summary><p>Keep online only. They stay in OneDrive and open when you click them.</p></details>
+      <details><summary><span>Old school projects</span><span class="num">8.7 GB</span></summary><p>Compress in place. Same files, less space.</p></details>
+    </div>
+    <p class="box-action">Free the space. Lose nothing.</p>
+  </div>
+
+  <div class="carton carton--ask">
+    <span class="seam" aria-hidden="true"></span>
+    <h2 class="box-name">Ask me</h2>
+    <div class="packlist" aria-label="Example packing list">
+      <span class="stamp">Example</span>
+      <p class="packlist-head"><span>Biggest first</span><span class="num">104 GB</span></p>
+      <details><summary><span>iPhone backup from 2021</span><span class="num">64.2 GB</span></summary><p>A full backup of an iPhone, last changed March 2021. There is a newer one next to it.</p></details>
+      <details><summary><span>Downloads</span><span class="num">22.0 GB</span></summary><p>Mostly installers you already ran.</p></details>
+      <details><summary><span>Zoom recordings</span><span class="num">18.3 GB</span></summary><p>Meeting recordings from 2022. Zoom doesn't need them.</p></details>
+    </div>
+    <p class="box-action">Your call, with his reasons.</p>
+  </div>
+</section>
+
+<section class="sec sec--demo" id="boxes" aria-labelledby="demo-title">
+  <div class="demo-copy">
+    <h2 id="demo-title" class="stencil">One short screen. Three boxes.</h2>
+    <p>No tree of folders to dig through. Hoardini looks at the whole drive and hands you three boxes, biggest win first. Press the box. The space comes back.</p>
+    <p>He gets bigger as your drive fills up. Watch what happens when you empty the boxes.</p>
+    <div class="demo-actions" role="group" aria-label="Example: empty the boxes">
+      <button type="button" class="tape-btn" data-step="1">Clear the junk box · 41 GB</button>
+      <button type="button" class="tape-btn tape-btn--brown" data-step="2" disabled>Squish the keep box · 38 GB</button>
+      <button type="button" class="reset" data-step="0" hidden>Pack it all back</button>
+    </div>
+  </div>
+
+  <figure class="pallet" aria-labelledby="gauge-cap">
+    <span class="stamp stamp--big">Example</span>
+    <img class="pallet-sumo" id="demo-sumo" src="../assets/mascot/worry-full.svg" alt="Hoardini, big and worried: the drive is almost full" width="300" height="300">
+    <div class="gauge">
+      <div class="gauge-track" aria-hidden="true"><span class="gauge-fill" id="gauge-fill"></span></div>
+      <p class="gauge-read" id="gauge-cap" aria-live="polite"><strong class="num" id="gauge-free">9 GB</strong> free of <span class="num">476 GB</span> on drive C:</p>
+    </div>
+  </figure>
+</section>
+
+<section class="sec sec--slip" aria-labelledby="slip-title">
+  <div class="slip-intro">
+    <h2 id="slip-title" class="stencil">“What is this?” Answered on a packing slip.</h2>
+    <p>Open anything in the Ask me box and he tells you what it is, in plain words, and why he thinks so.</p>
+    <p>He checks the evidence first: where it lives, what kind of files are in it, which programs you have installed, and whether anything has it open. Then the AI explains. The web comes last.</p>
+  </div>
+
+  <article class="slip" aria-label="Example packing slip">
+    <span class="stamp">Example</span>
+    <header class="slip-head">
+      <h3>iPhone backup from 2021</h3>
+      <p class="slip-size num">64.2 GB</p>
+    </header>
+    <p class="marker">“A full backup of an iPhone, last changed March 2021. There is a newer one next to it. You probably don't need this one.”</p>
+    <table class="slip-table">
+      <caption>Why he thinks so</caption>
+      <tbody>
+        <tr><th scope="row">Where it lives</th><td>The folder where Apple keeps iPhone backups</td><td class="ok">Checked</td></tr>
+        <tr><th scope="row">Last changed</th><td>March 2021</td><td class="ok">Checked</td></tr>
+        <tr><th scope="row">Next to it</th><td>A newer backup, changed last month</td><td class="ok">Checked</td></tr>
+        <tr><th scope="row">Open in a program?</th><td>No</td><td class="ok">Checked</td></tr>
+      </tbody>
+    </table>
+    <div class="slip-actions" role="group" aria-label="What you can do (example)">
+      <span class="act act--hold">Delete <em>hold</em></span>
+      <span class="act">Shrink</span>
+      <span class="act">Move</span>
+      <span class="act">Keep</span>
+      <span class="act act--ask">Ask him</span>
+    </div>
+  </article>
+</section>
+
+<section class="sec sec--marks" id="safe" aria-labelledby="safe-title">
+  <h2 id="safe-title" class="stencil">Handle with care. He does.</h2>
+  <ul class="marks">
+    <li>
+      <svg class="mark" aria-hidden="true"><use href="#m-up"/></svg>
+      <h3>Nothing moves till you press</h3>
+      <p>He sorts and explains. Nothing is deleted, shrunk or moved until you press the button.</p>
+    </li>
+    <li>
+      <svg class="mark" aria-hidden="true"><use href="#m-hand"/></svg>
+      <h3>Hold to delete</h3>
+      <p>Delete needs the button held down, so a slip of the mouse can't empty a box.</p>
+    </li>
+    <li>
+      <svg class="mark" aria-hidden="true"><use href="#m-bin"/></svg>
+      <h3>No Recycle Bin</h3>
+      <p>Delete is permanent. The bin frees nothing until it's emptied, so he skips it on purpose.</p>
+    </li>
+    <li>
+      <svg class="mark" aria-hidden="true"><use href="#m-glass"/></svg>
+      <h3>Your word wins</h3>
+      <p>His guesses never outrank you. What you keep stops showing up, with one link to bring it back.</p>
+    </li>
+  </ul>
+  <p class="marks-foot">One window. No tray icon, no pop-ups. He keeps a list of the whole drive and updates it quietly in the background.</p>
+</section>
+
+<section class="sec sec--brains" id="brains" aria-labelledby="brains-title">
+  <h2 id="brains-title" class="stencil">Pick a brain. Keep it at home if you like.</h2>
+  <p class="brains-intro">The first time you run Hoardini, you choose where his thinking happens.</p>
+  <table class="manifest">
+    <thead>
+      <tr><th scope="col">Where he thinks</th><th scope="col">What leaves your PC</th><th scope="col">Options</th></tr>
+    </thead>
+    <tbody>
+      <tr class="rec">
+        <th scope="row"><svg aria-hidden="true"><use href="#m-pc"/></svg><span>On this PC <em>Recommended</em></span></th>
+        <td>Nothing. Works offline.</td>
+        <td>Granite 4.1 3B downloads once and runs on your processor. Qwen3.5 9B is smarter but needs a graphics card. Or use a model file you already have, LM Studio, Ollama, llama.cpp or vLLM.</td>
+      </tr>
+      <tr>
+        <th scope="row"><svg aria-hidden="true"><use href="#m-cloud"/></svg><span>A free online brain</span></th>
+        <td>Your questions, and the file and folder names he looks up.</td>
+        <td>Google Gemini, OpenRouter, Ollama Cloud, Mistral, Cloudflare Workers AI or Z.ai. Setup tells you how much each allows, whether a card is needed, and whether it may learn from your questions.</td>
+      </tr>
+      <tr>
+        <th scope="row"><svg aria-hidden="true"><use href="#m-key"/></svg><span>Your own provider</span></th>
+        <td>Your questions, and the file and folder names he looks up.</td>
+        <td>OpenAI, Anthropic, Groq, Together, Cerebras, or any OpenAI-compatible address with your key.</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="sec sec--ship" id="download" aria-labelledby="ship-title">
+  <div class="big-label">
+    <div class="big-label-top">
+      <img src="../assets/mascot/tada-slim.svg" alt="Hoardini, slim and happy" width="120" height="120">
+      <h2 id="ship-title" class="stencil">Ready to ship.</h2>
+    </div>
+    <dl class="fields fields--big">
+      <div><dt>To</dt><dd>Your Windows PC</dd></div>
+      <div><dt>From</dt><dd>Cyrus Attoun</dd></div>
+      <div><dt>Contents</dt><dd>Hoardini 0.1.2, the whole app in one file</dd></div>
+      <div><dt>Weight</dt><dd class="num">About 39 MB</dd></div>
+      <div><dt>Needs</dt><dd>Windows 10 or 11, 64&#8209;bit</dd></div>
+      <div><dt>Price</dt><dd>Free and open source</dd></div>
+    </dl>
+    <a class="ship-btn ship-btn--big" href="https://github.com/Cyronius/hoardini/releases/download/v0.1.2/Hoardini-0.1.2-x64-portable.exe">
+      <svg aria-hidden="true"><use href="#i-down"/></svg>
+      Download for Windows
+    </a>
+    <div class="barcode" aria-hidden="true"></div>
+    <div class="first-run">
+      <h3>The first time you open it</h3>
+      <ol>
+        <li>Windows SmartScreen may warn you, because the app isn't signed yet. Choose <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
+        <li>Pick a brain. The one on your PC is a one-time download.</li>
+        <li>He checks the drive and hands you three boxes.</li>
+      </ol>
+    </div>
+    <p class="label-links">
+      <a href="https://github.com/Cyronius/hoardini/releases/latest">All downloads and release notes <svg aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <a href="https://github.com/Cyronius/hoardini">Source code on GitHub <svg aria-hidden="true"><use href="#i-arrow"/></svg></a>
+    </p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <span class="seam seam--foot" aria-hidden="true"></span>
+  <p>Hoardini is free software under the Apache-2.0 license.</p>
+  <p><a href="https://cyronius.github.io/">Made by Cyrus Attoun <svg aria-hidden="true"><use href="#i-arrow"/></svg></a></p>
+</footer>
+
+<script src="script.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hoardini — The world's smartest trashcan</title>
+<meta name="description" content="Hoardini works out what every big folder and file on your Windows drive is, tells you in plain words, and clears what you won't miss. Free for Windows 10 and 11.">
+<meta name="theme-color" content="#2433d6">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800;900&family=Big+Shoulders+Text:wght@500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#tickets">Skip to the download</a>
+
+<main>
+<section class="sheet bill" aria-labelledby="title">
+  <header class="top">
+    <span class="presents">Hoardini presents</span>
+    <nav aria-label="On this page">
+      <a href="#decides">How he decides</a>
+      <a href="#rules">House rules</a>
+      <a href="#brains">Brains</a>
+      <a href="https://github.com/Cyronius/hoardini">Source</a>
+      <a class="nav-tix" href="#tickets">Download</a>
+    </nav>
+  </header>
+
+  <div class="mast">
+    <h1 id="title">Hoardini</h1>
+    <p class="tagline">The world’s smartest trashcan</p>
+  </div>
+  <p class="plain">Your drive is full and you don’t know why. Hoardini works out what every big thing on it is, tells you in plain words, and clears what you won’t miss.</p>
+
+  <p class="venue"><span>Live on drive C:</span><span>476 GB</span><span data-free>9 GB free</span></p>
+
+  <div class="lineup" data-lineup aria-describedby="pa">
+    <p class="line l1">
+      <button class="act" data-group="call" data-say="A full backup of an iPhone, last changed March 2021. There is a newer one next to it.">iPhone backup from 2021<span class="meta"><span>64.2 GB</span><span>Your call</span></span></button>
+    </p>
+    <p class="line l2">
+      <button class="act" data-group="keep" data-say="Keep online only. They stay in OneDrive and open when you click them.">OneDrive photos 2019–2022<span class="meta"><span>29.5 GB</span><span>Keep the files</span></span></button>
+    </p>
+    <p class="line l3">
+      <button class="act" data-group="call" data-say="Mostly installers you already ran.">Downloads<span class="meta"><span>22.0 GB</span><span>Your call</span></span></button>
+      <span class="dot" aria-hidden="true"></span>
+      <button class="act" data-group="call" data-say="Meeting recordings from 2022. Zoom doesn’t need them.">Zoom recordings<span class="meta"><span>18.3 GB</span><span>Your call</span></span></button>
+    </p>
+    <p class="line l4">
+      <button class="act" data-group="junk" data-say="Things you deleted, still taking space.">Recycle Bin<span class="meta"><span>13.6 GB</span><span>Junk</span></span></button>
+      <span class="dot" aria-hidden="true"></span>
+      <button class="act" data-group="junk" data-say="Windows already installed these updates.">Windows Update leftovers<span class="meta"><span>12.4 GB</span><span>Junk</span></span></button>
+    </p>
+    <p class="line l5">
+      <button class="act" data-group="junk" data-say="Leftovers from Windows and your apps, untouched for 12 days.">Temporary files<span class="meta"><span>8.9 GB</span><span>Junk</span></span></button>
+      <span class="dot" aria-hidden="true"></span>
+      <button class="act" data-group="keep" data-say="Compress in place. Same files, less space.">Old school projects<span class="meta"><span>8.7 GB</span><span>Keep the files</span></span></button>
+      <span class="dot" aria-hidden="true"></span>
+      <button class="act" data-group="junk" data-say="Web pages Chrome saved; it gets them again as you browse.">Chrome cache<span class="meta"><span>6.2 GB</span><span>Junk</span></span></button>
+    </p>
+  </div>
+
+  <p class="pa" id="pa" aria-live="polite"><span class="pa-who">He says</span><span class="pa-text" data-pa>Point at any act and he’ll tell you what it is.</span></p>
+
+  <div class="foot">
+    <a class="tix" href="https://github.com/Cyronius/hoardini/releases/download/v0.1.2/Hoardini-0.1.2-x64-portable.exe">
+      <span class="tix-main">Download for Windows</span>
+      <span class="tix-sub">Free · one file · about 39 MB</span>
+    </a>
+    <button class="clear" type="button" data-clear aria-pressed="false">Clear the junk · 41 GB</button>
+    <figure class="sponsor">
+      <img data-sumo src="../assets/mascot/worry-full.svg" alt="Hoardini the sumo, worried and very round" width="72" height="72">
+      <figcaption>Presented by Hoardini, who gets bigger as your drive fills up. <em>Example lineup. Yours will be different.</em></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="sheet days" aria-labelledby="days-title">
+  <h2 id="days-title" class="billing">Three groups. One short screen.</h2>
+  <p class="lede">You don’t get a map of every folder. You get one screen, billed biggest first, in three groups.</p>
+
+  <div class="day">
+    <h3>Junk you won’t miss</h3>
+    <p class="tail">Temp files <i></i> app and browser caches <i></i> Windows leftovers <i></i> the Recycle Bin</p>
+    <p class="say">Things your PC makes and forgets. One press clears the lot.</p>
+  </div>
+  <div class="day">
+    <h3>Free space, keep the files</h3>
+    <p class="tail">Compress in place <i></i> keep cloud files online only</p>
+    <p class="say">Same files, less space. Nothing is lost, and one press frees it.</p>
+  </div>
+  <div class="day">
+    <h3>Your call</h3>
+    <p class="tail">Delete <i></i> Shrink <i></i> Move <i></i> Keep <i></i> Ask him</p>
+    <p class="say">The big things only you can judge, biggest first. Open one and he says what it is and why he thinks so.</p>
+  </div>
+</section>
+
+<section class="sheet decides" id="decides" aria-labelledby="decides-title">
+  <h2 id="decides-title" class="billing">How he decides</h2>
+  <p class="lede">The order on the bill is the order he trusts things in.</p>
+  <ol class="order">
+    <li class="o1"><strong>Evidence first</strong><span>A catalog of known locations, file types, the list of programs you installed, and checks for files that are open right now.</span></li>
+    <li class="o2"><strong>Then the AI explains</strong><span>It reads the evidence and puts it in plain words: what the thing is, and why he thinks so.</span></li>
+    <li class="o3"><strong>The web last</strong><span>Only when the first two can’t tell.</span></li>
+  </ol>
+</section>
+
+<section class="sheet rules" id="rules" aria-labelledby="rules-title">
+  <h2 id="rules-title" class="billing">House rules</h2>
+  <p class="rulebook">
+    <b>Nothing happens until you press.</b> He suggests; you decide.
+    <b>Delete needs the button held.</b> No slips.
+    <b>Delete is permanent.</b> It skips the Recycle Bin, because the bin frees nothing until it is emptied.
+    <b>Your word wins.</b> His guesses never outrank you. Only what you said to keep is held back.
+    <b>Kept means kept.</b> Things you keep stop showing up, with one link to bring them back.
+    <b>Some paths stay off limits.</b> Rules in code can hold any path back, whatever anyone says.
+    <b>He stays out of the way.</b> One window. He keeps a list of the whole drive and updates it quietly, in a low-priority process.
+  </p>
+</section>
+
+<section class="sheet brains" id="brains" aria-labelledby="brains-title">
+  <h2 id="brains-title" class="billing">Choose a brain</h2>
+  <p class="lede">Hoardini needs a model to explain things. The first-run screen sets one up.</p>
+  <div class="stages">
+    <div class="stage main">
+      <h3>On this PC <span>Recommended</span></h3>
+      <p class="acts"><span class="a1">Granite 4.1 3B</span><span class="a2">Qwen3.5 9B</span><span class="a3">Any .gguf file · LM Studio · Ollama · llama.cpp · vLLM</span></p>
+      <p class="say">Granite downloads once and runs on the CPU. Nothing leaves your PC, and it works offline. Qwen is smarter but needs a graphics card.</p>
+    </div>
+    <div class="stage">
+      <h3>Free online</h3>
+      <p class="acts"><span class="a2">Google Gemini</span><span class="a2">OpenRouter</span><span class="a3">Ollama Cloud · Mistral · Cloudflare Workers AI · Z.ai</span></p>
+      <p class="say">The setup screen says how much each one allows, whether it needs a card, and whether it may learn from your questions.</p>
+    </div>
+    <div class="stage">
+      <h3>Your own</h3>
+      <p class="acts"><span class="a2">OpenAI</span><span class="a2">Anthropic</span><span class="a3">Groq · Together · Cerebras · any OpenAI-compatible endpoint</span></p>
+      <p class="say">Bring a key and a base URL.</p>
+    </div>
+  </div>
+  <p class="note">Online brains receive your questions, and the file and folder names he looks up, to answer them.</p>
+</section>
+
+<section class="sheet tickets" id="tickets" aria-labelledby="tickets-title">
+  <h2 id="tickets-title" class="visually-hidden">Download</h2>
+  <a class="tix big" href="https://github.com/Cyronius/hoardini/releases/download/v0.1.2/Hoardini-0.1.2-x64-portable.exe">
+    <span class="tix-main">Download Hoardini 0.1.2</span>
+    <span class="tix-sub">For Windows 10 and 11, 64-bit · free and open source · one file, about 39 MB, no installer</span>
+  </a>
+  <p class="fine">
+    <b>First run.</b> The app isn’t signed yet, so Windows SmartScreen will warn you. Choose <em>More info</em>, then <em>Run anyway</em>. Then he helps you pick a brain.
+    <b>More downloads.</b> A zip with the command-line tool, and checksums, are on the <a href="https://github.com/Cyronius/hoardini/releases/latest">release page</a>.
+    <b>Source.</b> Apache-2.0, on <a href="https://github.com/Cyronius/hoardini">GitHub</a>.
+  </p>
+</section>
+</main>
+
+<footer class="credits">
+  <a href="https://cyronius.github.io/">Made by Cyrus Attoun</a>
+  <a href="https://github.com/Cyronius/hoardini">GitHub</a>
+  <a href="https://github.com/Cyronius/hoardini/releases/latest">Releases</a>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hoardini — Not everything has to go</title>
+<meta name="description" content="Hoardini works out what every big thing on your Windows drive is, says it in plain words, and lets you decide what goes. Free for Windows 10 and 11.">
+<meta name="theme-color" content="#fff23d">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Sedgwick+Ave+Display&family=Shantell+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the sale</a>
+
+<header class="top">
+  <div class="wrap top-in">
+    <a class="brand" href="#main"><img src="../assets/icon.svg" alt="" width="40" height="40"><span>Hoardini</span></a>
+    <nav aria-label="Page">
+      <a href="#tables">How it works</a>
+      <a href="#rules">Is it safe?</a>
+      <a href="#brains">Brains</a>
+      <a href="https://github.com/Cyronius/hoardini">Source</a>
+      <a class="nav-get" href="#take-it-home">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- Hero: the sign, the table, the man running the sale -->
+<section class="hero" aria-labelledby="hero-title">
+  <div class="wrap hero-grid">
+    <div class="board board-yellow hero-sign swing">
+      <span class="tape tape-tl" aria-hidden="true"></span>
+      <span class="tape tape-tr" aria-hidden="true"></span>
+      <h1 id="hero-title">Not everything has to&nbsp;go.</h1>
+      <p class="sign-sub">Hoardini finds what's filling your PC and tells you what each thing is. You decide what goes.</p>
+    </div>
+
+    <div class="hero-aside">
+      <p class="lede">Your drive is full and you don't know why. He looks at every big folder and file, explains it in plain words, and puts it on one of three tables. Nothing leaves until you press.</p>
+      <a class="board board-orange get swing swing-late" href="https://github.com/Cyronius/hoardini/releases/download/v0.1.2/Hoardini-0.1.2-x64-portable.exe">
+        <span class="get-free">Free.</span>
+        <span class="get-label">Download for Windows</span>
+        <svg class="get-arrow" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4v19M7 15l9 9 9-9M6 28h20"/></svg>
+      </a>
+      <p class="get-meta">Windows 10 &amp; 11, 64-bit · one file, about 39 MB · no installer</p>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="sale" aria-labelledby="sale-title">
+      <h2 id="sale-title" class="sr">Example: what's on the table for a full C: drive</h2>
+      <div class="sale-top">
+        <div class="tag-row" role="list">
+          <button type="button" class="tag" role="listitem" data-say="That's a full iPhone backup from March 2021. There's a newer one right next to it. Your call." aria-describedby="sumo-says">
+            <span class="dot dot-blue">64.2<small>GB</small></span>
+            <span class="tag-name">iPhone backup from 2021</span>
+          </button>
+          <button type="button" class="tag" role="listitem" data-say="Your OneDrive photos, 2019 to 2022. Keep them online only: they stay in OneDrive and open when you click them." aria-describedby="sumo-says">
+            <span class="dot dot-green">29.5<small>GB</small></span>
+            <span class="tag-name">OneDrive photos 2019–2022</span>
+          </button>
+          <button type="button" class="tag" role="listitem" data-say="Zoom meeting recordings from 2022. Zoom doesn't need them. Keep the ones you want." aria-describedby="sumo-says">
+            <span class="dot dot-blue">18.3<small>GB</small></span>
+            <span class="tag-name">Zoom recordings</span>
+          </button>
+          <button type="button" class="tag" role="listitem" data-say="Things you deleted, still taking space. The Recycle Bin frees nothing until it's emptied." aria-describedby="sumo-says">
+            <span class="dot dot-red">13.6<small>GB</small></span>
+            <span class="tag-name">Recycle Bin</span>
+          </button>
+          <button type="button" class="tag" role="listitem" data-say="Windows Update leftovers. Windows already installed these updates. Junk you won't miss." aria-describedby="sumo-says">
+            <span class="dot dot-red">12.4<small>GB</small></span>
+            <span class="tag-name">Windows Update leftovers</span>
+          </button>
+        </div>
+        <figure class="sumo-stand">
+          <p class="says" id="sumo-says" aria-live="polite">Your C: drive is 98% full. Pick anything on the table and I'll tell you what it is.</p>
+          <img class="sumo-hero" src="../assets/mascot/carry-full.svg" alt="Hoardini the sumo, carrying a box. He is round because the drive is nearly full." width="300" height="300">
+        </figure>
+      </div>
+      <div class="table-top" aria-hidden="true"></div>
+      <div class="table-front">
+        <p class="example-card">Example · a full 476 GB drive</p>
+        <ul class="legend" aria-label="Sticker colors">
+          <li><span class="mini dot-red"></span>Junk you won't miss</li>
+          <li><span class="mini dot-green"></span>Free space, keep the files</li>
+          <li><span class="mini dot-blue"></span>Your call</li>
+        </ul>
+      </div>
+      <div class="legs" aria-hidden="true"><span></span><span></span></div>
+    </div>
+  </div>
+</section>
+
+<!-- The three tables, interactive -->
+<section class="tables" id="tables" aria-labelledby="tables-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="tables-title" class="marker-h">Three tables. One short list.</h2>
+      <p>Everything big on your drive lands on one of three tables, with a sticker that says how much space it takes. Try it below. It's an example drive; nothing on your PC is touched.</p>
+    </div>
+
+    <div class="tally" aria-live="polite">
+      <div class="board board-lime tally-board">
+        <span class="tape tape-tc" aria-hidden="true"></span>
+        <p class="tally-label">Free on C:</p>
+        <p class="tally-num"><span id="free-gb">9</span> <small>GB of 476</small></p>
+        <p class="tally-note" id="tally-note">He's carrying a lot. Clear a table and watch him slim down.</p>
+      </div>
+      <img class="sumo-tally" id="sumo-tally" src="../assets/mascot/worry-full.svg" alt="Hoardini, round and worried: the drive is nearly full." width="200" height="200">
+    </div>
+
+    <div class="t-grid">
+      <article class="sale-table t-red" aria-labelledby="t1">
+        <div class="board board-pink t-sign"><span class="tape tape-tc" aria-hidden="true"></span><h3 id="t1">Junk you won't miss</h3><p>One press clears it.</p></div>
+        <ul class="rows">
+          <li class="row" data-gb="13.6"><span class="dot dot-red">13.6<small>GB</small></span><div class="row-txt"><strong>Recycle Bin</strong><span>Things you deleted, still taking space.</span></div><div class="acts"><button type="button" class="act act-go" aria-pressed="false">Clear</button><button type="button" class="act act-keep" aria-pressed="false">Keep</button></div></li>
+          <li class="row" data-gb="12.4"><span class="dot dot-red">12.4<small>GB</small></span><div class="row-txt"><strong>Windows Update leftovers</strong><span>Windows already installed these updates.</span></div><div class="acts"><button type="button" class="act act-go" aria-pressed="false">Clear</button><button type="button" class="act act-keep" aria-pressed="false">Keep</button></div></li>
+          <li class="row" data-gb="8.9"><span class="dot dot-red">8.9<small>GB</small></span><div class="row-txt"><strong>Temporary files</strong><span>Leftovers from Windows and your apps, untouched for 12 days.</span></div><div class="acts"><button type="button" class="act act-go" aria-pressed="false">Clear</button><button type="button" class="act act-keep" aria-pressed="false">Keep</button></div></li>
+          <li class="row" data-gb="6.2"><span class="dot dot-red">6.2<small>GB</small></span><div class="row-txt"><strong>Chrome cache</strong><span>Web pages Chrome saved; it gets them again as you browse.</span></div><div class="acts"><button type="button" class="act act-go" aria-pressed="false">Clear</button><button type="button" class="act act-keep" aria-pressed="false">Keep</button></div></li>
+        </ul>
+        <button type="button" class="clear-all" data-table="t-red">Clear the whole table · 41.1 GB</button>
+      </article>
+
+      <article class="sale-table t-green" aria-labelledby="t2">
+        <div class="board board-yellow t-sign"><span class="tape tape-tc" aria-hidden="true"></span><h3 id="t2">Free space, keep the files</h3><p>Nothing lost.</p></div>
+        <ul class="rows">
+          <li class="row keepfiles" data-gb="29.5"><span class="dot dot-green">29.5<small>GB</small></span><div class="row-txt"><strong>OneDrive photos 2019–2022</strong><span>Keep online only. They stay in OneDrive and open when you click them.</span></div><div class="acts"><button type="button" class="act act-go" aria-pressed="false">Free it</button><button type="button" class="act act-keep" aria-pressed="false">Keep</button></div></li>
+          <li class="row keepfiles" data-gb="8.7"><span class="dot dot-green">8.7<small>GB</small></span><div class="row-txt"><strong>Old school projects</strong><span>Compress in place. Same files, less space.</span></div><div class="acts"><button type="button" class="act act-go" aria-pressed="false">Free it</button><button type="button" class="act act-keep" aria-pressed="false">Keep</button></div></li>
+        </ul>
+        <p class="t-foot">The sticker gets crossed out. The files stay right where they are.</p>
+      </article>
+
+      <article class="sale-table t-blue" aria-labelledby="t3">
+        <div class="board board-orange t-sign"><span class="tape tape-tc" aria-hidden="true"></span><h3 id="t3">Your call</h3><p>Biggest first. Only you can judge these.</p></div>
+        <ul class="rows">
+          <li class="row" data-gb="64.2"><span class="dot dot-blue">64.2<small>GB</small></span><div class="row-txt"><strong>iPhone backup from 2021</strong><span>A full backup of an iPhone, last changed March 2021. There is a newer one next to it.</span></div><div class="acts"><button type="button" class="act act-go" aria-pressed="false">Delete</button><button type="button" class="act act-keep" aria-pressed="false">Keep</button></div></li>
+          <li class="row" data-gb="22.0"><span class="dot dot-blue">22.0<small>GB</small></span><div class="row-txt"><strong>Downloads</strong><span>Mostly installers you already ran.</span></div><div class="acts"><button type="button" class="act act-go" aria-pressed="false">Delete</button><button type="button" class="act act-keep" aria-pressed="false">Keep</button></div></li>
+          <li class="row" data-gb="18.3"><span class="dot dot-blue">18.3<small>GB</small></span><div class="row-txt"><strong>Zoom recordings</strong><span>Meeting recordings from 2022. Zoom doesn't need them.</span></div><div class="acts"><button type="button" class="act act-go" aria-pressed="false">Delete</button><button type="button" class="act act-keep" aria-pressed="false">Keep</button></div></li>
+        </ul>
+        <p class="t-foot">In the app you can also shrink it, move it to another drive, or ask him about it.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- What is this? -->
+<section class="whatis" aria-labelledby="whatis-title">
+  <div class="wrap whatis-grid">
+    <div class="whatis-copy">
+      <h2 id="whatis-title" class="marker-h">“What is this?”</h2>
+      <p>Open anything on the table and he says what it is and why he thinks so. He checks the facts first and guesses last:</p>
+      <ol class="order">
+        <li><strong>Where it lives.</strong> A catalog of places Windows and common apps keep things.</li>
+        <li><strong>What's inside.</strong> The kinds of files, and how old they are.</li>
+        <li><strong>Who owns it.</strong> The list of programs installed on your PC.</li>
+        <li><strong>Whether it's in use.</strong> A check for files a program has open right now.</li>
+        <li><strong>Then the AI explains,</strong> in plain words.</li>
+        <li><strong>The web comes last,</strong> only if he still isn't sure.</li>
+      </ol>
+    </div>
+
+    <div class="hangtag" aria-labelledby="tag-title">
+      <span class="string" aria-hidden="true"></span>
+      <span class="eyelet" aria-hidden="true"></span>
+      <p class="example-card on-tag">Example</p>
+      <div class="hangtag-head">
+        <span class="dot dot-blue big">64.2<small>GB</small></span>
+        <h3 id="tag-title">iPhone backup from 2021</h3>
+      </div>
+      <p class="hangtag-say">“This is a full backup of an iPhone. It was last changed in March 2021. There's a newer backup right next to it, so this one is probably safe to let go. Your call.”</p>
+      <ul class="why">
+        <li>Found in the folder where iTunes keeps phone backups</li>
+        <li>No program has it open</li>
+        <li>A newer backup sits beside it</li>
+      </ul>
+      <div class="tag-acts" aria-label="What you can do (example, not working)">
+        <span class="chip chip-hold">Hold to delete</span>
+        <span class="chip">Shrink</span>
+        <span class="chip">Move</span>
+        <span class="chip">Keep</span>
+        <span class="chip">Ask him</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- House rules -->
+<section class="rules" id="rules" aria-labelledby="rules-title">
+  <div class="wrap rules-grid">
+    <div class="board board-white rules-board">
+      <span class="tape tape-tl" aria-hidden="true"></span>
+      <span class="tape tape-tr" aria-hidden="true"></span>
+      <h2 id="rules-title" class="marker-h">House rules</h2>
+      <ul class="rule-list">
+        <li><strong>Nothing goes until you press.</strong> He suggests. You decide.</li>
+        <li><strong>Delete means hold the button.</strong> No slips from one stray click.</li>
+        <li><strong>Delete is for real.</strong> It skips the Recycle Bin, because the bin frees nothing until it's emptied.</li>
+        <li><strong>Your word beats his guess.</strong> What you said to keep is held back, every time.</li>
+        <li><strong>Keep it once and it stops showing up.</strong> One link brings it back.</li>
+        <li><strong>One window, then he gets out of the way.</strong> No tray icon, no pop-ups. The list of your drive stays fresh quietly, in the background.</li>
+      </ul>
+    </div>
+    <figure class="rules-sumo">
+      <img src="../assets/mascot/think-medium.svg" alt="Hoardini thinking it over." width="220" height="220">
+      <figcaption>“I only suggest. The button is yours.”</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- Brains -->
+<section class="brains" id="brains" aria-labelledby="brains-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="brains-title" class="marker-h">Pick his brain.</h2>
+      <p>Hoardini needs a model to explain things. The first-run screen sets one up in a few clicks.</p>
+    </div>
+    <div class="b-grid">
+      <article class="brain brain-main">
+        <span class="dot dot-green brain-dot">Best</span>
+        <h3>On this PC</h3>
+        <p class="brain-lead">Recommended. Nothing leaves your PC, and it works offline.</p>
+        <p>Granite 4.1 3B downloads once and runs on your processor. Qwen3.5 9B is smarter but needs a graphics card. Any .gguf file you already have works too, and so do LM Studio, Ollama, llama.cpp and vLLM.</p>
+      </article>
+      <article class="brain">
+        <h3>A free online brain</h3>
+        <p>Built-in setup for Google Gemini, OpenRouter, Ollama Cloud, Mistral, Cloudflare Workers AI and Z.ai. The setup screen says how much each allows, whether a card is needed, and whether it may learn from your questions.</p>
+      </article>
+      <article class="brain">
+        <h3>Your own provider</h3>
+        <p>OpenAI, Anthropic, Groq, Together and Cerebras are ready to go. Any OpenAI-compatible service works with an address and a key.</p>
+      </article>
+    </div>
+    <p class="privacy"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/></svg>Online choices send your questions, and the file and folder names he looks up, to that provider. On this PC, nothing is sent anywhere.</p>
+  </div>
+</section>
+
+<!-- Download again -->
+<section class="home" id="take-it-home" aria-labelledby="home-title">
+  <div class="wrap home-grid">
+    <div class="board board-pink home-sign">
+      <span class="tape tape-tl" aria-hidden="true"></span>
+      <span class="tape tape-tr" aria-hidden="true"></span>
+      <h2 id="home-title">Free. Take him home.</h2>
+      <a class="board board-orange get get-small" href="https://github.com/Cyronius/hoardini/releases/download/v0.1.2/Hoardini-0.1.2-x64-portable.exe">
+        <span class="get-label">Download Hoardini 0.1.2</span>
+        <svg class="get-arrow" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4v19M7 15l9 9 9-9M6 28h20"/></svg>
+      </a>
+      <p class="get-meta dark">Windows 10 &amp; 11, 64-bit · about 39 MB · free and open source</p>
+    </div>
+    <div class="firstrun">
+      <h3>Before you run it</h3>
+      <ol>
+        <li>It's one file. No installer. Put it anywhere and double-click it.</li>
+        <li>Windows SmartScreen may warn you, because the app isn't signed yet. Choose <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
+        <li>The first run helps you pick his brain. The recommended one is a one-time download.</li>
+      </ol>
+      <p class="links"><a href="https://github.com/Cyronius/hoardini/releases/latest">All downloads and release notes</a><a href="https://github.com/Cyronius/hoardini">Source code on GitHub</a></p>
+    </div>
+    <img class="home-sumo" src="../assets/mascot/tada-slim.svg" alt="Hoardini, slim and cheering: the drive has room again." width="220" height="220">
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <p><strong>Hoardini</strong> · The world's smartest trashcan.</p>
+    <p>Made by <a href="https://cyronius.github.io/">Cyrus Attoun</a> · Apache-2.0 · <a href="https://github.com/Cyronius/hoardini">GitHub</a></p>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Hoardini site: pick one</title>
+<link rel="icon" href="assets/icon.svg">
+<style>
+  :root { --bg: #f3f1ee; --ink: #23201f; --dim: #5f5955; --line: #d9d4ce; --card: #fff; --accent: #c23d28; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #171515; --ink: #f1ece8; --dim: #b1a9a3; --line: #34302d; --card: #201d1c; --accent: #ff8a72; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, "Segoe UI", sans-serif; }
+  ::selection { background: var(--accent); color: #fff; }
+  main { max-width: 1240px; margin: 0 auto; padding: 48px 16px 80px; }
+  header { display: flex; gap: 16px; align-items: center; margin-bottom: 40px; }
+  header img { width: 56px; height: 56px; }
+  h1 { font-size: clamp(1.6rem, 3vw, 2.4rem); line-height: 1.1; margin: 0; letter-spacing: -0.02em; }
+  header p { margin: 4px 0 0; color: var(--dim); max-width: 70ch; }
+  ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 48px; }
+  li { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 32px; align-items: start; }
+  li > a { display: block; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 10px 30px -12px rgb(0 0 0 / .25); transition: transform .25s cubic-bezier(.2,.8,.2,1); }
+  li > a:hover { transform: translateY(-3px); }
+  li img { display: block; width: 100%; height: auto; aspect-ratio: 1440 / 900; }
+  h2 { margin: 4px 0 8px; font-size: 1.5rem; letter-spacing: -0.01em; }
+  h2 span { color: var(--dim); font-weight: 500; }
+  .what { margin: 0 0 12px; }
+  .note { margin: 0 0 16px; color: var(--dim); font-size: .95rem; }
+  .open { display: inline-block; font-weight: 700; color: var(--accent); text-underline-offset: 4px; }
+  a:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 760px) { li { grid-template-columns: 1fr; gap: 16px; } }
+  @media (prefers-reduced-motion: reduce) { li > a { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="assets/icon.svg" alt="">
+    <div>
+      <h1>Hoardini site: pick one</h1>
+      <p>Five directions for cyronius.github.io/hoardini/. Each one is a full page that works at phone width. Click a picture to open it. All drive data is an example.</p>
+    </div>
+  </header>
+  <ol>
+    <li>
+      <a href="01-yard-sale/"><img src="assets/thumbs/01-yard-sale.webp" alt="Yard Sale mockup: a yellow poster-board headline and price tags with dot stickers on a folding table"></a>
+      <div>
+        <h2>1. Yard Sale</h2>
+        <p class="what">A Saturday driveway sale. "Not everything has to go." Big items sit on folding tables with colored dot stickers that show their size. Hoardini runs the sale, and you decide what goes.</p>
+        <p class="note">Try it: the "Three tables" section lets you clear or hold items. The sumo gets slimmer as space comes back.</p>
+        <a class="open" href="01-yard-sale/">Open Yard Sale</a>
+      </div>
+    </li>
+    <li>
+      <a href="02-moving-day/"><img src="assets/thumbs/02-moving-day.webp" alt="Moving Day mockup: kraft cardboard boxes labeled Junk, Keep, and Ask me"></a>
+      <div>
+        <h2>2. Moving Day</h2>
+        <p class="what">Kraft cardboard boxes with stenciled labels, packing tape, and shipping-label packing lists. Three boxes are the three groups: Junk, Keep (squish it), and Ask me. The download sits on a shipping label.</p>
+        <p class="note">Try it: empty the boxes in the demo, and click a packed item to read his note.</p>
+        <a class="open" href="02-moving-day/">Open Moving Day</a>
+      </div>
+    </li>
+    <li>
+      <a href="03-lineup/"><img src="assets/thumbs/03-lineup.webp" alt="Lineup mockup: a blue festival poster where the biggest files are the headliners"></a>
+      <div>
+        <h2>3. The Lineup</h2>
+        <p class="what">A music-festival lineup poster. Your drive's biggest things are the headliners, set bigger by size. One blue, one yellow, one typeface. It has the boldest look of the five, with almost no pictures.</p>
+        <p class="note">Try it: point at a name to read his explanation, then press "Clear the junk".</p>
+        <a class="open" href="03-lineup/">Open The Lineup</a>
+      </div>
+    </li>
+    <li>
+      <a href="04-zine/"><img src="assets/thumbs/04-zine.webp" alt="Zine mockup: hand-lettered headline on graph paper and a huge worried sumo"></a>
+      <div>
+        <h2>4. How He Does It</h2>
+        <p class="what">A hand-drawn comic on graph paper that explains the app in panels. The sumo starts huge and worried because the drive is full. He looks, he sorts, and he ends slim and happy. Arrows and highlighter draw in as you scroll.</p>
+        <p class="note">This one is the easiest for a non-technical reader to follow.</p>
+        <a class="open" href="04-zine/">Open How He Does It</a>
+      </div>
+    </li>
+    <li>
+      <a href="05-classic/"><img src="assets/thumbs/05-classic.webp" alt="Classic mockup: a centered serif headline above a copy of the app window"></a>
+      <div>
+        <h2>5. Classic <span>(the safe choice)</span></h2>
+        <p class="what">A standard, polished product page in the app's own look: the same fonts and colors, with dark mode. A working copy of the app screen sits under the headline.</p>
+        <p class="note">Try it: press "Clear 41 GB" in the app copy. It looks like most good app sites.</p>
+        <a class="open" href="05-classic/">Open Classic</a>
+      </div>
+    </li>
+  </ol>
+</main>
+</body>
+</html>

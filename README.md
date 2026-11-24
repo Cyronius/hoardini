@@ -6,6 +6,8 @@
 
 <p align="center"><b>The world's smartest trashcan.</b></p>
 
+<p align="center"><a href="https://cyronius.github.io/hoardini/">Website</a> · <a href="https://github.com/Cyronius/hoardini/releases/latest">Download for Windows</a></p>
+
 Your drive is full and you don't know why. Hoardini works out what every big folder and file on your disk actually is, and shows it as one short screen:
 
 - **Junk you won't miss**: temp files, caches, Windows leftovers and the Recycle Bin. One press clears it.

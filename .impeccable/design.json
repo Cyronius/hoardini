@@ -1,0 +1,491 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-24T00:00:00Z",
+  "title": "Design System: Hoardini",
+  "extensions": {
+    "colorMeta": {
+      "concrete": {
+        "role": "neutral",
+        "displayName": "Driveway Concrete",
+        "canonical": "oklch(87.5% 0.006 100)",
+        "tonalRamp": [
+          "oklch(15% 0.006 100)",
+          "oklch(26% 0.006 100)",
+          "oklch(38% 0.006 100)",
+          "oklch(50% 0.006 100)",
+          "oklch(62% 0.006 100)",
+          "oklch(74% 0.006 100)",
+          "oklch(85% 0.006 100)",
+          "oklch(95% 0.006 100)"
+        ]
+      },
+      "concrete-2": {
+        "role": "neutral",
+        "displayName": "Shadowed Concrete",
+        "canonical": "oklch(83.5% 0.007 100)",
+        "tonalRamp": [
+          "oklch(15% 0.007 100)",
+          "oklch(26% 0.007 100)",
+          "oklch(38% 0.007 100)",
+          "oklch(50% 0.007 100)",
+          "oklch(62% 0.007 100)",
+          "oklch(74% 0.007 100)",
+          "oklch(85% 0.007 100)",
+          "oklch(95% 0.007 100)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Marker Ink",
+        "canonical": "oklch(20% 0 0)",
+        "tonalRamp": [
+          "oklch(15% 0 0)",
+          "oklch(26% 0 0)",
+          "oklch(38% 0 0)",
+          "oklch(50% 0 0)",
+          "oklch(62% 0 0)",
+          "oklch(74% 0 0)",
+          "oklch(85% 0 0)",
+          "oklch(95% 0 0)"
+        ]
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Faded Ink",
+        "canonical": "oklch(34% 0.003 110)",
+        "tonalRamp": [
+          "oklch(15% 0.003 110)",
+          "oklch(26% 0.003 110)",
+          "oklch(38% 0.003 110)",
+          "oklch(50% 0.003 110)",
+          "oklch(62% 0.003 110)",
+          "oklch(74% 0.003 110)",
+          "oklch(85% 0.003 110)",
+          "oklch(95% 0.003 110)"
+        ]
+      },
+      "board-yellow": {
+        "role": "primary",
+        "displayName": "Poster Yellow",
+        "canonical": "oklch(94% 0.19 105)",
+        "tonalRamp": [
+          "oklch(15% 0.19 105)",
+          "oklch(26% 0.19 105)",
+          "oklch(38% 0.19 105)",
+          "oklch(50% 0.19 105)",
+          "oklch(62% 0.19 105)",
+          "oklch(74% 0.19 105)",
+          "oklch(85% 0.19 105)",
+          "oklch(95% 0.19 105)"
+        ]
+      },
+      "board-pink": {
+        "role": "secondary",
+        "displayName": "Fluorescent Pink",
+        "canonical": "oklch(70% 0.22 355)",
+        "tonalRamp": [
+          "oklch(15% 0.22 355)",
+          "oklch(26% 0.22 355)",
+          "oklch(38% 0.22 355)",
+          "oklch(50% 0.22 355)",
+          "oklch(62% 0.22 355)",
+          "oklch(74% 0.22 355)",
+          "oklch(85% 0.22 355)",
+          "oklch(95% 0.22 355)"
+        ]
+      },
+      "board-orange": {
+        "role": "secondary",
+        "displayName": "Safety Orange",
+        "canonical": "oklch(72% 0.19 50)",
+        "tonalRamp": [
+          "oklch(15% 0.19 50)",
+          "oklch(26% 0.19 50)",
+          "oklch(38% 0.19 50)",
+          "oklch(50% 0.19 50)",
+          "oklch(62% 0.19 50)",
+          "oklch(74% 0.19 50)",
+          "oklch(85% 0.19 50)",
+          "oklch(95% 0.19 50)"
+        ]
+      },
+      "board-lime": {
+        "role": "secondary",
+        "displayName": "Highlighter Lime",
+        "canonical": "oklch(87% 0.2 135)",
+        "tonalRamp": [
+          "oklch(15% 0.2 135)",
+          "oklch(26% 0.2 135)",
+          "oklch(38% 0.2 135)",
+          "oklch(50% 0.2 135)",
+          "oklch(62% 0.2 135)",
+          "oklch(74% 0.2 135)",
+          "oklch(85% 0.2 135)",
+          "oklch(95% 0.2 135)"
+        ]
+      },
+      "paper-white": {
+        "role": "neutral",
+        "displayName": "Price-Tag White",
+        "canonical": "oklch(98.8% 0.003 100)",
+        "tonalRamp": [
+          "oklch(15% 0.003 100)",
+          "oklch(26% 0.003 100)",
+          "oklch(38% 0.003 100)",
+          "oklch(50% 0.003 100)",
+          "oklch(62% 0.003 100)",
+          "oklch(74% 0.003 100)",
+          "oklch(85% 0.003 100)",
+          "oklch(95% 0.003 100)"
+        ]
+      },
+      "masking-tape": {
+        "role": "neutral",
+        "displayName": "Masking Tape",
+        "canonical": "rgba(236, 222, 178, 0.9)",
+        "tonalRamp": [
+          "oklch(15% 0.05 90)",
+          "oklch(26% 0.05 90)",
+          "oklch(38% 0.05 90)",
+          "oklch(50% 0.05 90)",
+          "oklch(62% 0.05 90)",
+          "oklch(74% 0.05 90)",
+          "oklch(85% 0.05 90)",
+          "oklch(95% 0.05 90)"
+        ]
+      },
+      "sticker-red": {
+        "role": "tertiary",
+        "displayName": "Junk Red",
+        "canonical": "oklch(54% 0.2 28)",
+        "tonalRamp": [
+          "oklch(15% 0.2 28)",
+          "oklch(26% 0.2 28)",
+          "oklch(38% 0.2 28)",
+          "oklch(50% 0.2 28)",
+          "oklch(62% 0.2 28)",
+          "oklch(74% 0.2 28)",
+          "oklch(85% 0.2 28)",
+          "oklch(95% 0.2 28)"
+        ]
+      },
+      "sticker-green": {
+        "role": "tertiary",
+        "displayName": "Keep-Files Green",
+        "canonical": "oklch(50% 0.13 150)",
+        "tonalRamp": [
+          "oklch(15% 0.13 150)",
+          "oklch(26% 0.13 150)",
+          "oklch(38% 0.13 150)",
+          "oklch(50% 0.13 150)",
+          "oklch(62% 0.13 150)",
+          "oklch(74% 0.13 150)",
+          "oklch(85% 0.13 150)",
+          "oklch(95% 0.13 150)"
+        ]
+      },
+      "sticker-blue": {
+        "role": "tertiary",
+        "displayName": "Your-Call Blue",
+        "canonical": "oklch(53% 0.19 262)",
+        "tonalRamp": [
+          "oklch(15% 0.19 262)",
+          "oklch(26% 0.19 262)",
+          "oklch(38% 0.19 262)",
+          "oklch(50% 0.19 262)",
+          "oklch(62% 0.19 262)",
+          "oklch(74% 0.19 262)",
+          "oklch(85% 0.19 262)",
+          "oklch(95% 0.19 262)"
+        ]
+      },
+      "table": {
+        "role": "neutral",
+        "displayName": "Tabletop",
+        "canonical": "oklch(96% 0.005 100)",
+        "tonalRamp": [
+          "oklch(15% 0.005 100)",
+          "oklch(26% 0.005 100)",
+          "oklch(38% 0.005 100)",
+          "oklch(50% 0.005 100)",
+          "oklch(62% 0.005 100)",
+          "oklch(74% 0.005 100)",
+          "oklch(85% 0.005 100)",
+          "oklch(95% 0.005 100)"
+        ]
+      },
+      "table-edge": {
+        "role": "neutral",
+        "displayName": "Table Edge",
+        "canonical": "oklch(77% 0.01 100)",
+        "tonalRamp": [
+          "oklch(15% 0.01 100)",
+          "oklch(26% 0.01 100)",
+          "oklch(38% 0.01 100)",
+          "oklch(50% 0.01 100)",
+          "oklch(62% 0.01 100)",
+          "oklch(74% 0.01 100)",
+          "oklch(85% 0.01 100)",
+          "oklch(95% 0.01 100)"
+        ]
+      },
+      "apron": {
+        "role": "neutral",
+        "displayName": "Apron",
+        "canonical": "oklch(29% 0.003 110)",
+        "tonalRamp": [
+          "oklch(15% 0.003 110)",
+          "oklch(26% 0.003 110)",
+          "oklch(38% 0.003 110)",
+          "oklch(50% 0.003 110)",
+          "oklch(62% 0.003 110)",
+          "oklch(74% 0.003 110)",
+          "oklch(85% 0.003 110)",
+          "oklch(95% 0.003 110)"
+        ]
+      },
+      "manila": {
+        "role": "neutral",
+        "displayName": "Manila",
+        "canonical": "oklch(89% 0.08 85)",
+        "tonalRamp": [
+          "oklch(15% 0.08 85)",
+          "oklch(26% 0.08 85)",
+          "oklch(38% 0.08 85)",
+          "oklch(50% 0.08 85)",
+          "oklch(62% 0.08 85)",
+          "oklch(74% 0.08 85)",
+          "oklch(85% 0.08 85)",
+          "oklch(95% 0.08 85)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Hero sign headline only."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Section headlines and the closing sign."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Table signs, brain card and hang-tag heads."
+      },
+      "numeral": {
+        "displayName": "Numeral",
+        "purpose": "Live free-GB tally and the download board's 'Free.'"
+      },
+      "note": {
+        "displayName": "Note",
+        "purpose": "Handwritten sublines, speech tags, quotes, footnotes, captions."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Buttons, chips, tag names, sticker numerals, rule leads."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "All reading copy, 38-60ch."
+      }
+    },
+    "shadows": [
+      {
+        "name": "hung-board",
+        "value": "0 14px 22px -12px rgba(25,25,20,0.45), 0 2px 4px rgba(25,25,20,0.14)",
+        "purpose": "Poster boards, brain cards, hang tag, speech tag."
+      },
+      {
+        "name": "board-lift",
+        "value": "0 20px 26px -12px rgba(25,25,20,0.5), 0 2px 4px rgba(25,25,20,0.14)",
+        "purpose": "Download board on hover."
+      },
+      {
+        "name": "price-tag",
+        "value": "0 10px 14px -10px rgba(25,25,20,0.5), 0 1px 2px rgba(25,25,20,0.12)",
+        "purpose": "Hero price tags."
+      },
+      {
+        "name": "tape",
+        "value": "0 1px 2px rgba(0,0,0,0.12)",
+        "purpose": "Tape strips and the HOLD mark."
+      },
+      {
+        "name": "sticker",
+        "value": "inset 0 -3px 0 rgba(0,0,0,0.14), 0 2px 3px rgba(0,0,0,0.18)",
+        "purpose": "Dot stickers."
+      },
+      {
+        "name": "table-edge",
+        "value": "0 4px 0 #b9b8b1, 0 22px 28px -18px rgba(0,0,0,0.4)",
+        "purpose": "Folding-table thickness; the only zero-blur offset allowed."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-settle",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Boards and tags straightening and lifting (0.25s), the HOLD tape slap (0.3s), and the load swing (0.9s)."
+      },
+      {
+        "name": "ease-strike",
+        "value": "cubic-bezier(0.65, 0, 0.35, 1)",
+        "purpose": "Marker strike drawn across a freed row, 0.55s."
+      },
+      {
+        "name": "duration-act",
+        "value": "0.15s",
+        "purpose": "Pill button fill on hover and press."
+      },
+      {
+        "name": "swing-in",
+        "value": "0.9s, 0.18s stagger",
+        "purpose": "The one load moment: signs swing up into place; off under reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "stack",
+        "value": "1180px"
+      },
+      {
+        "name": "mobile",
+        "value": "720px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Download Board",
+      "kind": "button",
+      "refersTo": "button-download",
+      "description": "The primary download call: an orange board with an ink border, tilted, straightens and lifts on hover.",
+      "html": "<a class=\"ds-get\" href=\"#\"><span class=\"ds-get-free\">Free.</span><span class=\"ds-get-label\">Download for Windows</span><svg viewBox=\"0 0 32 32\" width=\"30\" height=\"30\" aria-hidden=\"true\" fill=\"none\" stroke=\"#161616\" stroke-width=\"3.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M16 4v19M7 15l9 9 9-9M6 28h20\"/></svg></a>",
+      "css": ":host{--concrete:#d8d7d2;--ink:#161616;--ink-2:#3a3a38;--yellow:#fff23d;--pink:#ff5cad;--orange:#ff7a1f;--lime:#a6f04f;--white:#fbfbf8;--tape:rgba(236,222,178,.9);--red:#c92a21;--green:#13793a;--blue:#1f63d6;--table:#f3f3ef;--table-edge:#b9b8b1;--manila:#f1d79a;--marker:'Sedgwick Ave Display','Shantell Sans',cursive;--hand:'Shantell Sans','Comic Sans MS',cursive;--sans:'Atkinson Hyperlegible',system-ui,sans-serif;--shadow:0 14px 22px -12px rgba(25,25,20,.45),0 2px 4px rgba(25,25,20,.14)} .ds-get{display:inline-flex;align-items:center;gap:14px;text-decoration:none;color:var(--ink);background:var(--orange);padding:18px 22px 18px 24px;border:3px solid var(--ink);border-radius:3px;box-shadow:var(--shadow);transform:rotate(1.2deg);transition:transform .25s cubic-bezier(.16,1,.3,1),box-shadow .25s}.ds-get:hover{transform:rotate(0) translateY(-3px);box-shadow:0 20px 26px -12px rgba(25,25,20,.5),0 2px 4px rgba(25,25,20,.14)}.ds-get:active{transform:rotate(0) translateY(1px)}.ds-get:focus-visible{outline:3px solid var(--ink);outline-offset:4px}.ds-get-free{font:400 2.4rem/1 var(--marker)}.ds-get-label{font:800 1.3rem/1.1 var(--hand)}"
+    },
+    {
+      "name": "Act Button",
+      "kind": "button",
+      "refersTo": "button-act",
+      "description": "Row actions (Clear, Free it, Delete, Keep): ink-outlined pill; pressed fills ink with yellow text.",
+      "html": "<button class=\"ds-act\">Clear</button> <button class=\"ds-act\" aria-pressed=\"true\">Keep</button>",
+      "css": ":host{--concrete:#d8d7d2;--ink:#161616;--ink-2:#3a3a38;--yellow:#fff23d;--pink:#ff5cad;--orange:#ff7a1f;--lime:#a6f04f;--white:#fbfbf8;--tape:rgba(236,222,178,.9);--red:#c92a21;--green:#13793a;--blue:#1f63d6;--table:#f3f3ef;--table-edge:#b9b8b1;--manila:#f1d79a;--marker:'Sedgwick Ave Display','Shantell Sans',cursive;--hand:'Shantell Sans','Comic Sans MS',cursive;--sans:'Atkinson Hyperlegible',system-ui,sans-serif;--shadow:0 14px 22px -12px rgba(25,25,20,.45),0 2px 4px rgba(25,25,20,.14)} .ds-act{appearance:none;font:800 .95rem/1 var(--hand);color:var(--ink);background:transparent;border:2px solid var(--ink);border-radius:999px;padding:9px 14px;cursor:pointer;transition:background .15s,color .15s}.ds-act:hover{background:var(--ink);color:var(--white)}.ds-act[aria-pressed=true]{background:var(--ink);color:var(--yellow)}.ds-act:focus-visible{outline:3px solid var(--ink);outline-offset:4px}"
+    },
+    {
+      "name": "Clear Table Button",
+      "kind": "button",
+      "refersTo": "button-clear-all",
+      "description": "Junk-table bulk action: a sticker-red pill.",
+      "html": "<button class=\"ds-clear\">Clear the whole table · 41.1 GB</button>",
+      "css": ":host{--concrete:#d8d7d2;--ink:#161616;--ink-2:#3a3a38;--yellow:#fff23d;--pink:#ff5cad;--orange:#ff7a1f;--lime:#a6f04f;--white:#fbfbf8;--tape:rgba(236,222,178,.9);--red:#c92a21;--green:#13793a;--blue:#1f63d6;--table:#f3f3ef;--table-edge:#b9b8b1;--manila:#f1d79a;--marker:'Sedgwick Ave Display','Shantell Sans',cursive;--hand:'Shantell Sans','Comic Sans MS',cursive;--sans:'Atkinson Hyperlegible',system-ui,sans-serif;--shadow:0 14px 22px -12px rgba(25,25,20,.45),0 2px 4px rgba(25,25,20,.14)} .ds-clear{appearance:none;cursor:pointer;font:800 1.05rem/1 var(--hand);color:var(--white);background:var(--red);border:0;border-radius:999px;padding:14px 22px}.ds-clear:hover{background:#a8221a}.ds-clear:focus-visible{outline:3px solid var(--ink);outline-offset:4px}"
+    },
+    {
+      "name": "Navigation",
+      "kind": "nav",
+      "refersTo": "nav-download",
+      "description": "Marker wordmark, plain bold links, ink Download pill.",
+      "html": "<nav class=\"ds-nav\"><span class=\"ds-brand\">Hoardini</span><a href=\"#\">How it works</a><a href=\"#\">Is it safe?</a><a class=\"ds-nav-get\" href=\"#\">Download</a></nav>",
+      "css": ":host{--concrete:#d8d7d2;--ink:#161616;--ink-2:#3a3a38;--yellow:#fff23d;--pink:#ff5cad;--orange:#ff7a1f;--lime:#a6f04f;--white:#fbfbf8;--tape:rgba(236,222,178,.9);--red:#c92a21;--green:#13793a;--blue:#1f63d6;--table:#f3f3ef;--table-edge:#b9b8b1;--manila:#f1d79a;--marker:'Sedgwick Ave Display','Shantell Sans',cursive;--hand:'Shantell Sans','Comic Sans MS',cursive;--sans:'Atkinson Hyperlegible',system-ui,sans-serif;--shadow:0 14px 22px -12px rgba(25,25,20,.45),0 2px 4px rgba(25,25,20,.14)} .ds-nav{display:flex;align-items:center;gap:22px;font:700 1rem var(--sans);color:var(--ink);background:var(--concrete);padding:16px}.ds-brand{font:400 1.75rem/1 var(--marker);margin-right:auto}.ds-nav a{color:inherit;text-decoration:none;padding:6px 2px}.ds-nav a:hover{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:4px}.ds-nav .ds-nav-get{background:var(--ink);color:var(--yellow);padding:8px 16px;border-radius:999px}.ds-nav .ds-nav-get:hover{background:#000;text-decoration:none}.ds-nav a:focus-visible{outline:3px solid var(--ink);outline-offset:4px;border-radius:4px}"
+    },
+    {
+      "name": "Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Static example actions on the hang tag; the hold-to-delete chip is filled ink.",
+      "html": "<span class=\"ds-chip ds-chip-hold\">Hold to delete</span> <span class=\"ds-chip\">Shrink</span> <span class=\"ds-chip\">Keep</span>",
+      "css": ":host{--concrete:#d8d7d2;--ink:#161616;--ink-2:#3a3a38;--yellow:#fff23d;--pink:#ff5cad;--orange:#ff7a1f;--lime:#a6f04f;--white:#fbfbf8;--tape:rgba(236,222,178,.9);--red:#c92a21;--green:#13793a;--blue:#1f63d6;--table:#f3f3ef;--table-edge:#b9b8b1;--manila:#f1d79a;--marker:'Sedgwick Ave Display','Shantell Sans',cursive;--hand:'Shantell Sans','Comic Sans MS',cursive;--sans:'Atkinson Hyperlegible',system-ui,sans-serif;--shadow:0 14px 22px -12px rgba(25,25,20,.45),0 2px 4px rgba(25,25,20,.14)} .ds-chip{display:inline-block;font:800 .95rem/1 var(--hand);color:var(--ink);border:2px solid var(--ink);border-radius:999px;padding:9px 14px}.ds-chip-hold{background:var(--ink);color:var(--white)}"
+    },
+    {
+      "name": "Price Tag with Dot Sticker",
+      "kind": "custom",
+      "refersTo": "price-tag",
+      "description": "White tag with a GB sticker in the sticker code; straightens and lifts when picked.",
+      "html": "<button class=\"ds-tag\"><span class=\"ds-dot ds-dot-blue\">64.2<small>GB</small></span><span class=\"ds-tag-name\">iPhone backup from 2021</span></button>",
+      "css": ":host{--concrete:#d8d7d2;--ink:#161616;--ink-2:#3a3a38;--yellow:#fff23d;--pink:#ff5cad;--orange:#ff7a1f;--lime:#a6f04f;--white:#fbfbf8;--tape:rgba(236,222,178,.9);--red:#c92a21;--green:#13793a;--blue:#1f63d6;--table:#f3f3ef;--table-edge:#b9b8b1;--manila:#f1d79a;--marker:'Sedgwick Ave Display','Shantell Sans',cursive;--hand:'Shantell Sans','Comic Sans MS',cursive;--sans:'Atkinson Hyperlegible',system-ui,sans-serif;--shadow:0 14px 22px -12px rgba(25,25,20,.45),0 2px 4px rgba(25,25,20,.14)} .ds-tag{appearance:none;border:0;cursor:pointer;text-align:left;position:relative;width:180px;min-height:120px;display:flex;flex-direction:column;justify-content:flex-end;background:var(--white);color:var(--ink);padding:44px 14px 14px;border-radius:4px;margin-top:24px;box-shadow:0 10px 14px -10px rgba(25,25,20,.5),0 1px 2px rgba(25,25,20,.12);transform:rotate(-1.2deg);transition:transform .25s cubic-bezier(.16,1,.3,1)}.ds-tag:hover,.ds-tag[aria-pressed=true]{transform:translateY(-8px) rotate(0)}.ds-tag[aria-pressed=true]{outline:3px solid var(--ink)}.ds-tag:focus-visible{outline:3px solid var(--ink);outline-offset:4px}.ds-tag-name{font:800 1.05rem/1.2 var(--hand)}.ds-dot{position:absolute;top:-18px;left:12px;display:inline-grid;place-content:center;width:64px;height:64px;border-radius:50%;color:#fff;font:800 1.15rem/.9 var(--hand);text-align:center;box-shadow:inset 0 -3px 0 rgba(0,0,0,.14),0 2px 3px rgba(0,0,0,.18);transform:rotate(-8deg)}.ds-dot small{display:block;font-size:.75rem;font-weight:600;letter-spacing:.04em}.ds-dot-blue{background:var(--blue)}"
+    },
+    {
+      "name": "Poster Board",
+      "kind": "card",
+      "refersTo": "poster-board",
+      "description": "Fluorescent sign taped up at two corners, marker headline and handwritten subline.",
+      "html": "<div class=\"ds-board\"><span class=\"ds-tape ds-tl\"></span><span class=\"ds-tape ds-tr\"></span><h2>Not everything has to go.</h2><p>You decide what goes.</p></div>",
+      "css": ":host{--concrete:#d8d7d2;--ink:#161616;--ink-2:#3a3a38;--yellow:#fff23d;--pink:#ff5cad;--orange:#ff7a1f;--lime:#a6f04f;--white:#fbfbf8;--tape:rgba(236,222,178,.9);--red:#c92a21;--green:#13793a;--blue:#1f63d6;--table:#f3f3ef;--table-edge:#b9b8b1;--manila:#f1d79a;--marker:'Sedgwick Ave Display','Shantell Sans',cursive;--hand:'Shantell Sans','Comic Sans MS',cursive;--sans:'Atkinson Hyperlegible',system-ui,sans-serif;--shadow:0 14px 22px -12px rgba(25,25,20,.45),0 2px 4px rgba(25,25,20,.14)} .ds-board{position:relative;max-width:520px;margin:24px;background:var(--yellow);color:var(--ink);padding:40px 48px 36px;border-radius:3px;box-shadow:var(--shadow);transform:rotate(-1.6deg)}.ds-board h2{margin:0;font:400 3.4rem/1.14 var(--marker);letter-spacing:-.01em}.ds-board p{margin:16px 0 0;font:600 1.3rem/1.3 var(--hand)}.ds-tape{position:absolute;width:104px;height:30px;background:var(--tape);background-image:repeating-linear-gradient(90deg,rgba(255,255,255,.18) 0 2px,transparent 2px 7px);box-shadow:0 1px 2px rgba(0,0,0,.12)}.ds-tl{top:-12px;left:-22px;transform:rotate(-38deg)}.ds-tr{top:-12px;right:-22px;transform:rotate(38deg)}"
+    },
+    {
+      "name": "Sale Row with State Mark",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "Table row shown freed: a marker strike drawn from the sticker across the text, row faded to 55%.",
+      "html": "<div class=\"ds-row ds-gone\"><span class=\"ds-dot2\">13.6<small>GB</small></span><div class=\"ds-txt\"><strong>Recycle Bin</strong><span>Things you deleted, still taking space.</span></div></div>",
+      "css": ":host{--concrete:#d8d7d2;--ink:#161616;--ink-2:#3a3a38;--yellow:#fff23d;--pink:#ff5cad;--orange:#ff7a1f;--lime:#a6f04f;--white:#fbfbf8;--tape:rgba(236,222,178,.9);--red:#c92a21;--green:#13793a;--blue:#1f63d6;--table:#f3f3ef;--table-edge:#b9b8b1;--manila:#f1d79a;--marker:'Sedgwick Ave Display','Shantell Sans',cursive;--hand:'Shantell Sans','Comic Sans MS',cursive;--sans:'Atkinson Hyperlegible',system-ui,sans-serif;--shadow:0 14px 22px -12px rgba(25,25,20,.45),0 2px 4px rgba(25,25,20,.14)} .ds-row{display:grid;grid-template-columns:64px 1fr;gap:18px;align-items:center;padding:18px 24px;background:var(--table);font:400 1rem/1.4 var(--sans);color:var(--ink)}.ds-dot2{display:inline-grid;place-content:center;width:64px;height:64px;border-radius:50%;background:var(--red);color:#fff;font:800 1.15rem/.9 var(--hand);text-align:center;transform:rotate(-8deg)}.ds-dot2 small{display:block;font-size:.75rem}.ds-txt{position:relative;display:grid;gap:2px}.ds-txt span{color:var(--ink-2)}.ds-txt::after{content:'';position:absolute;left:-90px;right:-6px;top:calc(50% - 9px);height:18px;background:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 18' preserveAspectRatio='none'%3E%3Cpath d='M2 11 C60 7 120 12 200 8 S330 6 398 9 L397 12 C330 11 260 13 200 12 S70 13 3 14 Z' fill='%23161616'/%3E%3C/svg%3E\") center/100% 100% no-repeat;clip-path:inset(0 100% 0 0);transition:clip-path .55s cubic-bezier(.65,0,.35,1)}.ds-gone .ds-txt::after{clip-path:inset(0 0 0 0)}.ds-gone .ds-txt>*,.ds-gone .ds-dot2{opacity:.55}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Driveway Yard Sale",
+    "overview": "The site is a Saturday-morning yard sale of your hard drive. The ground is light, grained concrete. Fluorescent poster boards hang slightly askew from masking tape. Everything on the drive sits on folding tables as a white price tag with a round dot sticker, and the price is gigabytes. The sumo mascot runs the sale, and his girth follows how full the drive is. Nothing is sleek and nothing is dark. The site is handmade on purpose, the way a careful neighbour's sale looks, because it has to persuade non-technical people that this is friendly and that they decide.\n\nDensity is relaxed: big hand-lettered signs, generous section breathing room (96 to 120px), and one strict 12-column grid underneath so the tilt reads as hand-hung rather than broken. Character comes from the objects: tape, stickers, tags, the table with its dark front and legs. Shapes, gradients and glass do none of the work. State is shown with a mark. A marker strike means something was freed, and a strip of tape reading HOLD · MINE means it was kept.\n\nThe site rejects the category default of a dark utility page with a treemap screenshot and three matching feature cards.",
+    "keyCharacteristics": [
+      "Grained light concrete ground, never white or dark.",
+      "Fluorescent boards taped up at small tilts, always with ink text.",
+      "Three hands of type: marker signs, handwritten notes, a legible reading face.",
+      "Red, green and blue dot stickers that carry meaning and are never decoration.",
+      "Physical props (folding table, hang tag, speech tag, tape) instead of cards and panels.",
+      "State is a mark: strike-through for freed, tape for held.",
+      "One quiet motion moment: signs swing up into place on load."
+    ],
+    "rules": [
+      {
+        "name": "The Sticker Code Rule",
+        "body": "Red, green and blue appear only as dot stickers (and their legend), and they always mean junk, free-space-keep-files, and your call. The poster fluorescents carry no meaning; any board color may sign any table.",
+        "section": "colors"
+      },
+      {
+        "name": "The Fluorescent Board Rule",
+        "body": "Yellow, pink, orange and lime are paper stock. They fill whole boards with ink text on top, and they are never used as a text color on concrete. Yellow-on-ink is the one exception: the text inside ink pills.",
+        "section": "colors"
+      },
+      {
+        "name": "The Concrete Ground Rule",
+        "body": "The page ground is grained concrete. Sections that need separation use a 28% white wash with a faint 2px ink border, never a new hue.",
+        "section": "colors"
+      },
+      {
+        "name": "The Three Hands Rule",
+        "body": "Marker is for signs and never runs below 1.7rem or into a paragraph. Shantell is for what is written on tags, notes and buttons. Atkinson is for anything someone reads to understand.",
+        "section": "typography"
+      },
+      {
+        "name": "The Taped-Up Rule",
+        "body": "Paper lifts on soft, blurred shadow. The only zero-blur offset in the system is the folding table's edge; never put a hard offset shadow on a board, card or button.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Hand-Hung Tilt Rule",
+        "body": "Tilt stays small and alternates between neighbours. Only paper tilts. Copy set directly on concrete or on a tabletop (lede, section paragraphs, table rows) stays level.",
+        "section": "shapes"
+      },
+      {
+        "name": "The State Is a Mark Rule",
+        "body": "Freeing an item draws a marker strike from the sticker across the text over 0.55s (cubic-bezier(0.65, 0, 0.35, 1)), and the row fades to 55%. On the keep-files table the strike crosses the sticker only and the text reads \"· files kept\" in green. Keeping an item slaps a tilted strip of tape reading HOLD · MINE over the sticker. State is never shown by a toggle, checkbox or color change alone.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "**Do** set every page on grained concrete, separating sections with a 28% white wash and a 2px faint ink border.",
+      "**Do** hang fluorescent boards with masking-tape strips at the corners or top centre, at a small alternating tilt.",
+      "**Do** reserve red, green and blue for dot stickers that mean junk, keep-files, and your call.",
+      "**Do** show freed and kept state as a marker strike and a HOLD · MINE tape mark.",
+      "**Do** keep marker type at 1.7rem or larger, on signs only; set reading copy in Atkinson Hyperlegible at 1.125rem / 1.55.",
+      "**Do** label any demonstration data as an example on a white example card.",
+      "**Do** keep motion to the load-time sign swing (0.9s, cubic-bezier(0.16, 1, 0.3, 1)) and small state transitions, all disabled under reduced motion."
+    ],
+    "donts": [
+      "**Don't** build a dark utility page, show a treemap screenshot, or use three equal feature cards; vary card size, color and tilt.",
+      "**Don't** put a hard zero-blur offset shadow on boards, cards or buttons; that belongs only to the table edge.",
+      "**Don't** use fluorescent colors as text on concrete, or use the sticker colors decoratively.",
+      "**Don't** tilt copy that sits directly on concrete or a tabletop, or tilt any object more than about 2.2 degrees.",
+      "**Don't** set paragraphs in Sedgwick Ave Display or Shantell Sans.",
+      "**Don't** use icon fonts or emoji glyphs; draw icons as inline SVG strokes in ink (2.2 to 3.4 stroke width)."
+    ]
+  }
+}
